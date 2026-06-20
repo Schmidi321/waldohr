@@ -2,7 +2,7 @@
 import { AudioEngine } from './audio.js';
 import { createRecognizer, MockRecognizer } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo } from './db.js';
-import { initUI, renderAll, showDetection, renderMap } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap } from './ui.js';
 
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
@@ -12,18 +12,22 @@ const DIRS = ['N','NO','O','SO','S','SW','W','NW'];
 const audio = new AudioEngine();
 let rec = null;
 
+const setLoc = (t) => { const el = document.getElementById('locTxt'); if (el) el.textContent = t; };
+
 // Standort-Erfassung: hält die aktuelle Position, solange das Mikro läuft.
 const geo = {
   watchId: null, pos: null,
   start() {
-    if (!('geolocation' in navigator) || this.watchId != null) return;
+    if (!('geolocation' in navigator)) { setLoc('kein GPS'); return; }
+    if (this.watchId != null) return;
+    setLoc('Standort: suche…');
     this.watchId = navigator.geolocation.watchPosition(
-      p => { this.pos = { lat: p.coords.latitude, lng: p.coords.longitude }; },
-      e => { console.warn('geo', e); },
-      { enableHighAccuracy: true, maximumAge: 10000, timeout: 9000 }
+      p => { this.pos = { lat: p.coords.latitude, lng: p.coords.longitude }; setLoc('Standort ±' + Math.round(p.coords.accuracy) + ' m'); },
+      e => { console.warn('geo', e); setLoc(e.code === 1 ? 'GPS verweigert' : 'kein GPS'); },
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 12000 }
     );
   },
-  stop() { if (this.watchId != null) { navigator.geolocation.clearWatch(this.watchId); this.watchId = null; } }
+  stop() { if (this.watchId != null) { navigator.geolocation.clearWatch(this.watchId); this.watchId = null; } setLoc('Standort aus'); }
 };
 
 async function boot() {
@@ -49,7 +53,6 @@ async function refresh() {
   try { dets = await allDetections(); } catch (e) { console.warn('read', e); }
   renderAll(computeStats(dets));
   renderMap(dets);
-  if (dets.length) showDetection(dets.reduce((a, b) => (b.ts > a.ts ? b : a)));
 }
 
 async function onWindow(samples, sampleRate) {
@@ -65,7 +68,7 @@ async function onWindow(samples, sampleRate) {
   };
   if (geo.pos) { det.lat = geo.pos.lat; det.lng = geo.pos.lng; }
   try { await addDetection(det); } catch (e) { console.warn('store', e); }
-  showDetection(det);
+  liveAdd(det);
   refresh();
 }
 
@@ -90,6 +93,7 @@ document.getElementById('micBtn').onclick = async () => {
 // ---- Spektrogramm (echtes Mikro oder Demo-Fallback) ----
 function startSpectrogram() {
   const cv = document.getElementById('spec'), cx = cv.getContext('2d');
+  const levelFill = document.getElementById('levelFill');
   const COL = 80, n = 48, cols = []; let t = 0;
   const size = () => { cv.width = cv.clientWidth * devicePixelRatio; cv.height = cv.clientHeight * devicePixelRatio; };
   size(); addEventListener('resize', size);
@@ -122,6 +126,12 @@ function startSpectrogram() {
       cols.push(colv);
     } else cols.push(new Array(n).fill(0));
     if (cols.length > COL) cols.shift();
+
+    if (levelFill) {
+      const last = cols[cols.length - 1];
+      const lvl = body.classList.contains('listening') ? Math.min(1, Math.max(0, ...last)) : 0;
+      levelFill.style.width = Math.round(lvl * 100) + '%';
+    }
 
     const w = cv.width, h = cv.height, cw = w / COL;
     cx.clearRect(0, 0, w, h);

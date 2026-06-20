@@ -30,30 +30,69 @@ export function initUI() {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     $('v-' + b.dataset.v).classList.add('active');
   });
-  $('detectCard').onclick = () => openModal($('detectCard').dataset.key);
   $('sheetScrim').onclick = closeSheet;
   $('sheetClose').onclick = closeSheet;
 
-  // Einstellungen (Gemini-Key)
+  // Einstellungen (Gemini-Key + BirdNET-Server)
   const settings = $('settingsModal');
   const closeSettings = () => settings.classList.remove('open');
-  $('gearBtn').onclick = () => { $('geminiKey').value = gemini.getKey(); settings.classList.add('open'); };
+  $('gearBtn').onclick = () => {
+    $('geminiKey').value = gemini.getKey();
+    const sv = serverUrlGet();
+    $('serverUrl').value = sv;
+    $('serverStat').textContent = sv ? 'gesetzt ✓' : 'nicht gesetzt (Demo)';
+    settings.classList.add('open');
+  };
   $('settingsScrim').onclick = closeSettings;
   $('settingsClose').onclick = closeSettings;
-  $('settingsSave').onclick = () => { gemini.setKey($('geminiKey').value); closeSettings(); };
+  $('settingsSave').onclick = () => {
+    gemini.setKey($('geminiKey').value);
+    const before = serverUrlGet();
+    const after = serverUrlSet($('serverUrl').value);
+    closeSettings();
+    if (after !== before) location.reload();   // Recognizer wird beim Start gewählt
+  };
+
+  setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
 }
 
-export function showDetection(det) {
-  const card = $('detectCard');
-  card.dataset.key = det.key;
-  const g = grad(det.key);
-  card.querySelector('.avatar').style.background = `linear-gradient(140deg,${g[0]},${g[1]})`;
-  card.querySelector('.avatar .ic').innerHTML = avatarSVG(det.key, 28);
-  card.querySelector('.conf').textContent = Math.round(det.confidence * 100) + '%';
-  $('dName').innerHTML = `${det.species} ${rarityTag(det.rarity)}`;
-  card.querySelector('.lt').textContent = det.sci;
-  $('dDir').textContent = `${det.dir} · ~${det.distance} m`;
-  card.classList.remove('in'); void card.offsetWidth; card.classList.add('in');
+function serverUrlGet() { try { return localStorage.getItem('waldohr.server') || ''; } catch { return ''; } }
+function serverUrlSet(v) {
+  v = (v || '').trim().replace(/\/$/, '');
+  try { v ? localStorage.setItem('waldohr.server', v) : localStorage.removeItem('waldohr.server'); } catch {}
+  return v;
+}
+
+// ---- Live-Liste „jetzt zu hören" ----
+const LIVE = new Map();
+const LIVE_TTL = 15000;
+export function liveAdd(det) {
+  const e = LIVE.get(det.key) || { key: det.key, count: 0 };
+  e.name = det.species; e.sci = det.sci; e.rarity = det.rarity;
+  e.conf = det.confidence; e.ts = Date.now(); e.count++;
+  LIVE.set(det.key, e);
+  renderLive();
+}
+function renderLive() {
+  const list = $('liveList'); if (!list) return;
+  const now = Date.now();
+  for (const [k, e] of LIVE) if (now - e.ts > LIVE_TTL) LIVE.delete(k);
+  const arr = [...LIVE.values()].sort((a, b) => b.ts - a.ts);
+  const cnt = $('liveCount'); if (cnt) cnt.textContent = arr.length;
+  const empty = $('liveEmpty');
+  list.querySelectorAll('.live-row').forEach(r => r.remove());
+  if (!arr.length) { if (empty) empty.style.display = ''; return; }
+  if (empty) empty.style.display = 'none';
+  for (const e of arr) {
+    const g = grad(e.key), fresh = now - e.ts < 2500;
+    const row = document.createElement('div');
+    row.className = 'live-row' + (fresh ? ' fresh' : '');
+    row.innerHTML = `<div class="lr-av" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(e.key, 24)}</div>
+      <div class="lr-meta"><div class="lr-nm">${e.name} ${rarityTag(e.rarity)}</div><div class="lr-lt">${e.sci}</div></div>
+      <div class="lr-conf">${Math.round(e.conf * 100)}%</div>`;
+    row.onclick = () => openModal(e.key);
+    list.appendChild(row);
+  }
 }
 
 export function renderAll(stats) {

@@ -27,7 +27,7 @@
           Waldohr
         </div>
         <div style="display:flex;align-items:center;gap:8px">
-          <div class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg>Nationalpark Eifel</div>
+          <div class="chip" id="locChip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg><span id="locTxt">Standort aus</span></div>
           <button class="gear" id="gearBtn" aria-label="Einstellungen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-2.7-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg></button>
         </div>
       </div>
@@ -48,18 +48,11 @@
       </div>
 
       <div class="spectro"><canvas id="spec"></canvas></div>
+      <div class="level"><div class="level-fill" id="levelFill"></div></div>
 
-      <div class="detect in" id="detectCard">
-        <div class="avatar"><span class="ic"></span><span class="conf">–</span></div>
-        <div class="meta">
-          <div class="nm" id="dName">Bereit zum Lauschen</div>
-          <div class="lt">tippe auf das Mikrofon</div>
-          <div class="rw">
-            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="3"/></svg><span id="dDir">–</span></span>
-            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>live</span>
-          </div>
-        </div>
-        <button class="iconbtn" onclick="event.stopPropagation()"><svg viewBox="0 0 24 24" fill="#04130d" stroke="none"><path d="M6 4l14 8-14 8z"/></svg></button>
+      <div class="livehead">Jetzt zu hören <span class="livecount" id="liveCount">0</span></div>
+      <div class="livelist" id="liveList">
+        <div class="live-empty" id="liveEmpty">Tippe unten das Mikrofon – erkannte Vögel erscheinen hier in Echtzeit.</div>
       </div>
     </section>
 
@@ -163,6 +156,12 @@
           <p style="margin-bottom:12px">Eigener Google-Gemini-API-Key. Wird nur lokal auf diesem Gerät gespeichert (nicht hochgeladen) und erklärt im Detail-Sheet die Ruf-Bedeutung &amp; den Steckbrief je Art.</p>
           <input id="geminiKey" type="password" autocomplete="off" placeholder="API-Key einfügen…" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
           <div style="font-size:11px;color:var(--faint);margin-top:8px">Key holen: aistudio.google.com/app/apikey</div>
+        </div>
+        <div class="infoblock">
+          <h3><span style="font-size:15px">🐦</span> Echte Erkennung (BirdNET-Server)</h3>
+          <p style="margin-bottom:12px">URL deines BirdNET-Backends (z. B. HuggingFace-Space). Leer = Demo-Modus. Nach dem Speichern lädt die App neu.</p>
+          <input id="serverUrl" type="url" autocomplete="off" inputmode="url" placeholder="https://…hf.space" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
+          <div style="font-size:11px;color:var(--faint);margin-top:8px">Status: <span id="serverStat">nicht gesetzt</span></div>
         </div>
         <div class="actions">
           <button class="btn primary" id="settingsSave"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>Speichern</button>

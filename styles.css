@@ -82,6 +82,26 @@ body.listening .radar .line{animation:spin 2.6s linear infinite}
 .spectro{margin-top:8px;border-radius:16px;overflow:hidden;border:1px solid var(--stroke);background:#04120c}
 canvas{display:block;width:100%;height:84px}
 
+/* Pegelanzeige */
+.level{height:6px;margin-top:8px;border-radius:6px;background:#04130d;border:1px solid var(--stroke);overflow:hidden}
+.level-fill{height:100%;width:0%;border-radius:6px;background:linear-gradient(90deg,var(--emerald),var(--lime),var(--amber));transition:width .08s linear}
+
+/* Live-Liste „jetzt zu hören" */
+.livehead{display:flex;align-items:center;gap:8px;margin:16px 2px 8px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:1.4px}
+.livecount{margin-left:auto;font-size:12px;font-weight:600;color:#04130d;background:var(--lime);padding:1px 9px;border-radius:20px}
+.livelist{display:flex;flex-direction:column;gap:8px}
+.live-empty{color:var(--faint);font-size:13px;line-height:1.6;text-align:center;padding:18px 12px;border:1px dashed var(--stroke);border-radius:16px}
+.live-row{display:flex;align-items:center;gap:11px;padding:10px 12px;background:var(--glass-strong);border:1px solid var(--stroke);border-radius:16px;cursor:pointer;transition:transform .1s}
+.live-row:active{transform:scale(.98)}
+.live-row.fresh{animation:livein .4s cubic-bezier(.2,.8,.2,1);border-color:var(--stroke-strong)}
+@keyframes livein{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+.lr-av{width:42px;height:42px;flex:0 0 42px;border-radius:13px;display:grid;place-items:center;border:1px solid var(--stroke-strong)}
+.lr-meta{flex:1;min-width:0}
+.lr-nm{font-family:'Outfit',sans-serif;font-weight:600;font-size:15px;display:flex;align-items:center;gap:7px}
+.lr-lt{font-size:11px;color:var(--faint);font-style:italic}
+.lr-conf{font-size:13px;font-weight:600;color:var(--lime)}
+.locChip-off{opacity:.7}
+
 .detect{margin-top:14px;background:var(--glass-strong);border:1px solid var(--stroke);border-radius:var(--r);padding:14px;display:flex;align-items:center;gap:13px;backdrop-filter:blur(14px);box-shadow:0 10px 30px -16px #000;transition:.45s;cursor:pointer}
 .detect:active{transform:scale(.98)}
 .detect.in{animation:slideup .5s cubic-bezier(.2,.8,.2,1)}
