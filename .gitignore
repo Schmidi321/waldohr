@@ -1,0 +1,11 @@
+# Python-Backend
+.venv/
+__pycache__/
+*.pyc
+
+# BirdNET-Modell (großes Binary; via server/README beziehen, für die statische Seite nicht nötig)
+models/birdnet/*.tflite
+
+# OS
+.DS_Store
+Thumbs.db

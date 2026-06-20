@@ -1,0 +1,16 @@
+{
+  "name": "Waldohr — Tierstimmen erkennen",
+  "short_name": "Waldohr",
+  "description": "Erkenne Tierstimmen im Wald, sieh wo sie rufen, und sammle deine Funde.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#04130d",
+  "theme_color": "#04130d",
+  "categories": ["education", "lifestyle", "utilities"],
+  "lang": "de",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

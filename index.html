@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="theme-color" content="#04130d" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Waldohr · Tierstimmen erkennen</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="icons/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body class="listening">
+<div class="phone">
+  <div class="notch"></div>
+  <div class="screen-wrap">
+
+    <!-- ============ LISTEN ============ -->
+    <section class="view active" id="v-listen">
+      <div class="topbar">
+        <div class="brand">
+          <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M7 12a5 5 0 0 1 5-5"/><circle cx="12" cy="12" r="1.6" fill="#04130d" stroke="none"/></svg></span>
+          Waldohr
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg>Nationalpark Eifel</div>
+          <button class="gear" id="gearBtn" aria-label="Einstellungen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-2.7-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg></button>
+        </div>
+      </div>
+
+      <div class="status"><span class="eq"><i></i><i></i><i></i><i></i><i></i></span><span id="statusTxt">Demo-Vorschau · tippe fürs echte Mikro</span></div>
+
+      <div class="orb-stage">
+        <div class="radar"><span class="line"></span><span class="blip"></span><span class="deg">NO · 38°</span></div>
+        <span class="ring"></span><span class="ring"></span><span class="ring"></span>
+        <div class="orb">
+          <div class="sweep"></div>
+          <div class="orb-core">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--emerald)" stroke-width="1.6" stroke-linecap="round"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M6 12a6 6 0 0 1 6-6"/><path d="M9 12a3 3 0 0 1 3-3"/><circle cx="12" cy="12" r="1.4" fill="var(--emerald)" stroke="none"/></svg>
+            <div class="big">Lauschmodus</div>
+            <div class="sub">aktiv</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="spectro"><canvas id="spec"></canvas></div>
+
+      <div class="detect in" id="detectCard">
+        <div class="avatar"><span class="ic"></span><span class="conf">–</span></div>
+        <div class="meta">
+          <div class="nm" id="dName">Bereit zum Lauschen</div>
+          <div class="lt">tippe auf das Mikrofon</div>
+          <div class="rw">
+            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="3"/></svg><span id="dDir">–</span></span>
+            <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>live</span>
+          </div>
+        </div>
+        <button class="iconbtn" onclick="event.stopPropagation()"><svg viewBox="0 0 24 24" fill="#04130d" stroke="none"><path d="M6 4l14 8-14 8z"/></svg></button>
+      </div>
+    </section>
+
+    <!-- ============ MAP ============ -->
+    <section class="view" id="v-map">
+      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></svg></span>Fundkarte</div><div class="chip" id="mapCount">0 Funde</div></div>
+      <div class="map" id="map">
+        <div class="river"></div>
+        <div class="map-empty" id="mapEmpty" hidden>Noch keine verorteten Funde.<br>Mikro starten &amp; Standort erlauben.</div>
+      </div>
+      <div class="maplegend">
+        <span><i style="background:var(--emerald)"></i>häufig</span>
+        <span><i style="background:var(--amber)"></i>selten</span>
+        <span><i style="background:var(--rose)"></i>Säugetier</span>
+      </div>
+    </section>
+
+    <!-- ============ COLLECTION ============ -->
+    <section class="view" id="v-coll">
+      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M5 3h14v18l-7-4-7 4z"/></svg></span>Meine Sammlung</div></div>
+      <div class="stats" id="collStats"></div>
+      <div class="sectitle">Zuletzt entdeckt</div>
+      <div class="grid" id="collGrid"></div>
+    </section>
+
+    <!-- ============ STATS ============ -->
+    <section class="view" id="v-stat">
+      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 19v-6M13 19V9M18 19v-9"/></svg></span>Statistik</div><div class="chip">Juni 2026</div></div>
+      <div class="kpis" id="kpis"></div>
+      <div class="card">
+        <div class="ch">Häufigste Arten <em>nach Anzahl Rufe</em></div>
+        <div class="hb" id="topSpecies"></div>
+      </div>
+      <div class="card">
+        <div class="ch">Diese Woche <em>Rufe pro Tag</em></div>
+        <div class="vb" id="weekBars"></div>
+      </div>
+      <div class="card">
+        <div class="ch">Aktivität über den Tag <em>Spitze: Morgenchor</em></div>
+        <svg id="dayChart" viewBox="0 0 320 120" style="width:100%;height:118px;display:block">
+          <defs><linearGradient id="dg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a3e635" stop-opacity=".45"/><stop offset="1" stop-color="#a3e635" stop-opacity="0"/></linearGradient></defs>
+          <path id="dayArea" fill="url(#dg)"></path>
+          <path id="dayLine" fill="none" stroke="#a3e635" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+          <circle id="dayPeak" r="4" fill="#fbbf24" stroke="#04130d" stroke-width="1.5"></circle>
+        </svg>
+        <div class="axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24 Uhr</span></div>
+      </div>
+    </section>
+
+    <!-- ============ MIC ============ -->
+    <div class="micbar">
+      <button class="mic" id="micBtn" aria-label="Aufnahme starten/stoppen">
+        <svg id="micIcon" viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>
+      </button>
+    </div>
+
+    <!-- ============ NAV ============ -->
+    <nav class="nav">
+      <button class="on" data-v="listen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M7 12a5 5 0 0 1 5-5"/><circle cx="12" cy="12" r="1.6"/></svg>Lauschen</button>
+      <button data-v="map"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></svg>Karte</button>
+      <button data-v="coll"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 3h14v18l-7-4-7 4z"/></svg>Sammlung</button>
+      <button data-v="stat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 19v-6M13 19V9M18 19v-9"/></svg>Statistik</button>
+    </nav>
+
+    <!-- ============ MODAL ============ -->
+    <div class="modal" id="sheet">
+      <div class="scrim" id="sheetScrim"></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="hero">
+          <div class="avatar" id="mAvatar"></div>
+          <div>
+            <h2 id="mName">Amsel</h2><div class="lt" id="mSci">Turdus merula</div>
+            <div class="confbar"><i></i></div>
+            <div style="font-size:11px;color:var(--muted)">Erkennungssicherheit</div>
+          </div>
+        </div>
+        <div class="infoblock">
+          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Was bedeutet der Ruf?<span class="aibadge" id="mAi" hidden>✨ Gemini</span></h3>
+          <p id="mMeaning"></p>
+        </div>
+        <div class="infoblock">
+          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z"/></svg>Steckbrief</h3>
+          <p id="mSteckbrief"></p>
+        </div>
+        <div class="actions">
+          <button class="btn primary"><svg viewBox="0 0 24 24" fill="#04130d" stroke="none"><path d="M6 4l14 8-14 8z"/></svg>Ruf anhören</button>
+          <button class="btn ghost" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Mehr erfahren</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ SETTINGS ============ -->
+    <div class="modal" id="settingsModal">
+      <div class="scrim" id="settingsScrim"></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <h2 style="font-size:20px;margin-bottom:4px">Einstellungen</h2>
+        <div class="infoblock">
+          <h3><span style="font-size:15px">✨</span> Gemini-Anreicherung</h3>
+          <p style="margin-bottom:12px">Eigener Google-Gemini-API-Key. Wird nur lokal auf diesem Gerät gespeichert (nicht hochgeladen) und erklärt im Detail-Sheet die Ruf-Bedeutung &amp; den Steckbrief je Art.</p>
+          <input id="geminiKey" type="password" autocomplete="off" placeholder="API-Key einfügen…" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
+          <div style="font-size:11px;color:var(--faint);margin-top:8px">Key holen: aistudio.google.com/app/apikey</div>
+        </div>
+        <div class="actions">
+          <button class="btn primary" id="settingsSave"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>Speichern</button>
+          <button class="btn ghost" id="settingsClose">Schließen</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
