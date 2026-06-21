@@ -89,8 +89,10 @@ export function initUI() {
     toggle.querySelectorAll('button').forEach(b => b.onclick = () => {
       toggle.querySelectorAll('button').forEach(x => x.classList.remove('on'));
       b.classList.add('on');
-      $('collHere').hidden = b.dataset.mode !== 'here';
-      $('collGlobal').hidden = b.dataset.mode !== 'global';
+      collMode = b.dataset.mode;
+      $('collHere').hidden = collMode !== 'here';
+      $('collGlobal').hidden = collMode !== 'global';
+      renderCollStats();
     });
   }
 }
@@ -153,11 +155,27 @@ function speciesCard(s) {
   </div>`;
 }
 
-function renderCollection(stats, dets, pos) {
+let collMode = 'here';
+let lastCollStats = null, lastCollDets = [], lastCollPos = null;
+
+function renderCollStats() {
+  if (!lastCollStats) return;
+  let n, total, rare;
+  if (collMode === 'here') {
+    const here = todayNearby(lastCollDets, lastCollPos);
+    n = here.length; total = here.reduce((a, s) => a + s.count, 0); rare = here.filter(s => s.rarity !== 'common').length;
+  } else {
+    n = lastCollStats.speciesCount; total = lastCollStats.total; rare = lastCollStats.rareCount;
+  }
   $('collStats').innerHTML = `
-    <div class="stat"><div class="n">${stats.speciesCount}</div><div class="l">Arten gehört</div></div>
-    <div class="stat"><div class="n">${stats.total}</div><div class="l">Aufnahmen</div></div>
-    <div class="stat"><div class="n">${stats.rareCount}</div><div class="l">seltene</div></div>`;
+    <div class="stat"><div class="n">${n}</div><div class="l">Arten gehört</div></div>
+    <div class="stat"><div class="n">${total}</div><div class="l">Aufnahmen</div></div>
+    <div class="stat"><div class="n">${rare}</div><div class="l">seltene</div></div>`;
+}
+
+function renderCollection(stats, dets, pos) {
+  lastCollStats = stats; lastCollDets = dets; lastCollPos = pos;
+  renderCollStats();
 
   // "Heute hier" — heutige Funde in der Nähe des aktuellen Standorts
   const hereGrid = $('hereGrid');
