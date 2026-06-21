@@ -161,12 +161,17 @@ function haversineKm(a, b) {
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-// Heutige Funde in der Nähe der aktuellen Position (für "neu hier angekommen").
-export function todayNearby(dets, pos, radiusKm = 3) {
+// Rohe Treffer für "Heute hier" (inkl. id, fürs Löschen).
+export function todayNearbyDetections(dets, pos, radiusKm = 3) {
   const today = dets.filter(d => isToday(d.ts));
-  const near = pos
+  return pos
     ? today.filter(d => typeof d.lat === 'number' && typeof d.lng === 'number' && haversineKm(pos, d) <= radiusKm)
     : today;
+}
+
+// Heutige Funde in der Nähe der aktuellen Position (für "neu hier angekommen").
+export function todayNearby(dets, pos, radiusKm = 3) {
+  const near = todayNearbyDetections(dets, pos, radiusKm);
   const map = {};
   for (const d of near) {
     const k = d.key || d.species;
@@ -174,6 +179,19 @@ export function todayNearby(dets, pos, radiusKm = 3) {
     map[k].count++; if (d.ts > map[k].last) map[k].last = d.ts;
   }
   return Object.values(map).sort((a, b) => b.last - a.last);
+}
+
+// Löscht einzelne Funde anhand ihrer ID (z. B. zum Zurücksetzen von "Heute hier").
+export async function deleteByIds(ids) {
+  if (!ids.length) return;
+  const database = await db();
+  return new Promise((res, rej) => {
+    const tx = database.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    for (const id of ids) store.delete(id);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
 }
 
 // Alle Funde nach Fundort gruppiert (greedy Clustering, ~600m Radius).

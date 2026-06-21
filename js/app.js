@@ -1,7 +1,7 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
 import { AudioEngine } from './audio.js';
 import { createRecognizer, MockRecognizer } from './recognizer.js';
-import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo } from './db.js';
+import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, todayNearbyDetections, deleteByIds } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap } from './ui.js';
 
 const body = document.body;
@@ -48,7 +48,7 @@ async function boot() {
   catch (e) { console.warn('Recognizer-Fallback auf Mock:', e); rec = new MockRecognizer(); await rec.load(); }
 
   audio.onWindow = onWindow;
-  setUI('demo');
+  setUI('off');
   startSpectrogram();
   registerSW();
 }
@@ -83,16 +83,24 @@ function setIcon(stop) {
     ? '<rect x="7" y="7" width="10" height="10" rx="2"/>'
     : '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/>';
 }
-function setUI(mode) {
-  if (mode === 'off') { body.classList.remove('listening'); statusTxt.textContent = 'Tippe zum Lauschen'; setIcon(false); return; }
-  body.classList.add('listening'); setIcon(mode === 'mic');
-  statusTxt.textContent = mode === 'mic' ? 'Lauscht über dein Mikrofon…' : 'Demo-Vorschau · tippe fürs echte Mikro';
+function setUI(mode, msg) {
+  if (mode === 'off') { body.classList.remove('listening'); statusTxt.textContent = msg || 'Tippe zum Lauschen'; setIcon(false); return; }
+  body.classList.add('listening'); setIcon(true);
+  statusTxt.textContent = msg || 'Lauscht über dein Mikrofon…';
+}
+
+// Vollbildmodus: nur per Nutzergeste auslösbar -> beim Start des Mikros anfragen.
+function tryFullscreen() {
+  const el = document.documentElement;
+  if (document.fullscreenElement || !el.requestFullscreen) return;
+  el.requestFullscreen().catch(() => {});
 }
 
 document.getElementById('micBtn').onclick = async () => {
   if (audio.running) { audio.stop(); geo.stop(); setUI('off'); return; }
+  tryFullscreen();
   try { await audio.start(); geo.start(); setUI('mic'); }
-  catch (e) { console.warn('mic', e); setUI('demo'); statusTxt.textContent = 'Mikro nicht erlaubt – Demo läuft'; }
+  catch (e) { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); }
 };
 
 // ---- Tonaufnahme (manuell) ----
@@ -102,9 +110,10 @@ const recorder = {
   mr: null, chunks: [], timer: null, t0: 0,
   fmt() { const s = Math.floor((Date.now() - this.t0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
   setBtn(on) { if (!recBtn) return; recBtn.classList.toggle('rec-on', on); if (!on) recBtn.textContent = '● Aufnahme'; },
-  async toggle() {
+  async toggle(label) {
     if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
     if (!audio.running) {
+      tryFullscreen();
       try { await audio.start(); geo.start(); setUI('mic'); }
       catch (e) { console.warn('mic', e); statusTxt.textContent = 'Mikro nicht erlaubt'; return; }
     }
@@ -115,7 +124,7 @@ const recorder = {
     }
     try { this.mr = type ? new MediaRecorder(audio.stream, { mimeType: type }) : new MediaRecorder(audio.stream); }
     catch (e) { console.warn('rec', e); return; }
-    this.chunks = [];
+    this.chunks = []; this.label = label || null;
     this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
     this.mr.onstop = () => { clearInterval(this.timer); this.setBtn(false); this.save(); };
     this.mr.start();
@@ -127,21 +136,27 @@ const recorder = {
     const blob = new Blob(this.chunks, { type: this.chunks[0].type || 'audio/webm' });
     const url = URL.createObjectURL(blob);
     const ext = blob.type.includes('mp4') ? 'm4a' : 'webm';
-    const name = 'waldohr_' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.' + ext;
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const prefix = this.label ? this.label.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'waldohr';
+    const name = prefix + '_' + stamp + '.' + ext;
     const row = document.createElement('div'); row.className = 'rec-row';
     const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
     const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = name; dl.textContent = '⬇'; dl.title = 'Herunterladen';
-    row.appendChild(a); row.appendChild(dl);
+    row.appendChild(a);
+    if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
+    row.appendChild(dl);
     const list = document.getElementById('recList'); if (list) list.prepend(row);
   }
 };
 if (recBtn) recBtn.onclick = () => recorder.toggle();
+// Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen.
+window.__waldohrRecordSpecies = (name) => recorder.toggle(name);
 
-// ---- Spektrogramm (echtes Mikro oder Demo-Fallback) ----
+// ---- Spektrogramm (nur echtes Mikro) ----
 function startSpectrogram() {
   const cv = document.getElementById('spec'), cx = cv.getContext('2d');
   const levelFill = document.getElementById('levelFill');
-  const COL = 80, n = 48, cols = []; let t = 0;
+  const COL = 80, n = 48, cols = [];
   const size = () => { cv.width = cv.clientWidth * devicePixelRatio; cv.height = cv.clientHeight * devicePixelRatio; };
   size(); addEventListener('resize', size);
 
@@ -151,24 +166,15 @@ function startSpectrogram() {
     : `rgba(251,191,36,${v})`;
 
   function frame() {
-    t += .08;
-    if (body.classList.contains('listening')) {
-      let colv = [];
-      if (audio.running && audio.analyser) {
-        audio.analyser.getByteFrequencyData(audio.freq);
-        const usable = Math.floor(audio.freq.length * .55);
-        for (let i = 0; i < n; i++) {
-          const lo = Math.floor(Math.pow(i / n, 1.7) * usable);
-          const hi = Math.max(lo + 1, Math.floor(Math.pow((i + 1) / n, 1.7) * usable));
-          let m = 0; for (let j = lo; j < hi; j++) if (audio.freq[j] > m) m = audio.freq[j];
-          colv.push((m / 255) * 1.15);
-        }
-      } else {
-        for (let i = 0; i < n; i++) {
-          const base = Math.sin(t * 1.4 + i * .5) * .4 + .4;
-          const chirp = Math.exp(-Math.pow(i - 12 - 8 * Math.sin(t * .6), 2) / 8) * Math.max(0, Math.sin(t * 3));
-          colv.push(Math.min(1, base * .5 + chirp + Math.random() * .18));
-        }
+    if (body.classList.contains('listening') && audio.running && audio.analyser) {
+      const colv = [];
+      audio.analyser.getByteFrequencyData(audio.freq);
+      const usable = Math.floor(audio.freq.length * .55);
+      for (let i = 0; i < n; i++) {
+        const lo = Math.floor(Math.pow(i / n, 1.7) * usable);
+        const hi = Math.max(lo + 1, Math.floor(Math.pow((i + 1) / n, 1.7) * usable));
+        let m = 0; for (let j = lo; j < hi; j++) if (audio.freq[j] > m) m = audio.freq[j];
+        colv.push((m / 255) * 1.15);
       }
       cols.push(colv);
     } else cols.push(new Array(n).fill(0));
@@ -194,6 +200,18 @@ function startSpectrogram() {
   }
   frame();
 }
+
+// ---- "Heute hier" zurücksetzen ----
+const hereResetBtn = document.getElementById('hereResetBtn');
+if (hereResetBtn) hereResetBtn.onclick = async () => {
+  let dets = [];
+  try { dets = await allDetections(); } catch (e) { console.warn('read', e); }
+  const ids = todayNearbyDetections(dets, geo.pos).map(d => d.id).filter(id => id != null);
+  if (!ids.length) return;
+  if (!confirm(ids.length + ' heutige Funde hier löschen?')) return;
+  try { await deleteByIds(ids); } catch (e) { console.warn('delete', e); }
+  refresh();
+};
 
 function registerSW() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

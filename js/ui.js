@@ -12,6 +12,33 @@ function avatarSVG(key, size) {
 }
 function grad(key) { return (SPECIES[key] || {}).grad || DEFAULT_GRAD; }
 
+// ---- Artbilder (Wikipedia-Thumbnail, gecacht) — rein optionale Verschönerung ----
+const IMG_CACHE = new Map();
+async function fetchSpeciesImage(sci) {
+  if (!sci) return null;
+  if (IMG_CACHE.has(sci)) return IMG_CACHE.get(sci);
+  const cacheKey = 'waldohr.img.' + sci;
+  try { const cached = localStorage.getItem(cacheKey); if (cached) { IMG_CACHE.set(sci, cached); return cached; } } catch {}
+  let url = null;
+  try {
+    const r = await fetch('https://de.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(sci.replace(/ /g, '_')));
+    if (r.ok) { const j = await r.json(); url = (j.thumbnail && j.thumbnail.source) || null; }
+  } catch {}
+  if (url) { IMG_CACHE.set(sci, url); try { localStorage.setItem(cacheKey, url); } catch {} }
+  return url;
+}
+// Setzt das Bild nachträglich auf einem Avatar-Element, sobald es geladen ist (Element kann inzwischen entfernt sein).
+function applySpeciesImage(el, sci) {
+  if (!el || !sci) return;
+  fetchSpeciesImage(sci).then(url => {
+    if (!url || !el.isConnected) return;
+    el.style.backgroundImage = `url('${url}')`;
+    el.style.backgroundSize = 'cover';
+    el.style.backgroundPosition = 'center';
+    const svg = el.querySelector('svg'); if (svg) svg.style.opacity = '0';
+  });
+}
+
 function rarityTag(r) {
   if (r === 'rare') return '<span class="tag rare">selten</span>';
   if (r === 'mammal') return '<span class="tag rare" style="color:var(--rose);border-color:#fb718555;background:#7c1d2e33">Säuger</span>';
@@ -101,8 +128,12 @@ function renderLive() {
     row.className = 'live-row' + (fresh ? ' fresh' : '');
     row.innerHTML = `<div class="lr-av" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(e.key, 24)}</div>
       <div class="lr-meta"><div class="lr-nm">${e.name} ${rarityTag(e.rarity)}</div><div class="lr-lt">${e.sci}</div></div>
-      <div class="lr-conf">${Math.round(e.conf * 100)}%</div>`;
-    row.onclick = () => openModal(e.key);
+      <div class="lr-conf">${Math.round(e.conf * 100)}%</div>
+      <button class="lr-rec" title="Diesen Ruf aufnehmen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/></svg></button>`;
+    ['.lr-av', '.lr-meta', '.lr-conf'].forEach(sel => { const el = row.querySelector(sel); if (el) el.onclick = () => openModal(e.key); });
+    const recBtn = row.querySelector('.lr-rec');
+    recBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrRecordSpecies === 'function') window.__waldohrRecordSpecies(e.name); };
+    applySpeciesImage(row.querySelector('.lr-av'), e.sci);
     list.appendChild(row);
   }
 }
@@ -134,13 +165,19 @@ function renderCollection(stats, dets, pos) {
     const here = todayNearby(dets, pos);
     hereGrid.innerHTML = here.map(s => speciesCard(s)).join('') ||
       `<div class="lt" style="color:var(--faint);grid-column:1/-1">${pos ? 'Heute hier noch nichts entdeckt.' : 'Standort aktivieren, um Funde in deiner Nähe zu sehen.'}</div>`;
-    hereGrid.querySelectorAll('.spc').forEach(el => el.onclick = () => openModal(el.dataset.key));
+    hereGrid.querySelectorAll('.spc').forEach(el => {
+      el.onclick = () => openModal(el.dataset.key);
+      applySpeciesImage(el.querySelector('.ph'), (SPECIES[el.dataset.key] || {}).sci);
+    });
   }
 
   // "Global nach Ort" — alle Funde, zuletzt entdeckt + nach Fundort gruppiert
   const recent = [...stats.perSpecies].sort((a, b) => b.last - a.last).slice(0, 8);
   $('collGrid').innerHTML = recent.map(s => speciesCard(s)).join('') || '<div class="lt" style="color:var(--faint)">Noch nichts gehört.</div>';
-  document.querySelectorAll('#collGrid .spc').forEach(el => el.onclick = () => openModal(el.dataset.key));
+  document.querySelectorAll('#collGrid .spc').forEach(el => {
+    el.onclick = () => openModal(el.dataset.key);
+    applySpeciesImage(el.querySelector('.ph'), (SPECIES[el.dataset.key] || {}).sci);
+  });
 
   const locList = $('locList');
   if (locList) {
@@ -263,7 +300,9 @@ function openModal(key) {
   $('mSci').textContent = sp.sci;
   const av = $('mAvatar');
   av.style.background = `linear-gradient(140deg,${g[0]},${g[1]})`;
+  av.style.backgroundImage = ''; av.style.backgroundSize = ''; av.style.backgroundPosition = '';
   av.innerHTML = avatarSVG(key, 34);
+  applySpeciesImage(av, sp.sci);
   $('mMeaning').innerHTML = sp.meaning;
   $('mSteckbrief').textContent = sp.steckbrief;
   const badge = $('mAi'); if (badge) badge.hidden = true;

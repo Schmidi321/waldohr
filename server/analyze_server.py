@@ -29,7 +29,7 @@ if os.environ.get("WALDOHR_NOMODEL") != "1":
     try:
         from birdnetlib.analyzer import Analyzer
         print("Lade BirdNET-Modell (einmalig) ...", flush=True)
-        ANALYZER = Analyzer()
+        ANALYZER = Analyzer(lang="de")  # deutsche Artnamen statt Englisch
         print("BirdNET bereit.", flush=True)
     except Exception as e:  # noqa: BLE001
         print("WARNUNG: birdnetlib/TensorFlow nicht verfuegbar -> Stub-Modus.", flush=True)
