@@ -269,3 +269,11 @@ body.listening .mic{background:linear-gradient(140deg,#fb7185,#f43f5e);box-shado
 .compass-info{flex:1;min-width:0}
 .compass-dist{font-family:'Outfit';font-weight:700;font-size:20px}
 .compass-sub{font-size:11px;color:var(--muted);margin-top:2px;line-height:1.4}
+
+.rare-toast{position:absolute;top:14px;left:14px;right:14px;z-index:80;display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,#3a2208ee,#1a1206ee);border:1px solid #fbbf2466;border-radius:18px;padding:13px 16px;box-shadow:0 14px 32px -10px #000000aa;transform:translateY(-140%);opacity:0;pointer-events:none;transition:transform .35s cubic-bezier(.2,.8,.2,1),opacity .35s;cursor:pointer}
+.rare-toast.show{transform:translateY(0);opacity:1;pointer-events:auto}
+.rare-toast.mammal{background:linear-gradient(135deg,#3a0c18ee,#1a0609ee);border-color:#fb718566}
+.rare-toast .rt-ico{font-size:26px;flex:0 0 auto}
+.rare-toast .rt-t{font-family:'Outfit';font-weight:700;font-size:14px;color:var(--amber)}
+.rare-toast.mammal .rt-t{color:var(--rose)}
+.rare-toast .rt-s{font-size:12px;color:var(--muted);margin-top:1px}

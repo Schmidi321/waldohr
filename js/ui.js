@@ -12,27 +12,31 @@ function avatarSVG(key, size) {
 }
 function grad(key) { return (SPECIES[key] || {}).grad || DEFAULT_GRAD; }
 
-// ---- Artbilder (Wikipedia-Thumbnail, gecacht) — rein optionale Verschönerung ----
-const IMG_CACHE = new Map();
-async function fetchSpeciesImage(sci) {
+// ---- Artbilder + Kurztext (Wikipedia-Summary, gecacht) ----
+// Liefert sowohl das Vorschaubild als auch einen echten Auszugstext (extract) — letzterer
+// füllt für generische BirdNET-Arten den Steckbrief mit echtem Inhalt statt eines Platzhalters,
+// kostenlos und ohne Gemini-API-Key nötig.
+const WIKI_CACHE = new Map();
+async function fetchSpeciesWiki(sci) {
   if (!sci) return null;
-  if (IMG_CACHE.has(sci)) return IMG_CACHE.get(sci);
-  const cacheKey = 'waldohr.img.' + sci;
-  try { const cached = localStorage.getItem(cacheKey); if (cached) { IMG_CACHE.set(sci, cached); return cached; } } catch {}
-  let url = null;
+  if (WIKI_CACHE.has(sci)) return WIKI_CACHE.get(sci);
+  const cacheKey = 'waldohr.wiki.' + sci;
+  try { const cached = localStorage.getItem(cacheKey); if (cached) { const v = JSON.parse(cached); WIKI_CACHE.set(sci, v); return v; } } catch {}
+  const out = { img: null, extract: null };
   try {
     const r = await fetch('https://de.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(sci.replace(/ /g, '_')));
-    if (r.ok) { const j = await r.json(); url = (j.thumbnail && j.thumbnail.source) || null; }
+    if (r.ok) { const j = await r.json(); out.img = (j.thumbnail && j.thumbnail.source) || null; out.extract = j.extract || null; }
   } catch {}
-  if (url) { IMG_CACHE.set(sci, url); try { localStorage.setItem(cacheKey, url); } catch {} }
-  return url;
+  WIKI_CACHE.set(sci, out);
+  try { localStorage.setItem(cacheKey, JSON.stringify(out)); } catch {}
+  return out;
 }
 // Setzt das Bild nachträglich auf einem Avatar-Element, sobald es geladen ist (Element kann inzwischen entfernt sein).
 function applySpeciesImage(el, sci) {
   if (!el || !sci) return;
-  fetchSpeciesImage(sci).then(url => {
-    if (!url || !el.isConnected) return;
-    el.style.backgroundImage = `url('${url}')`;
+  fetchSpeciesWiki(sci).then(w => {
+    if (!w || !w.img || !el.isConnected) return;
+    el.style.backgroundImage = `url('${w.img}')`;
     el.style.backgroundSize = 'cover';
     el.style.backgroundPosition = 'center';
     const svg = el.querySelector('svg'); if (svg) svg.style.opacity = '0';
@@ -64,11 +68,12 @@ export function initUI() {
   const compassBtn = $('mCompassBtn');
   if (compassBtn) compassBtn.onclick = activateCompass;
 
-  // Einstellungen (Gemini-Key + BirdNET-Server)
+  // Einstellungen (Gemini-Key + Xeno-canto-Key + BirdNET-Server)
   const settings = $('settingsModal');
   const closeSettings = () => settings.classList.remove('open');
   $('gearBtn').onclick = () => {
     $('geminiKey').value = gemini.getKey();
+    $('xcKey').value = xcKeyGet();
     const sv = serverUrlGet();
     $('serverUrl').value = sv;
     $('serverStat').textContent = sv ? 'gesetzt ✓' : 'nicht gesetzt (Demo)';
@@ -78,6 +83,7 @@ export function initUI() {
   $('settingsClose').onclick = closeSettings;
   $('settingsSave').onclick = () => {
     gemini.setKey($('geminiKey').value);
+    xcKeySet($('xcKey').value);
     const before = serverUrlGet();
     const after = serverUrlSet($('serverUrl').value);
     closeSettings();
@@ -106,16 +112,35 @@ function serverUrlSet(v) {
   try { v ? localStorage.setItem('waldohr.server', v) : localStorage.removeItem('waldohr.server'); } catch {}
   return v;
 }
+function xcKeyGet() { try { return localStorage.getItem('waldohr.xc') || ''; } catch { return ''; } }
+function xcKeySet(v) { v = (v || '').trim(); try { v ? localStorage.setItem('waldohr.xc', v) : localStorage.removeItem('waldohr.xc'); } catch {} return v; }
 
 // ---- Live-Liste „jetzt zu hören" ----
 const LIVE = new Map();
 const LIVE_TTL = 15000;
 export function liveAdd(det) {
+  const isNew = !LIVE.has(det.key);
   const e = LIVE.get(det.key) || { key: det.key, count: 0 };
   e.name = det.species; e.sci = det.sci; e.rarity = det.rarity;
   e.conf = det.confidence; e.ts = Date.now(); e.count++;
   LIVE.set(det.key, e);
   renderLive();
+  // Fotografen-Funktion: einmalig beim Eintreffen alarmieren, nicht bei jedem weiteren Erkennungsfenster derselben Art.
+  if (isNew && det.rarity !== 'common') rareAlert(det);
+}
+
+// ---- Seltenheits-Alarm: vibriert + zeigt einen Toast, wenn gerade eine seltene Art/ein Tier auftaucht ----
+let rareToastTimer = null;
+function rareAlert(det) {
+  const toast = $('rareToast'); if (!toast) return;
+  if (navigator.vibrate) { try { navigator.vibrate([120, 70, 120]); } catch {} }
+  const isMammal = det.rarity === 'mammal';
+  toast.innerHTML = `<span class="rt-ico">${isMammal ? '🦌' : '✨'}</span>
+    <div><div class="rt-t">${isMammal ? 'Seltenes Tier!' : 'Seltene Art!'}</div><div class="rt-s">${det.species} ist gerade hier</div></div>`;
+  toast.className = 'rare-toast show' + (isMammal ? ' mammal' : '');
+  toast.onclick = () => { openModal(det.key); toast.classList.remove('show'); };
+  clearTimeout(rareToastTimer);
+  rareToastTimer = setTimeout(() => toast.classList.remove('show'), 5000);
 }
 function renderLive() {
   const list = $('liveList'); if (!list) return;
@@ -400,6 +425,54 @@ function updateCompassUI() {
   }
 }
 
+// ---- Echter Vogelruf (Xeno-canto API v3, braucht eigenen kostenlosen Key), gecacht ----
+// Macht "Ruf anhören" tatsächlich funktionsfähig (vorher: Button ohne jede Funktion).
+const AUDIO_CACHE = new Map();
+async function fetchSpeciesAudio(sci) {
+  if (!sci) return null;
+  const key = xcKeyGet();
+  if (!key) return null;
+  if (AUDIO_CACHE.has(sci)) return AUDIO_CACHE.get(sci);
+  const cacheKey = 'waldohr.audio.' + sci;
+  try { const cached = localStorage.getItem(cacheKey); if (cached) { const v = cached === '-' ? null : cached; AUDIO_CACHE.set(sci, v); return v; } } catch {}
+  let url = null;
+  try {
+    const r = await fetch('https://xeno-canto.org/api/3/recordings?query=' + encodeURIComponent(`sp:"${sci}" q:A`) + '&key=' + encodeURIComponent(key));
+    if (r.ok) {
+      const j = await r.json();
+      const rec = j.recordings && j.recordings.find(x => x.file || x.fileUrl || x.audio);
+      if (rec) { url = rec.file || rec.fileUrl || rec.audio; if (url.startsWith('//')) url = 'https:' + url; }
+    } else console.warn('xeno-canto', r.status, await r.text().catch(() => ''));
+  } catch (e) { console.warn('xeno-canto', e); }
+  AUDIO_CACHE.set(sci, url);
+  try { localStorage.setItem(cacheKey, url || '-'); } catch {}
+  return url;
+}
+let callAudio = null;
+function stopCallAudio() {
+  if (callAudio) { callAudio.pause(); callAudio = null; }
+  const icon = $('mPlayIcon'), label = $('mPlayLabel');
+  if (icon) icon.innerHTML = '<path d="M6 4l14 8-14 8z"/>';
+  if (label) label.textContent = 'Ruf anhören';
+}
+async function togglePlayCall(sci) {
+  if (callAudio && !callAudio.paused) { stopCallAudio(); return; }
+  if (!xcKeyGet()) {
+    const label = $('mPlayLabel'); if (label) label.textContent = 'Xeno-canto-Key fehlt (⚙ Einstellungen)';
+    setTimeout(() => { if (label) label.textContent = 'Ruf anhören'; }, 3000);
+    return;
+  }
+  const label = $('mPlayLabel'); if (label) label.textContent = 'Suche Aufnahme …';
+  const url = await fetchSpeciesAudio(sci);
+  if (!url) { if (label) label.textContent = 'Keine Aufnahme gefunden'; setTimeout(() => { if (label) label.textContent = 'Ruf anhören'; }, 2500); return; }
+  callAudio = new Audio(url);
+  callAudio.onended = stopCallAudio;
+  callAudio.onerror = () => { if (label) label.textContent = 'Wiedergabe fehlgeschlagen'; };
+  try { await callAudio.play(); } catch (e) { console.warn('play', e); if (label) label.textContent = 'Wiedergabe fehlgeschlagen'; return; }
+  if (label) label.textContent = 'Spielt … (Xeno-canto)';
+  const icon = $('mPlayIcon'); if (icon) icon.innerHTML = '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>';
+}
+
 let modalToken = 0;
 function openModal(key) {
   const sp = SPECIES[key] || SPECIES.amsel;
@@ -415,6 +488,9 @@ function openModal(key) {
   $('mSteckbrief').textContent = sp.steckbrief;
   const badge = $('mAi'); if (badge) badge.hidden = true;
   $('sheet').classList.add('open');
+
+  stopCallAudio();
+  const playBtn = $('mPlayBtn'); if (playBtn) playBtn.onclick = () => togglePlayCall(sp.sci);
 
   // Richtungsanzeige: nur sichtbar, wenn es einen verorteten Fund dieser Art gibt UND wir selbst einen Standort haben.
   curTargetGeo = lastGeoForKey(key);
@@ -432,17 +508,30 @@ function openModal(key) {
     }
   }
 
-  // Optionale Gemini-Anreicherung (gecacht); ältere Anfrage verwerfen via Token.
+  const token = ++modalToken;
+  let textSource = 'catalog';
+
+  // Generische BirdNET-Arten (key beginnt mit "x_") haben nur einen Platzhalter-Steckbrief —
+  // Wikipedia-Auszug liefert echten Inhalt, kostenlos & ohne API-Key. Gemini (falls vorhanden) gewinnt immer.
+  if (key.startsWith('x_') && sp.sci) {
+    fetchSpeciesWiki(sp.sci).then(w => {
+      if (token !== modalToken || textSource === 'gemini' || !w || !w.extract) return;
+      $('mSteckbrief').textContent = w.extract;
+      textSource = 'wiki';
+    });
+  }
+
+  // Optionale Gemini-Anreicherung (gecacht, läuft nur 1× pro Art/Gerät; danach kommt's aus dem localStorage-Cache).
   if (gemini.hasKey() && sp.sci) {
-    const token = ++modalToken;
     if (badge) { badge.hidden = false; badge.textContent = '✨ Gemini …'; }
     gemini.enrich(sp.sci, sp.name).then(res => {
       if (token !== modalToken) return;
       if (!res) { if (badge) badge.hidden = true; return; }
       $('mMeaning').textContent = res.meaning;
       $('mSteckbrief').textContent = res.steckbrief;
+      textSource = 'gemini';
       if (badge) badge.textContent = '✨ erklärt von Gemini';
     });
   }
 }
-function closeSheet() { $('sheet').classList.remove('open'); stopOrientation(); curTargetGeo = null; }
+function closeSheet() { $('sheet').classList.remove('open'); stopOrientation(); stopCallAudio(); curTargetGeo = null; }

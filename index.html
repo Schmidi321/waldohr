@@ -18,6 +18,8 @@
 <div class="phone">
   <div class="screen-wrap">
 
+    <div class="rare-toast" id="rareToast"></div>
+
     <!-- ============ LISTEN ============ -->
     <section class="view active" id="v-listen">
       <div class="topbar">
@@ -164,7 +166,7 @@
           </div>
         </div>
         <div class="actions">
-          <button class="btn primary"><svg viewBox="0 0 24 24" fill="#04130d" stroke="none"><path d="M6 4l14 8-14 8z"/></svg>Ruf anhören</button>
+          <button class="btn primary" id="mPlayBtn"><svg id="mPlayIcon" viewBox="0 0 24 24" fill="#04130d" stroke="none"><path d="M6 4l14 8-14 8z"/></svg><span id="mPlayLabel">Ruf anhören</span></button>
           <button class="btn ghost" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Mehr erfahren</button>
         </div>
       </div>
@@ -181,6 +183,12 @@
           <p style="margin-bottom:12px">Eigener Google-Gemini-API-Key. Wird nur lokal auf diesem Gerät gespeichert (nicht hochgeladen) und erklärt im Detail-Sheet die Ruf-Bedeutung &amp; den Steckbrief je Art.</p>
           <input id="geminiKey" type="password" autocomplete="off" placeholder="API-Key einfügen…" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
           <div style="font-size:11px;color:var(--faint);margin-top:8px">Key holen: aistudio.google.com/app/apikey</div>
+        </div>
+        <div class="infoblock">
+          <h3><span style="font-size:15px">🔊</span> Echte Vogelrufe (Xeno-canto)</h3>
+          <p style="margin-bottom:12px">Eigener kostenloser Xeno-canto-API-Key, macht „Ruf anhören" im Detail-Sheet funktionsfähig (echte Aufnahme statt nichts). Nur lokal gespeichert.</p>
+          <input id="xcKey" type="password" autocomplete="off" placeholder="API-Key einfügen…" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
+          <div style="font-size:11px;color:var(--faint);margin-top:8px">Key holen (kostenlos): xeno-canto.org/account</div>
         </div>
         <div class="infoblock">
           <h3><span style="font-size:15px">🐦</span> Echte Erkennung (BirdNET-Server)</h3>

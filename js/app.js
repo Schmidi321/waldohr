@@ -1,7 +1,7 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
 import { AudioEngine } from './audio.js';
 import { createRecognizer, MockRecognizer } from './recognizer.js';
-import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, todayNearbyDetections, deleteByIds } from './db.js';
+import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos } from './ui.js';
 
 const body = document.body;
@@ -39,6 +39,7 @@ async function boot() {
   initUI();
   try { await seedIfEmpty(); } catch (e) { console.warn('seed', e); }
   try { await migrateGeo(); } catch (e) { console.warn('migrateGeo', e); }
+  try { const n = await cleanupFakeGeo(); if (n) console.info(n + ' Fund(e) hatten eine falsche Fake-Position (Bug) — Koordinaten entfernt.'); } catch (e) { console.warn('cleanupFakeGeo', e); }
   await refresh();
 
   rec = await createRecognizer();

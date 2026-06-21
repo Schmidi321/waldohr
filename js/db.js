@@ -82,12 +82,15 @@ export async function seedIfEmpty() {
   }
 }
 
-// Vorhandene Funde ohne Koordinaten (aus früherem Seed) nachträglich verorten,
-// damit die Karte sofort gefüllt ist. Echte Funde bekommen später echtes GPS.
+// Vorhandene Demo-Seed-Funde ohne Koordinaten nachträglich verorten, damit die Karte
+// sofort gefüllt ist. NUR Seed-Daten — echte Funde (mic/server) ohne GPS-Fix bleiben
+// absichtlich unverortet, statt mit einer falschen Fake-Position versehen zu werden
+// (das war ein Bug: echte Funde ohne rechtzeitigen GPS-Fix landeten sonst dauerhaft
+// an einer zufälligen Position in der Eifel, egal wo der Nutzer tatsächlich ist).
 const DEMO_BASE = { lat: 50.60, lng: 6.40 };
 export async function migrateGeo() {
   const dets = await allDetections();
-  const missing = dets.filter(d => typeof d.lat !== 'number' || typeof d.lng !== 'number');
+  const missing = dets.filter(d => d.source === 'seed' && (typeof d.lat !== 'number' || typeof d.lng !== 'number'));
   if (!missing.length) return;
   const database = await db();
   await new Promise((res, rej) => {
@@ -101,6 +104,28 @@ export async function migrateGeo() {
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
+}
+
+// Räumt echte Funde auf, die durch den migrateGeo()-Bug (s.o.) fälschlich eine
+// Fake-Eifel-Position bekommen haben: erkennbar daran, dass sie nicht aus dem Seed
+// stammen, aber exakt im Jitter-Bereich um DEMO_BASE liegen. Entfernt nur die Koordinaten,
+// der Fund selbst bleibt erhalten (taucht dann zu Recht nicht mehr auf der Karte auf).
+export async function cleanupFakeGeo() {
+  const dets = await allDetections();
+  const bad = dets.filter(d =>
+    d.source !== 'seed' && typeof d.lat === 'number' && typeof d.lng === 'number' &&
+    Math.abs(d.lat - DEMO_BASE.lat) <= 0.003 && Math.abs(d.lng - DEMO_BASE.lng) <= 0.003
+  );
+  if (!bad.length) return 0;
+  const database = await db();
+  await new Promise((res, rej) => {
+    const tx = database.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    for (const d of bad) { delete d.lat; delete d.lng; store.put(d); }
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+  return bad.length;
 }
 
 // ---- Aggregation für die Diagramme ----
