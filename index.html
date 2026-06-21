@@ -60,7 +60,6 @@
     <section class="view" id="v-map">
       <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></svg></span>Fundkarte</div><div class="chip" id="mapCount">0 Funde</div></div>
       <div class="map" id="map">
-        <div class="river"></div>
         <div class="map-empty" id="mapEmpty" hidden>Noch keine verorteten Funde.<br>Mikro starten &amp; Standort erlauben.</div>
       </div>
       <div class="maplegend">
@@ -152,6 +151,17 @@
         <div class="infoblock">
           <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z"/></svg>Steckbrief</h3>
           <p id="mSteckbrief"></p>
+        </div>
+        <div class="infoblock" id="mDirBlock" hidden>
+          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M16 8l-5 3-2 5 5-3z"/></svg>Richtung zum letzten Fund</h3>
+          <div class="compass-row">
+            <div class="compass-dial"><svg id="mCompassArrow" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l4 16-4-2.5L8 18z"/></svg></div>
+            <div class="compass-info">
+              <div class="compass-dist" id="mDirDist">– m</div>
+              <div class="compass-sub" id="mDirSub">…</div>
+              <button class="btn ghost small" id="mCompassBtn" hidden>Kompass aktivieren</button>
+            </div>
+          </div>
         </div>
         <div class="actions">
           <button class="btn primary"><svg viewBox="0 0 24 24" fill="#04130d" stroke="none"><path d="M6 4l14 8-14 8z"/></svg>Ruf anhören</button>

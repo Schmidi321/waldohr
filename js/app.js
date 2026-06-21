@@ -2,12 +2,11 @@
 import { AudioEngine } from './audio.js';
 import { createRecognizer, MockRecognizer } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, todayNearbyDetections, deleteByIds } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos } from './ui.js';
 
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
 const micIcon = document.getElementById('micIcon');
-const DIRS = ['N','NO','O','SO','S','SW','W','NW'];
 
 const audio = new AudioEngine();
 let rec = null;
@@ -26,6 +25,7 @@ const geo = {
         const had = !!this.pos;
         this.pos = { lat: p.coords.latitude, lng: p.coords.longitude };
         setLoc('Standort ±' + Math.round(p.coords.accuracy) + ' m');
+        setLivePos(this.pos);   // live fürs Kompass-Feature, ohne vollen Re-Render
         if (!had) refresh();   // erster Fix: "Heute hier" sofort aktualisieren
       },
       e => { console.warn('geo', e); setLoc(e.code === 1 ? 'GPS verweigert' : 'kein GPS'); },
@@ -68,7 +68,6 @@ async function onWindow(samples, sampleRate) {
   if (!r) return;
   const det = {
     key: r.key, species: r.name, sci: r.sci, rarity: r.rarity, confidence: r.confidence,
-    dir: DIRS[(Math.random() * 8) | 0], distance: 10 + ((Math.random() * 70) | 0),
     ts: Date.now(), source: r.source || 'mic'
   };
   if (geo.pos) { det.lat = geo.pos.lat; det.lng = geo.pos.lng; }

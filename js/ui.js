@@ -1,7 +1,7 @@
 // Rendering: Erkennungs-Karte, Sammlung, Statistik-Diagramme, Detail-Sheet, Navigation.
 import { SPECIES } from './species.js';
 import { gemini } from './gemini.js';
-import { todayNearby, groupByLocation } from './db.js';
+import { todayNearby, groupByLocation, haversineKm, bearingDeg } from './db.js';
 
 const $ = id => document.getElementById(id);
 const DEFAULT_GRAD = ['#0e5840', '#0a4733'];
@@ -57,9 +57,12 @@ export function initUI() {
     nav.forEach(x => x.classList.remove('on')); b.classList.add('on');
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     $('v-' + b.dataset.v).classList.add('active');
+    if (b.dataset.v === 'map') invalidateMapSize();
   });
   $('sheetScrim').onclick = closeSheet;
   $('sheetClose').onclick = closeSheet;
+  const compassBtn = $('mCompassBtn');
+  if (compassBtn) compassBtn.onclick = activateCompass;
 
   // Einstellungen (Gemini-Key + BirdNET-Server)
   const settings = $('settingsModal');
@@ -157,6 +160,9 @@ function speciesCard(s) {
 
 let collMode = 'here';
 let lastCollStats = null, lastCollDets = [], lastCollPos = null;
+let livePos = null;
+// Wird bei jedem GPS-Update aufgerufen (auch ohne vollen Re-Render) — fürs Kompass-Feature.
+export function setLivePos(pos) { livePos = pos; updateCompassUI(); }
 
 function renderCollStats() {
   if (!lastCollStats) return;
@@ -272,41 +278,125 @@ export function drawDayChart(hourly) {
   const pk = $('dayPeak'); pk.setAttribute('cx', pts[mi][0].toFixed(1)); pk.setAttribute('cy', pts[mi][1].toFixed(1));
 }
 
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+// ---- Echte Karte (Leaflet + OpenStreetMap), lazy geladen erst wenn die Kartenansicht gebraucht wird ----
+let leafletPromise = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (leafletPromise) return leafletPromise;
+  leafletPromise = new Promise((resolve, reject) => {
+    if (!document.querySelector('link[data-leaflet]')) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      link.setAttribute('data-leaflet', '');
+      document.head.appendChild(link);
+    }
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.onload = () => resolve(window.L);
+    script.onerror = () => reject(new Error('Leaflet konnte nicht geladen werden'));
+    document.head.appendChild(script);
+  });
+  return leafletPromise;
+}
 
-export function renderMap(dets) {
-  const map = document.getElementById('map');
-  if (!map) return;
-  map.querySelectorAll('.pin').forEach(p => p.remove());
-
+let mapInst = null, markersLayer = null;
+export async function renderMap(dets) {
+  const mapEl = document.getElementById('map');
+  if (!mapEl) return;
   const geo = dets.filter(d => typeof d.lat === 'number' && typeof d.lng === 'number');
   const empty = document.getElementById('mapEmpty');
   const count = document.getElementById('mapCount');
   if (count) count.textContent = geo.length + (geo.length === 1 ? ' Fund' : ' Funde');
-  if (!geo.length) { if (empty) empty.hidden = false; return; }
-  if (empty) empty.hidden = true;
+  if (empty) empty.hidden = !!geo.length;
+  if (!geo.length) return;
 
-  let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-  for (const d of geo) {
-    if (d.lat < minLat) minLat = d.lat; if (d.lat > maxLat) maxLat = d.lat;
-    if (d.lng < minLng) minLng = d.lng; if (d.lng > maxLng) maxLng = d.lng;
+  let L;
+  try { L = await loadLeaflet(); } catch (e) { console.warn('leaflet', e); return; }
+  if (!mapEl.isConnected) return;
+
+  if (!mapInst) {
+    mapInst = L.map(mapEl, { attributionControl: true }).setView([geo[geo.length - 1].lat, geo[geo.length - 1].lng], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '© OpenStreetMap-Mitwirkende'
+    }).addTo(mapInst);
+    markersLayer = L.layerGroup().addTo(mapInst);
   }
-  const padLat = ((maxLat - minLat) || 0.001) * 0.15, padLng = ((maxLng - minLng) || 0.001) * 0.15;
-  minLat -= padLat; maxLat += padLat; minLng -= padLng; maxLng += padLng;
-  const sLat = (maxLat - minLat) || 0.001, sLng = (maxLng - minLng) || 0.001;
+  markersLayer.clearLayers();
+  const colorFor = d => d.rarity === 'rare' ? '#fbbf24' : d.rarity === 'mammal' ? '#fb7185' : '#34d399';
+  const bounds = [];
+  for (const d of geo.slice(-200)) {
+    const m = L.circleMarker([d.lat, d.lng], { radius: 7, color: colorFor(d), weight: 2, fillColor: colorFor(d), fillOpacity: .8 });
+    m.on('click', () => openModal(d.key));
+    m.addTo(markersLayer);
+    bounds.push([d.lat, d.lng]);
+  }
+  if (bounds.length > 1) mapInst.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
+  else mapInst.setView(bounds[0], 15);
+  setTimeout(() => mapInst && mapInst.invalidateSize(), 60);
+}
 
-  for (const d of geo.slice(-50)) {
-    const x = clamp((d.lng - minLng) / sLng * 100, 4, 96);
-    const y = clamp((1 - (d.lat - minLat) / sLat) * 100, 5, 95);
-    const cls = d.rarity === 'rare' ? ' amber' : d.rarity === 'mammal' ? ' rose' : '';
-    const pin = document.createElement('div');
-    pin.className = 'pin' + cls;
-    pin.style.left = x.toFixed(1) + '%';
-    pin.style.top = y.toFixed(1) + '%';
-    const label = d.rarity !== 'common' ? `<span class="lbl">${d.species}</span>` : '';
-    pin.innerHTML = `<span class="dot"></span>${label}`;
-    pin.addEventListener('click', () => openModal(d.key));
-    map.appendChild(pin);
+// Nach Tab-Wechsel auf die Kartenansicht: Leaflet kannte die Containergröße evtl. noch nicht (display:none beim Init).
+export function invalidateMapSize() {
+  if (mapInst) setTimeout(() => mapInst.invalidateSize(), 80);
+}
+
+// ---- Kompass: Richtung & Entfernung zum letzten Fund einer Art (Detail-Sheet) ----
+// Echte Peilung aus DeviceOrientationEvent + Bearing-Formel — kein Fake mehr wie das alte zufällige `dir`-Feld.
+let curTargetGeo = null;
+let curHeading = null;
+let orientationHandler = null, orientationEvName = null;
+
+function compassSupported() { return typeof DeviceOrientationEvent !== 'undefined'; }
+function needsPermission() { return compassSupported() && typeof DeviceOrientationEvent.requestPermission === 'function'; }
+
+function getHeading(e) {
+  if (typeof e.webkitCompassHeading === 'number') return e.webkitCompassHeading;   // iOS Safari
+  if (e.absolute && typeof e.alpha === 'number') return (360 - e.alpha) % 360;     // Android/Chrome
+  return null;
+}
+function startOrientation() {
+  if (orientationHandler) return;
+  orientationHandler = e => { const h = getHeading(e); if (h != null) { curHeading = h; updateCompassUI(); } };
+  orientationEvName = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
+  window.addEventListener(orientationEvName, orientationHandler);
+}
+function stopOrientation() {
+  if (!orientationHandler) return;
+  window.removeEventListener(orientationEvName, orientationHandler);
+  orientationHandler = null; curHeading = null;
+}
+async function activateCompass() {
+  if (needsPermission()) {
+    try { if (await DeviceOrientationEvent.requestPermission() !== 'granted') return; }
+    catch (e) { console.warn('compass perm', e); return; }
+  }
+  startOrientation();
+  const btn = $('mCompassBtn'); if (btn) btn.hidden = true;
+}
+function lastGeoForKey(key) {
+  let best = null;
+  for (const d of lastCollDets) {
+    if (d.key !== key || typeof d.lat !== 'number' || typeof d.lng !== 'number') continue;
+    if (!best || d.ts > best.ts) best = d;
+  }
+  return best;
+}
+function updateCompassUI() {
+  const block = $('mDirBlock');
+  if (!block || block.hidden || !curTargetGeo) return;
+  const cur = livePos || lastCollPos;
+  if (!cur) return;
+  const distM = haversineKm(cur, curTargetGeo) * 1000;
+  $('mDirDist').textContent = distM < 1000 ? Math.round(distM) + ' m' : (distM / 1000).toFixed(1) + ' km';
+  const bearing = bearingDeg(cur, curTargetGeo);
+  const arrow = $('mCompassArrow');
+  if (curHeading != null) {
+    arrow.style.transform = `rotate(${(bearing - curHeading + 360) % 360}deg)`;
+    $('mDirSub').textContent = 'Kompass aktiv — Pfeil zeigt zum Fund';
+  } else {
+    arrow.style.transform = `rotate(${bearing}deg)`;
+    $('mDirSub').textContent = 'Peilung ab Norden · Kompass für Live-Pfeil aktivieren';
   }
 }
 
@@ -326,6 +416,22 @@ function openModal(key) {
   const badge = $('mAi'); if (badge) badge.hidden = true;
   $('sheet').classList.add('open');
 
+  // Richtungsanzeige: nur sichtbar, wenn es einen verorteten Fund dieser Art gibt UND wir selbst einen Standort haben.
+  curTargetGeo = lastGeoForKey(key);
+  const dirBlock = $('mDirBlock');
+  const cur = livePos || lastCollPos;
+  if (dirBlock) {
+    if (curTargetGeo && cur) {
+      dirBlock.hidden = false;
+      const btn = $('mCompassBtn');
+      if (needsPermission() && !orientationHandler) { if (btn) btn.hidden = false; }
+      else { if (btn) btn.hidden = true; if (!orientationHandler) startOrientation(); }
+      updateCompassUI();
+    } else {
+      dirBlock.hidden = true;
+    }
+  }
+
   // Optionale Gemini-Anreicherung (gecacht); ältere Anfrage verwerfen via Token.
   if (gemini.hasKey() && sp.sci) {
     const token = ++modalToken;
@@ -339,4 +445,4 @@ function openModal(key) {
     });
   }
 }
-function closeSheet() { $('sheet').classList.remove('open'); }
+function closeSheet() { $('sheet').classList.remove('open'); stopOrientation(); curTargetGeo = null; }

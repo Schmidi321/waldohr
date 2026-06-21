@@ -154,11 +154,20 @@ function isToday(ts) {
   return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
 }
 
-function haversineKm(a, b) {
+export function haversineKm(a, b) {
   const R = 6371, rad = Math.PI / 180;
   const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
   const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+// Peilung (0-360°, 0=Nord) von a nach b — fürs Kompass-Feature im Detail-Sheet.
+export function bearingDeg(a, b) {
+  const rad = Math.PI / 180;
+  const phi1 = a.lat * rad, phi2 = b.lat * rad, dLng = (b.lng - a.lng) * rad;
+  const y = Math.sin(dLng) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLng);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
 
 // Rohe Treffer für "Heute hier" (inkl. id, fürs Löschen).

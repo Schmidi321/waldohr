@@ -167,20 +167,16 @@ body.listening .mic{background:linear-gradient(140deg,#fb7185,#f43f5e);box-shado
 .nav button.on{color:var(--lime)}
 .nav button.on svg{filter:drop-shadow(0 0 8px #a3e63588)}
 
-.map{position:relative;flex:1;border-radius:20px;overflow:hidden;border:1px solid var(--stroke);min-height:420px;background:radial-gradient(60% 40% at 30% 25%, #0f4a36, transparent 70%),radial-gradient(50% 50% at 75% 70%, #0c3e2d, transparent 70%),repeating-linear-gradient(125deg,#06241a 0 18px,#05201700 18px 36px),linear-gradient(160deg,#072a1e,#04140e)}
-.map .river{position:absolute;top:0;bottom:0;left:42%;width:30px;background:linear-gradient(#2dd4bf33,#67e8f922);filter:blur(2px);transform:rotate(8deg)}
-.pin{position:absolute;transform:translate(-50%,-50%);cursor:pointer}
-.pin .dot{width:14px;height:14px;border-radius:50%;background:var(--emerald);box-shadow:0 0 0 4px #34d39933,0 0 14px var(--emerald)}
-.pin.amber .dot{background:var(--amber);box-shadow:0 0 0 4px #fbbf2433,0 0 14px var(--amber)}
-.pin.rose .dot{background:var(--rose);box-shadow:0 0 0 4px #fb718533,0 0 14px var(--rose)}
-.pin::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1px solid currentColor;color:var(--emerald);animation:pulsepin 2.4s ease-out infinite}
-.pin.amber::after{color:var(--amber)}.pin.rose::after{color:var(--rose)}
-@keyframes pulsepin{0%{transform:scale(.6);opacity:.7}100%{transform:scale(3.2);opacity:0}}
-.pin .lbl{position:absolute;left:18px;top:-4px;white-space:nowrap;font-size:11px;font-weight:500;background:#04130dcc;border:1px solid var(--stroke);padding:3px 8px;border-radius:20px;backdrop-filter:blur(6px)}
+.map{position:relative;flex:1;border-radius:20px;overflow:hidden;border:1px solid var(--stroke);min-height:420px;background:linear-gradient(160deg,#072a1e,#04140e)}
+.leaflet-container{background:#0b1f16;font-family:inherit}
+.leaflet-control-attribution{background:rgba(4,19,13,.75)!important;color:var(--faint)!important;font-size:9px!important}
+.leaflet-control-attribution a{color:var(--muted)!important}
+.leaflet-control-zoom a{background:#0e2a1f!important;color:var(--ink)!important;border-color:var(--stroke)!important}
+.leaflet-control-zoom a:hover{background:#143626!important}
 .maplegend{display:flex;gap:14px;justify-content:center;margin-top:12px;font-size:11px;color:var(--muted)}
 .maplegend span{display:flex;align-items:center;gap:6px}
 .maplegend i{width:9px;height:9px;border-radius:50%}
-.map-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--faint);font-size:13px;line-height:1.6;padding:24px}
+.map-empty{position:absolute;inset:0;z-index:500;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--faint);font-size:13px;line-height:1.6;padding:24px;background:#04130dcc}
 .map-empty[hidden]{display:none}
 
 .stats{display:flex;gap:10px;margin-bottom:16px}
@@ -265,3 +261,11 @@ body.listening .mic{background:linear-gradient(140deg,#fb7185,#f43f5e);box-shado
 .btn svg{width:17px;height:17px}
 .btn.primary{background:linear-gradient(140deg,var(--lime),var(--emerald));color:#04130d}
 .btn.ghost{background:var(--glass);border:1px solid var(--stroke);color:var(--ink)}
+.btn.small{flex:none;padding:8px 14px;font-size:12px;margin-top:8px}
+
+.compass-row{display:flex;align-items:center;gap:16px;margin-top:4px}
+.compass-dial{flex:0 0 64px;width:64px;height:64px;border-radius:50%;background:#04130d;border:1px solid var(--stroke);display:grid;place-items:center}
+.compass-dial svg{width:32px;height:32px;color:var(--lime);transition:transform .25s ease}
+.compass-info{flex:1;min-width:0}
+.compass-dist{font-family:'Outfit';font-weight:700;font-size:20px}
+.compass-sub{font-size:11px;color:var(--muted);margin-top:2px;line-height:1.4}
