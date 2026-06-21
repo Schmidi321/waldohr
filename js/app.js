@@ -90,6 +90,48 @@ document.getElementById('micBtn').onclick = async () => {
   catch (e) { console.warn('mic', e); setUI('demo'); statusTxt.textContent = 'Mikro nicht erlaubt – Demo läuft'; }
 };
 
+// ---- Tonaufnahme (manuell) ----
+const recBtn = document.getElementById('recBtn');
+if (recBtn && !window.MediaRecorder) recBtn.style.display = 'none';
+const recorder = {
+  mr: null, chunks: [], timer: null, t0: 0,
+  fmt() { const s = Math.floor((Date.now() - this.t0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
+  setBtn(on) { if (!recBtn) return; recBtn.classList.toggle('rec-on', on); if (!on) recBtn.textContent = '● Aufnahme'; },
+  async toggle() {
+    if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
+    if (!audio.running) {
+      try { await audio.start(); geo.start(); setUI('mic'); }
+      catch (e) { console.warn('mic', e); statusTxt.textContent = 'Mikro nicht erlaubt'; return; }
+    }
+    if (!audio.stream) return;
+    let type = '';
+    for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { type = t; break; }
+    }
+    try { this.mr = type ? new MediaRecorder(audio.stream, { mimeType: type }) : new MediaRecorder(audio.stream); }
+    catch (e) { console.warn('rec', e); return; }
+    this.chunks = [];
+    this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
+    this.mr.onstop = () => { clearInterval(this.timer); this.setBtn(false); this.save(); };
+    this.mr.start();
+    this.t0 = Date.now(); this.setBtn(true);
+    this.timer = setInterval(() => { if (recBtn) recBtn.textContent = '■ ' + this.fmt(); }, 500);
+  },
+  save() {
+    if (!this.chunks.length) return;
+    const blob = new Blob(this.chunks, { type: this.chunks[0].type || 'audio/webm' });
+    const url = URL.createObjectURL(blob);
+    const ext = blob.type.includes('mp4') ? 'm4a' : 'webm';
+    const name = 'waldohr_' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.' + ext;
+    const row = document.createElement('div'); row.className = 'rec-row';
+    const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
+    const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = name; dl.textContent = '⬇'; dl.title = 'Herunterladen';
+    row.appendChild(a); row.appendChild(dl);
+    const list = document.getElementById('recList'); if (list) list.prepend(row);
+  }
+};
+if (recBtn) recBtn.onclick = () => recorder.toggle();
+
 // ---- Spektrogramm (echtes Mikro oder Demo-Fallback) ----
 function startSpectrogram() {
   const cv = document.getElementById('spec'), cx = cv.getContext('2d');
