@@ -22,7 +22,12 @@ const geo = {
     if (this.watchId != null) return;
     setLoc('Standort: suche…');
     this.watchId = navigator.geolocation.watchPosition(
-      p => { this.pos = { lat: p.coords.latitude, lng: p.coords.longitude }; setLoc('Standort ±' + Math.round(p.coords.accuracy) + ' m'); },
+      p => {
+        const had = !!this.pos;
+        this.pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+        setLoc('Standort ±' + Math.round(p.coords.accuracy) + ' m');
+        if (!had) refresh();   // erster Fix: "Heute hier" sofort aktualisieren
+      },
       e => { console.warn('geo', e); setLoc(e.code === 1 ? 'GPS verweigert' : 'kein GPS'); },
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 12000 }
     );
@@ -51,7 +56,7 @@ async function boot() {
 async function refresh() {
   let dets = [];
   try { dets = await allDetections(); } catch (e) { console.warn('read', e); }
-  renderAll(computeStats(dets));
+  renderAll(computeStats(dets), dets, geo.pos);
   renderMap(dets);
 }
 

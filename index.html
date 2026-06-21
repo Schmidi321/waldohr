@@ -75,8 +75,23 @@
     <section class="view" id="v-coll">
       <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M5 3h14v18l-7-4-7 4z"/></svg></span>Meine Sammlung</div></div>
       <div class="stats" id="collStats"></div>
-      <div class="sectitle">Zuletzt entdeckt</div>
-      <div class="grid" id="collGrid"></div>
+
+      <div class="segmented" id="collToggle">
+        <button class="on" data-mode="here">Heute hier</button>
+        <button data-mode="global">Global nach Ort</button>
+      </div>
+
+      <div id="collHere">
+        <div class="sectitle">Heute an deinem Standort</div>
+        <div class="grid" id="hereGrid"></div>
+      </div>
+
+      <div id="collGlobal" hidden>
+        <div class="sectitle">Zuletzt entdeckt</div>
+        <div class="grid" id="collGrid"></div>
+        <div class="sectitle" style="margin-top:18px">Nach Fundort</div>
+        <div class="loclist" id="locList"></div>
+      </div>
     </section>
 
     <!-- ============ STATS ============ -->

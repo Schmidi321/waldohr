@@ -147,3 +147,55 @@ export function computeStats(dets) {
     newThisWeek, streak, perSpecies, week, hourly
   };
 }
+
+// ---- Standort-Aggregation: "Heute hier" + "Global nach Ort" ----
+function isToday(ts) {
+  const d = new Date(ts), n = new Date();
+  return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+}
+
+function haversineKm(a, b) {
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+// Heutige Funde in der Nähe der aktuellen Position (für "neu hier angekommen").
+export function todayNearby(dets, pos, radiusKm = 3) {
+  const today = dets.filter(d => isToday(d.ts));
+  const near = pos
+    ? today.filter(d => typeof d.lat === 'number' && typeof d.lng === 'number' && haversineKm(pos, d) <= radiusKm)
+    : today;
+  const map = {};
+  for (const d of near) {
+    const k = d.key || d.species;
+    if (!map[k]) map[k] = { key: k, name: d.species, sci: d.sci, rarity: d.rarity, count: 0, last: 0 };
+    map[k].count++; if (d.ts > map[k].last) map[k].last = d.ts;
+  }
+  return Object.values(map).sort((a, b) => b.last - a.last);
+}
+
+// Alle Funde nach Fundort gruppiert (greedy Clustering, ~600m Radius).
+export function groupByLocation(dets) {
+  const geo = dets.filter(d => typeof d.lat === 'number' && typeof d.lng === 'number');
+  const clusters = [];
+  for (const d of geo) {
+    let c = clusters.find(c => haversineKm(c, d) <= 0.6);
+    if (!c) { c = { lat: d.lat, lng: d.lng, n: 0, dets: [] }; clusters.push(c); }
+    c.lat = (c.lat * c.n + d.lat) / (c.n + 1);
+    c.lng = (c.lng * c.n + d.lng) / (c.n + 1);
+    c.n++; c.dets.push(d);
+  }
+  return clusters.map(c => {
+    const map = {};
+    let last = 0;
+    for (const d of c.dets) {
+      const k = d.key || d.species;
+      if (!map[k]) map[k] = { key: k, name: d.species, sci: d.sci, rarity: d.rarity, count: 0 };
+      map[k].count++; if (d.ts > last) last = d.ts;
+    }
+    const perSpecies = Object.values(map).sort((a, b) => b.count - a.count);
+    return { lat: c.lat, lng: c.lng, total: c.dets.length, speciesCount: perSpecies.length, perSpecies, last };
+  }).sort((a, b) => b.last - a.last);
+}

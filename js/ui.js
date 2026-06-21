@@ -1,6 +1,7 @@
 // Rendering: Erkennungs-Karte, Sammlung, Statistik-Diagramme, Detail-Sheet, Navigation.
 import { SPECIES } from './species.js';
 import { gemini } from './gemini.js';
+import { todayNearby, groupByLocation } from './db.js';
 
 const $ = id => document.getElementById(id);
 const DEFAULT_GRAD = ['#0e5840', '#0a4733'];
@@ -54,6 +55,17 @@ export function initUI() {
   };
 
   setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
+
+  // Sammlung: "Heute hier" / "Global nach Ort"
+  const toggle = $('collToggle');
+  if (toggle) {
+    toggle.querySelectorAll('button').forEach(b => b.onclick = () => {
+      toggle.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      $('collHere').hidden = b.dataset.mode !== 'here';
+      $('collGlobal').hidden = b.dataset.mode !== 'global';
+    });
+  }
 }
 
 function serverUrlGet() { try { return localStorage.getItem('waldohr.server') || ''; } catch { return ''; } }
@@ -95,29 +107,55 @@ function renderLive() {
   }
 }
 
-export function renderAll(stats) {
-  renderCollection(stats);
+export function renderAll(stats, dets, pos) {
+  renderCollection(stats, dets || [], pos || null);
   renderStats(stats);
   drawDayChart(stats.hourly);
 }
 
-function renderCollection(stats) {
+function speciesCard(s) {
+  const g = grad(s.key);
+  return `<div class="spc" data-key="${s.key}">${badge(s)}
+    <div class="ph" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(s.key, 34)}</div>
+    <div class="nm">${s.name}</div><div class="lt">${s.sci}</div>
+    <div class="cnt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>${s.count}× gehört</div>
+  </div>`;
+}
+
+function renderCollection(stats, dets, pos) {
   $('collStats').innerHTML = `
     <div class="stat"><div class="n">${stats.speciesCount}</div><div class="l">Arten gehört</div></div>
     <div class="stat"><div class="n">${stats.total}</div><div class="l">Aufnahmen</div></div>
     <div class="stat"><div class="n">${stats.rareCount}</div><div class="l">seltene</div></div>`;
 
-  const recent = [...stats.perSpecies].sort((a, b) => b.last - a.last).slice(0, 8);
-  $('collGrid').innerHTML = recent.map(s => {
-    const g = grad(s.key);
-    return `<div class="spc" data-key="${s.key}">${badge(s)}
-      <div class="ph" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(s.key, 34)}</div>
-      <div class="nm">${s.name}</div><div class="lt">${s.sci}</div>
-      <div class="cnt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>${s.count}× gehört</div>
-    </div>`;
-  }).join('') || '<div class="lt" style="color:var(--faint)">Noch nichts gehört.</div>';
+  // "Heute hier" — heutige Funde in der Nähe des aktuellen Standorts
+  const hereGrid = $('hereGrid');
+  if (hereGrid) {
+    const here = todayNearby(dets, pos);
+    hereGrid.innerHTML = here.map(s => speciesCard(s)).join('') ||
+      `<div class="lt" style="color:var(--faint);grid-column:1/-1">${pos ? 'Heute hier noch nichts entdeckt.' : 'Standort aktivieren, um Funde in deiner Nähe zu sehen.'}</div>`;
+    hereGrid.querySelectorAll('.spc').forEach(el => el.onclick = () => openModal(el.dataset.key));
+  }
 
+  // "Global nach Ort" — alle Funde, zuletzt entdeckt + nach Fundort gruppiert
+  const recent = [...stats.perSpecies].sort((a, b) => b.last - a.last).slice(0, 8);
+  $('collGrid').innerHTML = recent.map(s => speciesCard(s)).join('') || '<div class="lt" style="color:var(--faint)">Noch nichts gehört.</div>';
   document.querySelectorAll('#collGrid .spc').forEach(el => el.onclick = () => openModal(el.dataset.key));
+
+  const locList = $('locList');
+  if (locList) {
+    const groups = groupByLocation(dets);
+    locList.innerHTML = groups.map((g, i) => `
+      <div class="locrow">
+        <div class="lr-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg>
+          <span class="nm">Fundort ${i + 1}</span>
+          <span class="cnt">${g.speciesCount} Arten · ${g.total}×</span>
+        </div>
+        <div class="lr-species">${g.perSpecies.map(s => `<span class="lr-chip" data-key="${s.key}">${s.name} ×${s.count}</span>`).join('')}</div>
+      </div>`).join('') || '<div class="lt" style="color:var(--faint)">Noch keine verorteten Funde.</div>';
+    locList.querySelectorAll('.lr-chip').forEach(el => el.onclick = () => openModal(el.dataset.key));
+  }
 }
 
 function renderStats(stats) {
