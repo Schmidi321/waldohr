@@ -317,7 +317,7 @@ function rareAlert(det) {
   clearTimeout(rareToastTimer);
   rareToastTimer = setTimeout(() => toast.classList.remove('show'), 5000);
 }
-function renderLive() {
+export function renderLive() {
   const list = $('liveList'); if (!list) return;
   const now = Date.now();
   for (const [k, e] of LIVE) if (now - e.ts > LIVE_TTL) LIVE.delete(k);
@@ -325,7 +325,8 @@ function renderLive() {
   const cnt = $('liveCount'); if (cnt) cnt.textContent = arr.length;
   const empty = $('liveEmpty');
   list.querySelectorAll('.live-row').forEach(r => r.remove());
-  if (!arr.length) { if (empty) empty.style.display = ''; return; }
+  // Der Hinweis "Tippe unten das Mikrofon…" macht keinen Sinn mehr, sobald gelauscht wird.
+  if (!arr.length) { if (empty) empty.style.display = document.body.classList.contains('listening') ? 'none' : ''; return; }
   if (empty) empty.style.display = 'none';
   for (const e of arr) {
     const g = grad(e.key), fresh = now - e.ts < 2500;
@@ -365,6 +366,11 @@ const RECORDINGS = new Map();
 export function registerRecording(key, url) {
   if (!key || !url) return;
   RECORDINGS.set(key, { url, ts: Date.now() });
+  refreshRecordingBadges();
+}
+export function unregisterRecording(key) {
+  if (!key || !RECORDINGS.has(key)) return;
+  RECORDINGS.delete(key);
   refreshRecordingBadges();
 }
 function refreshRecordingBadges() {

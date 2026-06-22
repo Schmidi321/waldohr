@@ -2,7 +2,7 @@
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, renderLive } from './ui.js';
 
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
@@ -62,7 +62,16 @@ async function boot() {
   registerSW();
 }
 
+// Während der Nutzer gerade mit dem Finger auf dem Bildschirm scrollt, NICHT die Listen/Karten
+// neu aufbauen — sonst wird das gerade berührte DOM-Element ersetzt und die Wischgeste bricht ab
+// (spürbar v. a. auf der Statistik-Seite, die bei jeder neuen Erkennung sonst sofort neu rendert).
+let touching = false, pendingRefresh = false;
+document.addEventListener('touchstart', () => { touching = true; }, { passive: true });
+document.addEventListener('touchend', () => { touching = false; if (pendingRefresh) { pendingRefresh = false; refresh(); } }, { passive: true });
+document.addEventListener('touchcancel', () => { touching = false; }, { passive: true });
+
 async function refresh() {
+  if (touching) { pendingRefresh = true; return; }
   let dets = [];
   try { dets = await allDetections(); } catch (e) { console.warn('read', e); }
   // Statistik, Sammlung & Karte zeigen nur Funde ab 75% Konfidenz (Rauschen raus).
@@ -117,9 +126,25 @@ async function maybeAutoRecord(det, samples, sampleRate) {
   wireAudioRouting(a);
   const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
   const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.wav'; dl.textContent = '⬇'; dl.title = 'Herunterladen';
-  row.append(a, lb, dl);
+  const del = makeDeleteBtn(row, url, det.key);
+  row.append(a, lb, dl, del);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
   registerRecording(det.key, url);
+}
+
+// Löschen-Button für eine Aufnahme/Foto-Zeile: entfernt die Zeile, gibt die Object-URL frei und
+// löscht das kleine Abspiel-Badge auf der Sammlungskarte, falls eine Art verknüpft ist.
+function makeDeleteBtn(row, url, key) {
+  const del = document.createElement('button');
+  del.className = 'rec-del'; del.type = 'button'; del.title = 'Löschen';
+  del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>';
+  del.onclick = ev => {
+    ev.stopPropagation();
+    row.remove();
+    try { URL.revokeObjectURL(url); } catch {}
+    if (key) unregisterRecording(key);
+  };
+  return del;
 }
 
 // ---- Mikrofon-Steuerung ----
@@ -129,9 +154,10 @@ function setIcon(stop) {
     : '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/>';
 }
 function setUI(mode, msg) {
-  if (mode === 'off') { body.classList.remove('listening'); statusTxt.textContent = msg || 'Tippe zum Lauschen'; setIcon(false); return; }
+  if (mode === 'off') { body.classList.remove('listening'); statusTxt.textContent = msg || 'Tippe zum Lauschen'; setIcon(false); renderLive(); return; }
   body.classList.add('listening'); setIcon(true);
   statusTxt.textContent = msg || 'Lauscht über dein Mikrofon…';
+  renderLive();
 }
 
 // Vollbildmodus: nur per Nutzergeste auslösbar. Bisher hing das nur am Mikro-Tap —
@@ -201,6 +227,7 @@ const recorder = {
     row.appendChild(a);
     if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
     row.appendChild(dl);
+    row.appendChild(makeDeleteBtn(row, url, this.key));
     const list = document.getElementById('recList'); if (list) list.prepend(row);
     if (this.key) registerRecording(this.key, url);
   }
@@ -229,6 +256,7 @@ if (photoInput) {
     row.appendChild(img);
     if (photoLabel) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.style.flex = '1'; lb.textContent = photoLabel; row.appendChild(lb); }
     row.appendChild(dl);
+    row.appendChild(makeDeleteBtn(row, url, null));
     const list = document.getElementById('recList'); if (list) list.prepend(row);
   };
 }
