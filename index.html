@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#04130d" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<title>Waldohr · Tierstimmen erkennen</title>
+<title>WaldOhr · Tierstimmen erkennen</title>
 <link rel="manifest" href="manifest.webmanifest" />
 <link rel="apple-touch-icon" href="icons/icon-180.png" />
 <link rel="icon" href="icons/icon-192.png" type="image/png" />
@@ -24,8 +24,9 @@
     <!-- ============ STARTBILDSCHIRM ============ -->
     <div class="splash" id="splash">
       <div class="splash-icon" style="background-image:url('icons/icon-512.png')"></div>
-      <div class="splash-word">Waldohr</div>
+      <div class="splash-word">WaldOhr</div>
       <div class="splash-tag">Erkennt Vogelstimmen &amp; Tierlaute live über dein Mikrofon — direkt beim Spaziergang, im Garten oder im Wald.</div>
+      <div class="splash-hint">Zum Fortfahren tippen</div>
       <div class="splash-by">AppReich</div>
     </div>
 
@@ -34,7 +35,7 @@
       <div class="topbar">
         <div class="brand">
           <span class="logo lg" style="background-image:url('icons/icon-192.png');background-size:cover;background-position:center"></span>
-          <span class="wordmark">Waldohr</span>
+          <span class="wordmark">WaldOhr</span>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           <div class="chip loc-off" id="locChip" title="Standort aus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg><span id="locTxt">GPS</span></div>
@@ -46,10 +47,6 @@
       <div class="status"><span class="eq"><i></i><i></i><i></i><i></i><i></i></span><span id="statusTxt">Tippe zum Lauschen</span></div>
 
       <div class="orb-stage">
-        <button class="orb-rec" id="recBtn" title="Aufnahme starten/stoppen" aria-label="Aufnahme starten/stoppen">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
-          <span class="rec-time" id="recTime">REC</span>
-        </button>
         <span class="ring"></span><span class="ring"></span><span class="ring"></span>
         <div class="orb">
           <div class="sweep"></div>
@@ -57,6 +54,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="var(--emerald)" stroke-width="1.6" stroke-linecap="round"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M6 12a6 6 0 0 1 6-6"/><path d="M9 12a3 3 0 0 1 3-3"/><circle cx="12" cy="12" r="1.4" fill="var(--emerald)" stroke="none"/></svg>
             <div class="big">Lauschmodus</div>
             <div class="sub">aktiv</div>
+            <button class="rec-pill" id="recBtn" title="Aufnahme starten/stoppen" aria-label="Aufnahme starten/stoppen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
+              <span class="rec-time" id="recTime">REC</span>
+            </button>
           </div>
         </div>
       </div>

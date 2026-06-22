@@ -1,6 +1,6 @@
 {
-  "name": "Waldohr — Tierstimmen erkennen",
-  "short_name": "Waldohr",
+  "name": "WaldOhr — Tierstimmen erkennen",
+  "short_name": "WaldOhr",
   "description": "Erkenne Tierstimmen im Wald, sieh wo sie rufen, und sammle deine Funde.",
   "start_url": ".",
   "scope": ".",

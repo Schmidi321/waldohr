@@ -115,6 +115,9 @@ export function initUI() {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     $('v-' + b.dataset.v).classList.add('active');
     if (b.dataset.v === 'map') invalidateMapSize();
+    // Der Mikro-Knopf gehört nur auf die Lauschen-Seite, nicht auf Karte/Sammlung/Statistik.
+    const micbar = document.querySelector('.micbar');
+    if (micbar) micbar.style.display = b.dataset.v === 'listen' ? '' : 'none';
   });
   $('sheetScrim').onclick = closeSheet;
   $('sheetClose').onclick = closeSheet;

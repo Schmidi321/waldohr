@@ -46,6 +46,8 @@ h1,h2,h3,.brand,.big{font-family:'Outfit',sans-serif}
 .splash-word{font-family:'Outfit',sans-serif;font-weight:700;font-size:28px;letter-spacing:.3px;margin-top:4px;
   background:linear-gradient(120deg,var(--ink),var(--lime));-webkit-background-clip:text;background-clip:text;color:transparent}
 .splash-tag{font-size:13px;color:var(--muted);line-height:1.6;max-width:280px}
+.splash-hint{position:absolute;bottom:calc(64px + env(safe-area-inset-bottom));font-size:11px;color:var(--faint);opacity:.7;animation:splashblink 1.8s ease-in-out infinite}
+@keyframes splashblink{50%{opacity:.25}}
 .splash-by{position:absolute;bottom:calc(28px + env(safe-area-inset-bottom));font-size:11px;color:var(--faint);letter-spacing:2px;text-transform:uppercase}
 
 .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
@@ -128,16 +130,13 @@ canvas{display:block;width:100%;height:84px}
 .orb-core .big{font-size:10.5px}
 .orb-core .sub{font-size:8px;letter-spacing:.8px;margin-top:1px}
 .ring{width:74px;height:74px}
-.orb-rec{width:42px;height:42px;top:0;right:-2px}
-.orb-rec svg{width:15px;height:15px}
-.orb-rec .rec-time{font-size:6.5px}
 
-/* Tonaufnahme — Knopf oben rechts in den Orb integriert (an der Stelle des früheren Radars) */
-.orb-rec{position:absolute;top:4px;right:-2px;width:58px;height:58px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer;color:var(--rose);background:rgba(251,113,133,.14);border:1.5px solid #fb718566;box-shadow:0 8px 22px -6px #fb718555,0 0 0 4px #04130d;transition:.25s;font-family:inherit}
-.orb-rec svg{width:20px;height:20px}
-.orb-rec:active{transform:scale(.92)}
-.orb-rec.rec-on{background:rgba(251,113,133,.3);border-color:var(--rose);color:#fff;animation:recpulse 1.4s infinite;box-shadow:0 8px 26px -4px #fb7185aa,0 0 0 4px #04130d}
-.orb-rec .rec-time{font-size:8px;font-weight:700;letter-spacing:1px;font-variant-numeric:tabular-nums}
+/* Tonaufnahme — kleiner Knopf direkt im Orb-Core, unter "Lauschmodus" */
+.rec-pill{display:inline-flex;align-items:center;gap:4px;margin-top:5px;padding:4px 11px;border-radius:20px;cursor:pointer;border:none;font-family:inherit;font-weight:700;font-size:9px;letter-spacing:.3px;color:#04130d;background:linear-gradient(140deg,var(--lime),var(--emerald));box-shadow:0 6px 16px -6px #34d399aa;transition:.25s}
+.rec-pill svg{width:10px;height:10px}
+.rec-pill:active{transform:scale(.93)}
+.rec-pill.rec-on{color:#fff;background:linear-gradient(140deg,#fb7185,#f43f5e);box-shadow:0 6px 16px -6px #fb7185aa;animation:recpulse 1.4s infinite}
+.rec-pill .rec-time{font-variant-numeric:tabular-nums}
 @keyframes recpulse{50%{opacity:.5}}
 .rec-label{font-size:11px;color:var(--muted);background:var(--glass-strong);border:1px solid var(--stroke);padding:3px 8px;border-radius:20px;white-space:nowrap}
 .rec-label.auto{color:var(--lime);border-color:#a3e63555;background:rgba(163,230,53,.1)}

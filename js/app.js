@@ -63,13 +63,14 @@ async function boot() {
   startSpectrogram();
   registerSW();
 
-  // Startbildschirm bleibt mindestens kurz sichtbar, auch wenn der Boot (Demo-Daten, Recognizer)
-  // schneller fertig ist — verschwindet sofort, falls der Boot länger gedauert hat als die Mindestzeit.
-  const MIN_SPLASH_MS = 1100;
-  setTimeout(() => {
-    const splash = document.getElementById('splash');
-    if (splash) splash.classList.add('hide');
-  }, Math.max(0, MIN_SPLASH_MS - (Date.now() - splashStart)));
+  // Startbildschirm bleibt mindestens etwas länger sichtbar, auch wenn der Boot (Demo-Daten,
+  // Recognizer) schneller fertig ist — verschwindet sofort, falls der Boot länger gedauert hat
+  // als die Mindestzeit. Per Tap jederzeit sofort überspringbar.
+  const MIN_SPLASH_MS = 2200;
+  const splash = document.getElementById('splash');
+  const hideSplash = () => { if (splash) splash.classList.add('hide'); };
+  if (splash) splash.addEventListener('click', hideSplash, { once: true });
+  setTimeout(hideSplash, Math.max(0, MIN_SPLASH_MS - (Date.now() - splashStart)));
 }
 
 // Während der Nutzer gerade mit dem Finger auf dem Bildschirm scrollt, NICHT die Listen/Karten
