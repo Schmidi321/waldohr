@@ -104,6 +104,9 @@ canvas{display:block;width:100%;height:84px}
 .lr-rec svg{width:12px;height:12px}
 .lr-rec:active{transform:scale(.9)}
 .lr-rec.rec-on{background:rgba(251,113,133,.32);animation:recpulse 1.4s infinite}
+.lr-photo{flex:0 0 auto;width:28px;height:28px;border-radius:9px;background:rgba(163,230,53,.12);border:1px solid #a3e63555;color:var(--lime);display:grid;place-items:center;cursor:pointer}
+.lr-photo svg{width:14px;height:14px}
+.lr-photo:active{transform:scale(.9)}
 .locChip-off{opacity:.7}
 
 /* Kompakter Orb/Radar – Platz für die Liste */
@@ -127,6 +130,7 @@ canvas{display:block;width:100%;height:84px}
 .rec-row{display:flex;align-items:center;gap:8px;background:var(--glass);border:1px solid var(--stroke);border-radius:14px;padding:8px 10px}
 .rec-row audio{flex:1;height:34px;min-width:0}
 .rec-dl{flex:0 0 auto;width:36px;height:36px;display:grid;place-items:center;border-radius:11px;background:var(--glass-strong);border:1px solid var(--stroke);color:var(--ink);text-decoration:none;font-size:16px}
+.photo-thumb{flex:0 0 56px;width:56px;height:56px;border-radius:11px;object-fit:cover;cursor:pointer;background:#04130d}
 
 .detect{margin-top:14px;background:var(--glass-strong);border:1px solid var(--stroke);border-radius:var(--r);padding:14px;display:flex;align-items:center;gap:13px;backdrop-filter:blur(14px);box-shadow:0 10px 30px -16px #000;transition:.45s;cursor:pointer}
 .detect:active{transform:scale(.98)}
@@ -279,6 +283,10 @@ body.listening .mic{background:linear-gradient(140deg,#fb7185,#f43f5e);box-shado
 .rare-toast.fav{background:linear-gradient(135deg,#0a3527ee,#051a13ee);border-color:#a3e63566}
 .rare-toast.fav .rt-t{color:var(--lime)}
 .rare-toast .rt-s{font-size:12px;color:var(--muted);margin-top:1px}
+.rare-toast .rt-txt{flex:1;min-width:0}
+.rare-toast .rt-cam{flex:0 0 auto;width:32px;height:32px;border-radius:10px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);color:var(--ink);display:grid;place-items:center;cursor:pointer}
+.rare-toast .rt-cam svg{width:16px;height:16px}
+.rare-toast .rt-cam:active{transform:scale(.9)}
 
 /* Beobachtungsliste */
 .favsearch{width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px;margin-bottom:12px}

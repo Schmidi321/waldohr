@@ -5,6 +5,7 @@ import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, beari
 
 const $ = id => document.getElementById(id);
 const DEFAULT_GRAD = ['#0e5840', '#0a4733'];
+const CAMERA_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
 
 function avatarSVG(key, size) {
   const sp = SPECIES[key] || SPECIES.amsel;
@@ -244,9 +245,16 @@ function rareAlert(det) {
   const icon = isMammal ? '🦌' : isRare ? '✨' : '⭐';
   const title = isMammal ? 'Seltenes Tier!' : isRare ? 'Seltene Art!' : 'Beobachtete Art!';
   toast.innerHTML = `<span class="rt-ico">${icon}</span>
-    <div><div class="rt-t">${title}</div><div class="rt-s">${det.species} ist gerade hier</div></div>`;
+    <div class="rt-txt"><div class="rt-t">${title}</div><div class="rt-s">${det.species} ist gerade hier</div></div>
+    <button class="rt-cam" title="Foto aufnehmen">${CAMERA_ICON}</button>`;
   toast.className = 'rare-toast show' + (isMammal ? ' mammal' : !isRare ? ' fav' : '');
   toast.onclick = () => { openModal(det.key); toast.classList.remove('show'); };
+  const camBtn = toast.querySelector('.rt-cam');
+  if (camBtn) camBtn.onclick = ev => {
+    ev.stopPropagation();
+    if (typeof window.__waldohrCapturePhoto === 'function') window.__waldohrCapturePhoto(det.species);
+    toast.classList.remove('show');
+  };
   clearTimeout(rareToastTimer);
   rareToastTimer = setTimeout(() => toast.classList.remove('show'), 5000);
 }
@@ -267,10 +275,13 @@ function renderLive() {
     row.innerHTML = `<div class="lr-av" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(e.key, 24)}</div>
       <div class="lr-meta"><div class="lr-nm">${e.name} ${rarityTag(e.rarity)}</div><div class="lr-lt">${e.sci}</div></div>
       <div class="lr-conf">${Math.round(e.conf * 100)}%</div>
+      <button class="lr-photo" title="Foto aufnehmen">${CAMERA_ICON}</button>
       <button class="lr-rec" title="Diesen Ruf aufnehmen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/></svg></button>`;
     ['.lr-av', '.lr-meta', '.lr-conf'].forEach(sel => { const el = row.querySelector(sel); if (el) el.onclick = () => openModal(e.key); });
     const recBtn = row.querySelector('.lr-rec');
     recBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrRecordSpecies === 'function') window.__waldohrRecordSpecies(e.name); };
+    const photoBtn = row.querySelector('.lr-photo');
+    photoBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrCapturePhoto === 'function') window.__waldohrCapturePhoto(e.name); };
     applySpeciesImage(row.querySelector('.lr-av'), e.sci);
     list.appendChild(row);
   }

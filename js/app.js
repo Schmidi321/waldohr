@@ -59,10 +59,10 @@ async function boot() {
 async function refresh() {
   let dets = [];
   try { dets = await allDetections(); } catch (e) { console.warn('read', e); }
-  // Statistik & Sammlung zählen nur Funde ab 75% Konfidenz (Rauschen raus) — Karte zeigt weiter alles.
+  // Statistik, Sammlung & Karte zeigen nur Funde ab 75% Konfidenz (Rauschen raus).
   const qualifying = qualifyingDetections(dets);
   renderAll(computeStats(qualifying), qualifying, geo.pos);
-  renderMap(dets);
+  renderMap(qualifying);
 }
 
 async function onWindow(samples, sampleRate) {
@@ -158,6 +158,31 @@ const recorder = {
 if (recBtn) recBtn.onclick = () => recorder.toggle();
 // Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen.
 window.__waldohrRecordSpecies = (name) => recorder.toggle(name);
+
+// ---- Fotoaufnahme (Fotografen-Funktion): Direktbeleg-Foto zu einem Fund, öffnet die Gerätekamera ----
+const photoInput = document.getElementById('photoInput');
+let photoLabel = null;
+if (photoInput) {
+  photoInput.onchange = () => {
+    const file = photoInput.files && photoInput.files[0];
+    photoInput.value = '';
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const prefix = photoLabel ? photoLabel.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'waldohr';
+    const name = prefix + '_' + stamp + '.jpg';
+    const row = document.createElement('div'); row.className = 'rec-row';
+    const img = document.createElement('img'); img.className = 'photo-thumb'; img.src = url; img.alt = photoLabel || 'Foto';
+    img.onclick = () => window.open(url, '_blank');
+    const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = name; dl.textContent = '⬇'; dl.title = 'Herunterladen';
+    row.appendChild(img);
+    if (photoLabel) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.style.flex = '1'; lb.textContent = photoLabel; row.appendChild(lb); }
+    row.appendChild(dl);
+    const list = document.getElementById('recList'); if (list) list.prepend(row);
+  };
+}
+// Kamera-Knopf an Live-Zeile/Seltenheits-Toast -> beschriftet das Foto mit dem Artnamen.
+window.__waldohrCapturePhoto = (name) => { photoLabel = name || null; photoInput && photoInput.click(); };
 
 // ---- Spektrogramm (nur echtes Mikro) ----
 function startSpectrogram() {
