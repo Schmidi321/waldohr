@@ -290,6 +290,8 @@ body.listening .mic{background:linear-gradient(140deg,#fb7185,#f43f5e);box-shado
 .rare-toast.mammal .rt-t{color:var(--rose)}
 .rare-toast.fav{background:linear-gradient(135deg,#0a3527ee,#051a13ee);border-color:#a3e63566}
 .rare-toast.fav .rt-t{color:var(--lime)}
+.rare-toast.info{background:linear-gradient(135deg,#0a2e2aee,#051a17ee);border-color:#2dd4bf66;cursor:default}
+.rare-toast.info .rt-t{color:var(--teal)}
 .rare-toast .rt-s{font-size:12px;color:var(--muted);margin-top:1px}
 .rare-toast .rt-txt{flex:1;min-width:0}
 .rare-toast .rt-cam{flex:0 0 auto;width:32px;height:32px;border-radius:10px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);color:var(--ink);display:grid;place-items:center;cursor:pointer}

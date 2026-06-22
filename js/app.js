@@ -1,8 +1,8 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
-import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, renderLive } from './ui.js';
+import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast } from './ui.js';
 
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
@@ -48,6 +48,7 @@ async function boot() {
   try { await migrateGeo(); } catch (e) { console.warn('migrateGeo', e); }
   try { const n = await cleanupFakeGeo(); if (n) console.info(n + ' Fund(e) hatten eine falsche Fake-Position (Bug) — Koordinaten entfernt.'); } catch (e) { console.warn('cleanupFakeGeo', e); }
   await refresh();
+  hydrateAttachments();
   geo.start();
 
   rec = await createRecognizer();
@@ -91,7 +92,7 @@ async function onWindow(samples, sampleRate) {
     ts: Date.now(), source: r.source || 'mic'
   };
   if (geo.pos) { det.lat = geo.pos.lat; det.lng = geo.pos.lng; }
-  try { await addDetection(det); } catch (e) { console.warn('store', e); }
+  try { det.id = await addDetection(det); } catch (e) { console.warn('store', e); }
   liveAdd(det);
   maybeAutoRecord(det, samples, sampleRate);
   refresh();
@@ -126,15 +127,19 @@ async function maybeAutoRecord(det, samples, sampleRate) {
   wireAudioRouting(a);
   const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
   const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.wav'; dl.textContent = '⬇'; dl.title = 'Herunterladen';
-  const del = makeDeleteBtn(row, url, det.key);
+  let attId = null;
+  try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime: 'audio/wav' }); }
+  catch (e) { console.warn('addAttachment', e); }
+  const del = makeDeleteBtn(row, url, det.key, attId);
   row.append(a, lb, dl, del);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
   registerRecording(det.key, url);
 }
 
-// Löschen-Button für eine Aufnahme/Foto-Zeile: entfernt die Zeile, gibt die Object-URL frei und
-// löscht das kleine Abspiel-Badge auf der Sammlungskarte, falls eine Art verknüpft ist.
-function makeDeleteBtn(row, url, key) {
+// Löschen-Button für eine Aufnahme/Foto-Zeile: entfernt die Zeile, gibt die Object-URL frei,
+// löscht das kleine Abspiel-Badge auf der Sammlungskarte (falls verknüpft) und den dauerhaft
+// gespeicherten Anhang in der Datenbank.
+function makeDeleteBtn(row, url, key, attId) {
   const del = document.createElement('button');
   del.className = 'rec-del'; del.type = 'button'; del.title = 'Löschen';
   del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>';
@@ -143,8 +148,56 @@ function makeDeleteBtn(row, url, key) {
     row.remove();
     try { URL.revokeObjectURL(url); } catch {}
     if (key) unregisterRecording(key);
+    if (attId != null) deleteAttachment(attId).catch(e => console.warn('deleteAttachment', e));
   };
   return del;
+}
+
+// Baut eine Aufnahme/Foto-Zeile aus einem gespeicherten Anhang (nach Reload) — selbe Optik wie
+// frisch erzeugte Zeilen, aber aus dem in IndexedDB gesicherten Blob statt einer Live-Aufnahme.
+function attachmentRow(a) {
+  const url = URL.createObjectURL(a.blob);
+  const row = document.createElement('div'); row.className = 'rec-row';
+  if (a.kind === 'audio') {
+    const el = document.createElement('audio'); el.controls = true; el.src = url; el.preload = 'metadata';
+    wireAudioRouting(el);
+    row.appendChild(el);
+  } else {
+    const img = document.createElement('img'); img.className = 'photo-thumb'; img.src = url; img.alt = a.label || 'Foto';
+    img.onclick = () => window.open(url, '_blank');
+    row.appendChild(img);
+  }
+  if (a.label) {
+    const lb = document.createElement('span'); lb.className = 'rec-label';
+    if (a.kind === 'photo') lb.style.flex = '1';
+    lb.textContent = a.label;
+    row.appendChild(lb);
+  }
+  const mime = a.mime || '';
+  const ext = mime.includes('wav') ? 'wav' : mime.includes('mp4') ? 'm4a' : mime.includes('webm') ? 'webm'
+    : mime.includes('png') ? 'png' : mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'bin';
+  const stamp = new Date(a.ts).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const prefix = (a.label || 'waldohr').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.' + ext; dl.textContent = '⬇'; dl.title = 'Herunterladen';
+  row.appendChild(dl);
+  row.appendChild(makeDeleteBtn(row, url, a.key, a.id));
+  return row;
+}
+
+// Baut die Liste eigener Aufnahmen/Fotos + die kleinen Abspiel-Badges auf den Sammlungskarten
+// aus der Datenbank neu auf — beim Boot UND nach jedem Löschen, damit beides synchron bleibt.
+async function hydrateAttachments() {
+  const list = document.getElementById('recList');
+  if (list) list.innerHTML = '';
+  clearRecordings();
+  try {
+    const latestAudio = await latestAudioAttachmentsByKey();
+    for (const a of latestAudio) registerRecording(a.key, URL.createObjectURL(a.blob));
+  } catch (e) { console.warn('hydrate badges', e); }
+  try {
+    const all = await allAttachments();
+    if (list) for (const a of all) list.appendChild(attachmentRow(a));
+  } catch (e) { console.warn('hydrate recList', e); }
 }
 
 // ---- Mikrofon-Steuerung ----
@@ -209,12 +262,14 @@ const recorder = {
     if (!this.chunks.length) return;
     const raw = new Blob(this.chunks, { type: this.chunks[0].type || 'audio/webm' });
     // Aufnahme lauter & klarer machen: tiefes Rauschen raus, Pegel normalisieren, als WAV sichern.
-    let url, ext;
+    let url, ext, saveBlob, mime;
     try {
       const { samples, sampleRate } = await enhanceBlob(raw);
-      url = URL.createObjectURL(encodeWav(samples, sampleRate)); ext = 'wav';
+      saveBlob = encodeWav(samples, sampleRate); mime = 'audio/wav';
+      url = URL.createObjectURL(saveBlob); ext = 'wav';
     } catch (e) {
       console.warn('enhance', e);
+      saveBlob = raw; mime = raw.type;
       url = URL.createObjectURL(raw); ext = raw.type.includes('mp4') ? 'm4a' : 'webm';
     }
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
@@ -227,7 +282,10 @@ const recorder = {
     row.appendChild(a);
     if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
     row.appendChild(dl);
-    row.appendChild(makeDeleteBtn(row, url, this.key));
+    let attId = null;
+    try { attId = await addAttachment({ key: this.key, label: this.label, kind: 'audio', blob: saveBlob, mime }); }
+    catch (e) { console.warn('addAttachment', e); }
+    row.appendChild(makeDeleteBtn(row, url, this.key, attId));
     const list = document.getElementById('recList'); if (list) list.prepend(row);
     if (this.key) registerRecording(this.key, url);
   }
@@ -239,9 +297,9 @@ window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);
 
 // ---- Fotoaufnahme (Fotografen-Funktion): Direktbeleg-Foto zu einem Fund, öffnet die Gerätekamera ----
 const photoInput = document.getElementById('photoInput');
-let photoLabel = null;
+let photoLabel = null, photoKey = null;
 if (photoInput) {
-  photoInput.onchange = () => {
+  photoInput.onchange = async () => {
     const file = photoInput.files && photoInput.files[0];
     photoInput.value = '';
     if (!file) return;
@@ -256,12 +314,15 @@ if (photoInput) {
     row.appendChild(img);
     if (photoLabel) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.style.flex = '1'; lb.textContent = photoLabel; row.appendChild(lb); }
     row.appendChild(dl);
-    row.appendChild(makeDeleteBtn(row, url, null));
+    let attId = null;
+    try { attId = await addAttachment({ key: photoKey, label: photoLabel, kind: 'photo', blob: file, mime: file.type }); }
+    catch (e) { console.warn('addAttachment', e); }
+    row.appendChild(makeDeleteBtn(row, url, null, attId));
     const list = document.getElementById('recList'); if (list) list.prepend(row);
   };
 }
 // Kamera-Knopf an Live-Zeile/Seltenheits-Toast -> beschriftet das Foto mit dem Artnamen.
-window.__waldohrCapturePhoto = (name) => { photoLabel = name || null; photoInput && photoInput.click(); };
+window.__waldohrCapturePhoto = (name, key) => { photoLabel = name || null; photoKey = key || null; photoInput && photoInput.click(); };
 
 // ---- Wiedergabe über Lautsprecher statt Hörer ----
 // Läuft das Mikro noch (laufende Erkennung), routen iOS/Android die Audioausgabe beim
@@ -340,15 +401,19 @@ if (hereResetBtn) hereResetBtn.onclick = async () => {
   if (!ids.length) return;
   if (!confirm(ids.length + ' heutige Funde hier löschen?')) return;
   try { await deleteByIds(ids); } catch (e) { console.warn('delete', e); }
+  await hydrateAttachments();
   refresh();
+  showInfoToast('Funde gelöscht', ids.length + ' heutige Fund(e) hier wurden entfernt.', '🗑️');
 };
 
 // ---- Gesamte Datenbank zurücksetzen ----
 const dbResetBtn = document.getElementById('dbResetBtn');
 if (dbResetBtn) dbResetBtn.onclick = async () => {
-  if (!confirm('Wirklich ALLE Funde unwiderruflich löschen? Das betrifft die komplette Datenbank (Karte, Sammlung, Statistik).')) return;
+  if (!confirm('Wirklich ALLE Funde unwiderruflich löschen? Das betrifft die komplette Datenbank (Karte, Sammlung, Statistik, eigene Aufnahmen & Fotos).')) return;
   try { await clearAll(); } catch (e) { console.warn('clearAll', e); }
+  await hydrateAttachments();
   refresh();
+  showInfoToast('Daten gelöscht', 'Alle Funde, Aufnahmen und Fotos wurden entfernt.', '🗑️');
 };
 
 function registerSW() {

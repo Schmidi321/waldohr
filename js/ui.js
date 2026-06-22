@@ -311,11 +311,23 @@ function rareAlert(det) {
   const camBtn = toast.querySelector('.rt-cam');
   if (camBtn) camBtn.onclick = ev => {
     ev.stopPropagation();
-    if (typeof window.__waldohrCapturePhoto === 'function') window.__waldohrCapturePhoto(det.species);
+    if (typeof window.__waldohrCapturePhoto === 'function') window.__waldohrCapturePhoto(det.species, det.key);
     toast.classList.remove('show');
   };
   clearTimeout(rareToastTimer);
   rareToastTimer = setTimeout(() => toast.classList.remove('show'), 5000);
+}
+
+// Schlichte Bestätigung für nicht-art-bezogene Aktionen (z. B. "Daten gelöscht") — selber
+// Toast wie der Seltenheits-Alarm, aber neutral eingefärbt und ohne Kamera-Knopf/Klick-Ziel.
+export function showInfoToast(title, sub, icon = 'ℹ️') {
+  const toast = $('rareToast'); if (!toast) return;
+  toast.innerHTML = `<span class="rt-ico">${icon}</span>
+    <div class="rt-txt"><div class="rt-t">${title}</div><div class="rt-s">${sub || ''}</div></div>`;
+  toast.className = 'rare-toast show info';
+  toast.onclick = () => toast.classList.remove('show');
+  clearTimeout(rareToastTimer);
+  rareToastTimer = setTimeout(() => toast.classList.remove('show'), 3500);
 }
 export function renderLive() {
   const list = $('liveList'); if (!list) return;
@@ -341,7 +353,7 @@ export function renderLive() {
     const recBtn = row.querySelector('.lr-rec');
     recBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrRecordSpecies === 'function') window.__waldohrRecordSpecies(e.name, e.key); };
     const photoBtn = row.querySelector('.lr-photo');
-    photoBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrCapturePhoto === 'function') window.__waldohrCapturePhoto(e.name); };
+    photoBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrCapturePhoto === 'function') window.__waldohrCapturePhoto(e.name, e.key); };
     applySpeciesImage(row.querySelector('.lr-av'), e.sci);
     list.appendChild(row);
   }
@@ -371,6 +383,10 @@ export function registerRecording(key, url) {
 export function unregisterRecording(key) {
   if (!key || !RECORDINGS.has(key)) return;
   RECORDINGS.delete(key);
+  refreshRecordingBadges();
+}
+export function clearRecordings() {
+  RECORDINGS.clear();
   refreshRecordingBadges();
 }
 function refreshRecordingBadges() {

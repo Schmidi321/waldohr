@@ -1,7 +1,7 @@
 // On-device-Speicher (IndexedDB) für Funde + Statistik-Berechnung.
 import { SPECIES } from './species.js';
 
-const DB_NAME = 'waldohr', DB_VER = 1, STORE = 'detections';
+const DB_NAME = 'waldohr', DB_VER = 2, STORE = 'detections', ATT_STORE = 'attachments';
 let _db = null;
 
 function open() {
@@ -14,6 +14,15 @@ function open() {
         s.createIndex('species', 'key', { unique: false });
         s.createIndex('ts', 'ts', { unique: false });
       }
+      // Naturtagebuch-Grundlage: eigene Aufnahmen & Fotos dauerhaft statt nur session-lang
+      // (Object-URLs gehen beim Reload verloren). Lose über detId mit einem Fund verknüpft,
+      // damit "Heute hier"-Löschungen auch die zugehörigen Anhänge mitnehmen.
+      if (!db.objectStoreNames.contains(ATT_STORE)) {
+        const a = db.createObjectStore(ATT_STORE, { keyPath: 'id', autoIncrement: true });
+        a.createIndex('detId', 'detId', { unique: false });
+        a.createIndex('key', 'key', { unique: false });
+        a.createIndex('ts', 'ts', { unique: false });
+      }
     };
     r.onsuccess = () => { _db = r.result; res(_db); };
     r.onerror = () => rej(r.error);
@@ -25,7 +34,52 @@ export async function addDetection(d) {
   const database = await db();
   return new Promise((res, rej) => {
     const tx = database.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).add({ ts: Date.now(), ...d });
+    const req = tx.objectStore(STORE).add({ ts: Date.now(), ...d });
+    let newId;
+    req.onsuccess = () => { newId = req.result; };
+    tx.oncomplete = () => res(newId);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+// ---- Anhänge (eigene Audio-Aufnahmen & Fotos) — Grundlage fürs Naturtagebuch ----
+export async function addAttachment({ detId = null, key = null, label = null, kind, blob, mime = '', note = null }) {
+  const database = await db();
+  return new Promise((res, rej) => {
+    const tx = database.transaction(ATT_STORE, 'readwrite');
+    const req = tx.objectStore(ATT_STORE).add({ detId, key, label, kind, blob, mime, note, ts: Date.now() });
+    let newId;
+    req.onsuccess = () => { newId = req.result; };
+    tx.oncomplete = () => res(newId);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+export async function allAttachments() {
+  const database = await db();
+  return new Promise((res, rej) => {
+    const tx = database.transaction(ATT_STORE, 'readonly');
+    const req = tx.objectStore(ATT_STORE).getAll();
+    req.onsuccess = () => res((req.result || []).sort((a, b) => b.ts - a.ts));
+    req.onerror = () => rej(req.error);
+  });
+}
+
+// Neueste Audio-Aufnahme je Art — fürs kleine Abspiel-Badge auf der Sammlungskarte nach Reload.
+export async function latestAudioAttachmentsByKey() {
+  const all = await allAttachments();
+  const map = new Map();
+  for (const a of all) { // bereits neueste zuerst sortiert -> erster Treffer je Key gewinnt
+    if (a.kind === 'audio' && a.key && !map.has(a.key)) map.set(a.key, a);
+  }
+  return [...map.values()];
+}
+
+export async function deleteAttachment(id) {
+  const database = await db();
+  return new Promise((res, rej) => {
+    const tx = database.transaction(ATT_STORE, 'readwrite');
+    tx.objectStore(ATT_STORE).delete(id);
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
@@ -44,8 +98,9 @@ export async function allDetections() {
 export async function clearAll() {
   const database = await db();
   return new Promise((res, rej) => {
-    const tx = database.transaction(STORE, 'readwrite');
+    const tx = database.transaction([STORE, ATT_STORE], 'readwrite');
     tx.objectStore(STORE).clear();
+    tx.objectStore(ATT_STORE).clear();
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
@@ -222,14 +277,23 @@ export function todayNearby(dets, pos, radiusKm = 3) {
   return Object.values(map).sort((a, b) => b.last - a.last);
 }
 
-// Löscht einzelne Funde anhand ihrer ID (z. B. zum Zurücksetzen von "Heute hier").
+// Löscht einzelne Funde anhand ihrer ID (z. B. zum Zurücksetzen von "Heute hier") sowie alle
+// Anhänge (Aufnahmen/Fotos), die genau an diese Funde geknüpft sind.
 export async function deleteByIds(ids) {
   if (!ids.length) return;
   const database = await db();
+  const idSet = new Set(ids);
   return new Promise((res, rej) => {
-    const tx = database.transaction(STORE, 'readwrite');
+    const tx = database.transaction([STORE, ATT_STORE], 'readwrite');
     const store = tx.objectStore(STORE);
     for (const id of ids) store.delete(id);
+    const cursorReq = tx.objectStore(ATT_STORE).index('detId').openCursor();
+    cursorReq.onsuccess = e => {
+      const cur = e.target.result;
+      if (!cur) return;
+      if (idSet.has(cur.value.detId)) cur.delete();
+      cur.continue();
+    };
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
