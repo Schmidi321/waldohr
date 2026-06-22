@@ -43,6 +43,7 @@ const geo = {
 };
 
 async function boot() {
+  const splashStart = Date.now();
   initUI();
   try { await seedIfEmpty(); } catch (e) { console.warn('seed', e); }
   try { await migrateGeo(); } catch (e) { console.warn('migrateGeo', e); }
@@ -61,6 +62,14 @@ async function boot() {
   setUI('off');
   startSpectrogram();
   registerSW();
+
+  // Startbildschirm bleibt mindestens kurz sichtbar, auch wenn der Boot (Demo-Daten, Recognizer)
+  // schneller fertig ist — verschwindet sofort, falls der Boot länger gedauert hat als die Mindestzeit.
+  const MIN_SPLASH_MS = 1100;
+  setTimeout(() => {
+    const splash = document.getElementById('splash');
+    if (splash) splash.classList.add('hide');
+  }, Math.max(0, MIN_SPLASH_MS - (Date.now() - splashStart)));
 }
 
 // Während der Nutzer gerade mit dem Finger auf dem Bildschirm scrollt, NICHT die Listen/Karten
@@ -236,7 +245,7 @@ if (recBtn && !window.MediaRecorder) recBtn.style.display = 'none';
 const recorder = {
   mr: null, chunks: [], timer: null, t0: 0,
   fmt() { const s = Math.floor((Date.now() - this.t0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
-  setBtn(on) { if (!recBtn) return; recBtn.classList.toggle('rec-on', on); if (!on) recBtn.textContent = '● Aufnahme'; },
+  setBtn(on) { if (!recBtn) return; recBtn.classList.toggle('rec-on', on); if (!on) { const t = document.getElementById('recTime'); if (t) t.textContent = 'REC'; } },
   async toggle(label, key) {
     if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
     if (!audio.running) {
@@ -256,7 +265,7 @@ const recorder = {
     this.mr.onstop = () => { clearInterval(this.timer); this.setBtn(false); this.save(); };
     this.mr.start();
     this.t0 = Date.now(); this.setBtn(true);
-    this.timer = setInterval(() => { if (recBtn) recBtn.textContent = '■ ' + this.fmt(); }, 500);
+    this.timer = setInterval(() => { const t = document.getElementById('recTime'); if (t) t.textContent = this.fmt(); }, 500);
   },
   async save() {
     if (!this.chunks.length) return;

@@ -166,6 +166,7 @@ export function initUI() {
   const tipsClose = $('tipsClose'); if (tipsClose) tipsClose.onclick = () => tipsModal.classList.remove('open');
 
   setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
+  initWakeLockToggle();
 
   // Sammlung: "Heute hier" / "Global nach Ort"
   const toggle = $('collToggle');
@@ -190,6 +191,30 @@ export function initUI() {
       renderStatsForMode();
     });
   }
+}
+
+// ---- Display anbleiben (Wake Lock) ----
+let wakeLock = null;
+async function applyWakeLock(on) {
+  try {
+    if (on && 'wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+    else if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch (e) { console.warn('wakeLock', e); }
+}
+function wakeLockGet() { try { return localStorage.getItem('waldohr.wakelock') === '1'; } catch { return false; } }
+function initWakeLockToggle() {
+  const toggle = $('wakeLockToggle'); if (!toggle) return;
+  toggle.checked = wakeLockGet();
+  if (toggle.checked) applyWakeLock(true);
+  toggle.onchange = () => {
+    try { localStorage.setItem('waldohr.wakelock', toggle.checked ? '1' : '0'); } catch {}
+    applyWakeLock(toggle.checked);
+  };
+  // Wake Lock wird vom Browser automatisch freigegeben, sobald der Tab in den Hintergrund
+  // geht — bei Rückkehr in den Vordergrund, falls noch aktiviert, neu anfordern.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && wakeLockGet()) applyWakeLock(true);
+  });
 }
 
 function serverUrlGet() { try { return localStorage.getItem('waldohr.server') || ''; } catch { return ''; } }
