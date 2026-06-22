@@ -1,6 +1,6 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
 import { AudioEngine } from './audio.js';
-import { createRecognizer, MockRecognizer } from './recognizer.js';
+import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos } from './ui.js';
 
@@ -78,7 +78,38 @@ async function onWindow(samples, sampleRate) {
   if (geo.pos) { det.lat = geo.pos.lat; det.lng = geo.pos.lng; }
   try { await addDetection(det); } catch (e) { console.warn('store', e); }
   liveAdd(det);
+  maybeAutoRecord(det, samples, sampleRate);
   refresh();
+}
+
+// ---- Automatische Aufnahme: ab 85% Konfidenz wird der gerade klassifizierte Ausschnitt
+// direkt als WAV gespeichert — aber nur einmal pro Art und Kalendertag, gegen Datenflut bei
+// häufigen Arten. Tagesliste in localStorage, damit es auch über einen Reload hinweg gilt.
+const AUTO_RECORD_CONFIDENCE = 0.85;
+const todayKey = () => { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); };
+function autoRecordedToday() {
+  try { return JSON.parse(localStorage.getItem('waldohr.autorec.' + todayKey()) || '[]'); } catch { return []; }
+}
+function markAutoRecorded(key) {
+  try {
+    const list = autoRecordedToday();
+    if (!list.includes(key)) { list.push(key); localStorage.setItem('waldohr.autorec.' + todayKey(), JSON.stringify(list)); }
+  } catch {}
+}
+function maybeAutoRecord(det, samples, sampleRate) {
+  if (det.confidence < AUTO_RECORD_CONFIDENCE) return;
+  if (autoRecordedToday().includes(det.key)) return;
+  markAutoRecorded(det.key);
+  const blob = encodeWav(samples, sampleRate);
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const prefix = det.species.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  const row = document.createElement('div'); row.className = 'rec-row';
+  const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
+  const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
+  const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.wav'; dl.textContent = '⬇'; dl.title = 'Herunterladen';
+  row.append(a, lb, dl);
+  const list = document.getElementById('recList'); if (list) list.prepend(row);
 }
 
 // ---- Mikrofon-Steuerung ----

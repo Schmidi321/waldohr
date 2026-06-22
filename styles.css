@@ -126,6 +126,7 @@ canvas{display:block;width:100%;height:84px}
 .rec-btn.rec-on{background:rgba(251,113,133,.28);color:#fff;animation:recpulse 1.4s infinite}
 @keyframes recpulse{50%{opacity:.5}}
 .rec-label{font-size:11px;color:var(--muted);background:var(--glass-strong);border:1px solid var(--stroke);padding:3px 8px;border-radius:20px;white-space:nowrap}
+.rec-label.auto{color:var(--lime);border-color:#a3e63555;background:rgba(163,230,53,.1)}
 .reclist{display:flex;flex-direction:column;gap:8px;margin-top:10px}
 .rec-row{display:flex;align-items:center;gap:8px;background:var(--glass);border:1px solid var(--stroke);border-radius:14px;padding:8px 10px}
 .rec-row audio{flex:1;height:34px;min-width:0}

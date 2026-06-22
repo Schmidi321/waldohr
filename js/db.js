@@ -136,9 +136,9 @@ function startOfWeek() {
   n.setHours(0, 0, 0, 0); n.setDate(n.getDate() - day); return n;
 }
 
-// Schwelle, ab der ein Fund in Statistik & Sammlung mitzählt — filtert unsichere
-// Erkennungen raus, ohne sie aus der Datenbank zu löschen (Karte/Live-Liste zeigen weiter alles).
-export const QUALIFY_CONFIDENCE = 0.75;
+// Schwelle, ab der ein Fund in Statistik, Sammlung & Karte mitzählt — filtert unsichere
+// Erkennungen raus, ohne sie aus der Datenbank zu löschen (die Live-Liste zeigt weiter alles).
+export const QUALIFY_CONFIDENCE = 0.70;
 export function qualifyingDetections(dets) {
   return dets.filter(d => typeof d.confidence !== 'number' || d.confidence >= QUALIFY_CONFIDENCE);
 }

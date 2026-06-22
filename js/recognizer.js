@@ -137,8 +137,9 @@ export class BirdNetRecognizer {
   }
 }
 
-// 16-bit-PCM-Mono-WAV aus Float32-Samples bauen (fürs Hochladen ans Backend).
-function encodeWav(samples, sampleRate) {
+// 16-bit-PCM-Mono-WAV aus Float32-Samples bauen (fürs Hochladen ans Backend, auch für die
+// automatische Aufnahme in app.js wiederverwendet).
+export function encodeWav(samples, sampleRate) {
   const n = samples.length, buf = new ArrayBuffer(44 + n * 2), dv = new DataView(buf);
   const ws = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
   ws(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); ws(8, 'WAVE'); ws(12, 'fmt ');
