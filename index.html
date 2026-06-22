@@ -196,10 +196,32 @@
           <input id="serverUrl" type="url" autocomplete="off" inputmode="url" placeholder="https://…hf.space" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
           <div style="font-size:11px;color:var(--faint);margin-top:8px">Status: <span id="serverStat">nicht gesetzt</span></div>
         </div>
+        <div class="infoblock">
+          <h3><span style="font-size:15px">⭐</span> Beobachtungsliste</h3>
+          <p style="margin-bottom:12px">Wähle gezielt Arten/Tiere aus, bei denen du sofort benachrichtigt werden willst (Vibration + Toast) — wie beim Seltenheits-Alarm, aber nach deiner eigenen Auswahl.</p>
+          <button class="btn ghost" id="favOpenBtn" style="width:100%">Liste öffnen</button>
+        </div>
+        <div class="infoblock">
+          <h3><span style="font-size:15px">🗑️</span> Datenbank zurücksetzen</h3>
+          <p style="margin-bottom:12px">Löscht ALLE gespeicherten Funde unwiderruflich — Demo-Daten, eigene Aufnahmen, Karte, Sammlung, Statistik. Fragt vorher nach Bestätigung.</p>
+          <button class="btn ghost" id="dbResetBtn" style="width:100%;color:var(--rose);border-color:#fb718555">Alle Funde löschen</button>
+        </div>
         <div class="actions">
           <button class="btn primary" id="settingsSave"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>Speichern</button>
           <button class="btn ghost" id="settingsClose">Schließen</button>
         </div>
+      </div>
+    </div>
+
+    <!-- ============ BEOBACHTUNGSLISTE ============ -->
+    <div class="modal" id="favModal">
+      <div class="scrim" id="favScrim"></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <h2 style="font-size:20px;margin-bottom:4px">Beobachtungsliste</h2>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Markierte Arten lösen wie seltene Funde sofort einen Alarm aus, sobald sie live erkannt werden.</p>
+        <div class="favlist" id="favList"></div>
+        <div class="actions"><button class="btn ghost" id="favClose">Schließen</button></div>
       </div>
     </div>
 

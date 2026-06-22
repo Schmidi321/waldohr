@@ -1,7 +1,7 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
 import { AudioEngine } from './audio.js';
 import { createRecognizer, MockRecognizer } from './recognizer.js';
-import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds } from './db.js';
+import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos } from './ui.js';
 
 const body = document.body;
@@ -13,7 +13,8 @@ let rec = null;
 
 const setLoc = (t) => { const el = document.getElementById('locTxt'); if (el) el.textContent = t; };
 
-// Standort-Erfassung: hält die aktuelle Position, solange das Mikro läuft.
+// Standort-Erfassung: läuft unabhängig vom Mikro, sobald die App startet (nicht erst beim
+// Lauschen) — Karte & Kompass-Richtung sollen auch ohne aktives Mikro die Position kennen.
 const geo = {
   watchId: null, pos: null,
   start() {
@@ -41,6 +42,7 @@ async function boot() {
   try { await migrateGeo(); } catch (e) { console.warn('migrateGeo', e); }
   try { const n = await cleanupFakeGeo(); if (n) console.info(n + ' Fund(e) hatten eine falsche Fake-Position (Bug) — Koordinaten entfernt.'); } catch (e) { console.warn('cleanupFakeGeo', e); }
   await refresh();
+  geo.start();
 
   rec = await createRecognizer();
   if (rec.id === 'birdnet') statusTxt.textContent = 'BirdNET-Modell wird geladen…';
@@ -97,9 +99,9 @@ function tryFullscreen() {
 }
 
 document.getElementById('micBtn').onclick = async () => {
-  if (audio.running) { audio.stop(); geo.stop(); setUI('off'); return; }
+  if (audio.running) { audio.stop(); setUI('off'); return; }
   tryFullscreen();
-  try { await audio.start(); geo.start(); setUI('mic'); }
+  try { await audio.start(); setUI('mic'); }
   catch (e) { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); }
 };
 
@@ -210,6 +212,14 @@ if (hereResetBtn) hereResetBtn.onclick = async () => {
   if (!ids.length) return;
   if (!confirm(ids.length + ' heutige Funde hier löschen?')) return;
   try { await deleteByIds(ids); } catch (e) { console.warn('delete', e); }
+  refresh();
+};
+
+// ---- Gesamte Datenbank zurücksetzen ----
+const dbResetBtn = document.getElementById('dbResetBtn');
+if (dbResetBtn) dbResetBtn.onclick = async () => {
+  if (!confirm('Wirklich ALLE Funde unwiderruflich löschen? Das betrifft die komplette Datenbank (Karte, Sammlung, Statistik).')) return;
+  try { await clearAll(); } catch (e) { console.warn('clearAll', e); }
   refresh();
 };
 

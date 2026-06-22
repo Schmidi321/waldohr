@@ -1,5 +1,5 @@
 // Rendering: Erkennungs-Karte, Sammlung, Statistik-Diagramme, Detail-Sheet, Navigation.
-import { SPECIES } from './species.js';
+import { SPECIES, SPECIES_LIST } from './species.js';
 import { gemini } from './gemini.js';
 import { todayNearby, groupByLocation, haversineKm, bearingDeg } from './db.js';
 
@@ -90,6 +90,13 @@ export function initUI() {
     if (after !== before) location.reload();   // Recognizer wird beim Start gewählt
   };
 
+  // Beobachtungsliste
+  const favModal = $('favModal');
+  const favOpenBtn = $('favOpenBtn');
+  if (favOpenBtn && favModal) favOpenBtn.onclick = () => { closeSettings(); renderFavList(); favModal.classList.add('open'); };
+  const favScrim = $('favScrim'); if (favScrim) favScrim.onclick = () => favModal.classList.remove('open');
+  const favClose = $('favClose'); if (favClose) favClose.onclick = () => favModal.classList.remove('open');
+
   setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
 
   // Sammlung: "Heute hier" / "Global nach Ort"
@@ -115,6 +122,31 @@ function serverUrlSet(v) {
 function xcKeyGet() { try { return localStorage.getItem('waldohr.xc') || ''; } catch { return ''; } }
 function xcKeySet(v) { v = (v || '').trim(); try { v ? localStorage.setItem('waldohr.xc', v) : localStorage.removeItem('waldohr.xc'); } catch {} return v; }
 
+// ---- Beobachtungsliste: eigene Auswahl an Arten/Tieren, die wie "selten" einen Alarm auslösen ----
+function loadFavorites() { try { return JSON.parse(localStorage.getItem('waldohr.favorites') || '[]'); } catch { return []; } }
+function saveFavorites() { try { localStorage.setItem('waldohr.favorites', JSON.stringify([...FAVORITES])); } catch {} }
+const FAVORITES = new Set(loadFavorites());
+function favRow(sp) {
+  const g = sp.grad || DEFAULT_GRAD, on = FAVORITES.has(sp.key);
+  return `<div class="favrow">
+    <div class="ph" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(sp.key, 20)}</div>
+    <div class="favmeta"><div class="nm">${sp.name}</div><div class="lt">${sp.sci || ''}</div></div>
+    <button class="favstar${on ? ' on' : ''}" data-key="${sp.key}">${on ? '★' : '☆'}</button>
+  </div>`;
+}
+function renderFavList() {
+  const list = $('favList'); if (!list) return;
+  const all = [...SPECIES_LIST].sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  list.innerHTML = all.map(favRow).join('');
+  list.querySelectorAll('.favstar').forEach(btn => btn.onclick = () => {
+    const key = btn.dataset.key;
+    if (FAVORITES.has(key)) FAVORITES.delete(key); else FAVORITES.add(key);
+    saveFavorites();
+    btn.classList.toggle('on');
+    btn.textContent = FAVORITES.has(key) ? '★' : '☆';
+  });
+}
+
 // ---- Live-Liste „jetzt zu hören" ----
 const LIVE = new Map();
 const LIVE_TTL = 15000;
@@ -125,19 +157,23 @@ export function liveAdd(det) {
   e.conf = det.confidence; e.ts = Date.now(); e.count++;
   LIVE.set(det.key, e);
   renderLive();
-  // Fotografen-Funktion: einmalig beim Eintreffen alarmieren, nicht bei jedem weiteren Erkennungsfenster derselben Art.
-  if (isNew && det.rarity !== 'common') rareAlert(det);
+  // Fotografen-Funktion: einmalig beim Eintreffen alarmieren (selten ODER auf der Beobachtungsliste),
+  // nicht bei jedem weiteren Erkennungsfenster derselben Art.
+  if (isNew && (det.rarity !== 'common' || FAVORITES.has(det.key))) rareAlert(det);
 }
 
-// ---- Seltenheits-Alarm: vibriert + zeigt einen Toast, wenn gerade eine seltene Art/ein Tier auftaucht ----
+// ---- Seltenheits-/Beobachtungs-Alarm: vibriert + zeigt einen Toast, wenn gerade eine relevante Art auftaucht ----
 let rareToastTimer = null;
 function rareAlert(det) {
   const toast = $('rareToast'); if (!toast) return;
   if (navigator.vibrate) { try { navigator.vibrate([120, 70, 120]); } catch {} }
   const isMammal = det.rarity === 'mammal';
-  toast.innerHTML = `<span class="rt-ico">${isMammal ? '🦌' : '✨'}</span>
-    <div><div class="rt-t">${isMammal ? 'Seltenes Tier!' : 'Seltene Art!'}</div><div class="rt-s">${det.species} ist gerade hier</div></div>`;
-  toast.className = 'rare-toast show' + (isMammal ? ' mammal' : '');
+  const isRare = det.rarity !== 'common';
+  const icon = isMammal ? '🦌' : isRare ? '✨' : '⭐';
+  const title = isMammal ? 'Seltenes Tier!' : isRare ? 'Seltene Art!' : 'Beobachtete Art!';
+  toast.innerHTML = `<span class="rt-ico">${icon}</span>
+    <div><div class="rt-t">${title}</div><div class="rt-s">${det.species} ist gerade hier</div></div>`;
+  toast.className = 'rare-toast show' + (isMammal ? ' mammal' : !isRare ? ' fav' : '');
   toast.onclick = () => { openModal(det.key); toast.classList.remove('show'); };
   clearTimeout(rareToastTimer);
   rareToastTimer = setTimeout(() => toast.classList.remove('show'), 5000);
@@ -187,7 +223,7 @@ let collMode = 'here';
 let lastCollStats = null, lastCollDets = [], lastCollPos = null;
 let livePos = null;
 // Wird bei jedem GPS-Update aufgerufen (auch ohne vollen Re-Render) — fürs Kompass-Feature.
-export function setLivePos(pos) { livePos = pos; updateCompassUI(); }
+export function setLivePos(pos) { livePos = pos; updateCompassUI(); updateUserMarker(); }
 
 function renderCollStats() {
   if (!lastCollStats) return;
@@ -325,7 +361,7 @@ function loadLeaflet() {
   return leafletPromise;
 }
 
-let mapInst = null, markersLayer = null;
+let mapInst = null, markersLayer = null, userMarker = null;
 export async function renderMap(dets) {
   const mapEl = document.getElementById('map');
   if (!mapEl) return;
@@ -333,15 +369,19 @@ export async function renderMap(dets) {
   const empty = document.getElementById('mapEmpty');
   const count = document.getElementById('mapCount');
   if (count) count.textContent = geo.length + (geo.length === 1 ? ' Fund' : ' Funde');
-  if (empty) empty.hidden = !!geo.length;
-  if (!geo.length) return;
+  // Eigene Position zeigen, auch ganz ohne verortete Funde — nicht hinter dem Leerzustand verstecken.
+  if (empty) empty.hidden = !!geo.length || !!livePos;
+  // Nur abbrechen, wenn die Karte noch nie initialisiert wurde — sonst müssen alte Pins
+  // weichen können (z.B. nach "Datenbank zurücksetzen"), auch ohne aktuellen GPS-Fix.
+  if (!geo.length && !livePos && !mapInst) return;
 
   let L;
   try { L = await loadLeaflet(); } catch (e) { console.warn('leaflet', e); return; }
   if (!mapEl.isConnected) return;
 
   if (!mapInst) {
-    mapInst = L.map(mapEl, { attributionControl: true }).setView([geo[geo.length - 1].lat, geo[geo.length - 1].lng], 14);
+    const initCenter = geo.length ? [geo[geo.length - 1].lat, geo[geo.length - 1].lng] : [livePos.lat, livePos.lng];
+    mapInst = L.map(mapEl, { attributionControl: true }).setView(initCenter, 14);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '© OpenStreetMap-Mitwirkende'
     }).addTo(mapInst);
@@ -357,8 +397,22 @@ export async function renderMap(dets) {
     bounds.push([d.lat, d.lng]);
   }
   if (bounds.length > 1) mapInst.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
-  else mapInst.setView(bounds[0], 15);
+  else if (bounds.length === 1) mapInst.setView(bounds[0], 15);
+  else if (livePos) mapInst.setView([livePos.lat, livePos.lng], 14);
+  updateUserMarker();
   setTimeout(() => mapInst && mapInst.invalidateSize(), 60);
+}
+
+// "Du bist hier"-Marker — eigene aktuelle Position, unabhängig von den Fund-Pins.
+function updateUserMarker() {
+  if (!mapInst || !window.L || !livePos) return;
+  const L = window.L;
+  if (!userMarker) {
+    const icon = L.divIcon({ className: 'you-marker', html: '<span class="you-pulse"></span><span class="you-dot"></span>', iconSize: [20, 20], iconAnchor: [10, 10] });
+    userMarker = L.marker([livePos.lat, livePos.lng], { icon, interactive: false, zIndexOffset: 1000 }).addTo(mapInst);
+  } else {
+    userMarker.setLatLng([livePos.lat, livePos.lng]);
+  }
 }
 
 // Nach Tab-Wechsel auf die Kartenansicht: Leaflet kannte die Containergröße evtl. noch nicht (display:none beim Init).
