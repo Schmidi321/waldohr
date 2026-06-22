@@ -69,3 +69,49 @@ export class AudioEngine {
     this.analyser = null; this.freq = null; this.running = false;
   }
 }
+
+// ---- Aufnahmen lauter & klarer machen ----
+// Hochpassfilter schneidet tiefes Windrauschen/Grummeln raus (Vogelstimmen liegen fast immer
+// deutlich darüber), anschließende Spitzenpegel-Normalisierung macht die Aufnahme insgesamt
+// lauter, ohne stille Aufnahmen zu extrem hochzuziehen (Boost gedeckelt).
+export async function enhanceSamples(samples, sampleRate) {
+  const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const offline = new OfflineCtx(1, samples.length, sampleRate);
+  const buf = offline.createBuffer(1, samples.length, sampleRate);
+  buf.copyToChannel(samples, 0);
+  const src = offline.createBufferSource();
+  src.buffer = buf;
+  const hp = offline.createBiquadFilter();
+  hp.type = 'highpass'; hp.frequency.value = 500;
+  src.connect(hp); hp.connect(offline.destination);
+  src.start();
+  const rendered = await offline.startRendering();
+  const data = rendered.getChannelData(0);
+  let peak = 0;
+  for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > peak) peak = a; }
+  const boost = peak > 0.001 ? Math.min(0.92 / peak, 12) : 1;
+  const out = new Float32Array(data.length);
+  for (let i = 0; i < data.length; i++) out[i] = Math.max(-1, Math.min(1, data[i] * boost));
+  return out;
+}
+
+// Mischt mehrkanalige Aufnahmen (z.B. Stereo) zu einem Kanal.
+function mixToMono(buf) {
+  const out = new Float32Array(buf.length);
+  for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+    const d = buf.getChannelData(ch);
+    for (let i = 0; i < d.length; i++) out[i] += d[i] / buf.numberOfChannels;
+  }
+  return out;
+}
+
+// Für manuelle Aufnahmen (MediaRecorder-Blob, z.B. webm/opus) — dekodiert, optimiert,
+// liefert rohe Samples zum erneuten Enkodieren (z.B. via encodeWav).
+export async function enhanceBlob(blob) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const audioBuf = await ctx.decodeAudioData(await blob.arrayBuffer());
+  const mono = audioBuf.numberOfChannels > 1 ? mixToMono(audioBuf) : audioBuf.getChannelData(0);
+  const enhanced = await enhanceSamples(mono, audioBuf.sampleRate);
+  try { ctx.close(); } catch {}
+  return { samples: enhanced, sampleRate: audioBuf.sampleRate };
+}

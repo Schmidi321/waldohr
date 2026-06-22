@@ -316,7 +316,7 @@ function renderLive() {
       <button class="lr-rec" title="Diesen Ruf aufnehmen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/></svg></button>`;
     ['.lr-av', '.lr-meta', '.lr-conf'].forEach(sel => { const el = row.querySelector(sel); if (el) el.onclick = () => openModal(e.key); });
     const recBtn = row.querySelector('.lr-rec');
-    recBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrRecordSpecies === 'function') window.__waldohrRecordSpecies(e.name); };
+    recBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrRecordSpecies === 'function') window.__waldohrRecordSpecies(e.name, e.key); };
     const photoBtn = row.querySelector('.lr-photo');
     photoBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrCapturePhoto === 'function') window.__waldohrCapturePhoto(e.name); };
     applySpeciesImage(row.querySelector('.lr-av'), e.sci);
@@ -335,6 +335,29 @@ function renderStatsForMode() {
   const stats = statMode === 'here' ? computeStats(todayNearbyDetections(lastStatDets, lastStatPos)) : computeStats(lastStatDets);
   renderStats(stats);
   drawDayChart(stats.hourly);
+}
+
+// Eigene Aufnahmen (manuell + automatisch) je Art — session-only, damit sie sofort als kleines
+// Icon auf der Sammlungskarte auftauchen, antippbar zum direkten Abspielen.
+const RECORDINGS = new Map();
+export function registerRecording(key, url) {
+  if (!key || !url) return;
+  RECORDINGS.set(key, { url, ts: Date.now() });
+  refreshRecordingBadges();
+}
+function refreshRecordingBadges() {
+  document.querySelectorAll('.spc').forEach(el => {
+    const has = RECORDINGS.has(el.dataset.key);
+    let b = el.querySelector('.rec-badge');
+    if (has && !b) {
+      b = document.createElement('button');
+      b.className = 'rec-badge';
+      b.title = 'Eigene Aufnahme abspielen';
+      b.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+      b.onclick = ev => { ev.stopPropagation(); const r = RECORDINGS.get(el.dataset.key); if (r) new Audio(r.url).play().catch(() => {}); };
+      el.appendChild(b);
+    } else if (!has && b) { b.remove(); }
+  });
 }
 
 function speciesCard(s) {
@@ -390,6 +413,8 @@ function renderCollection(stats, dets, pos) {
     el.onclick = () => openModal(el.dataset.key);
     applySpeciesImage(el.querySelector('.ph'), (SPECIES[el.dataset.key] || {}).sci);
   });
+
+  refreshRecordingBadges();
 
   const locList = $('locList');
   if (locList) {

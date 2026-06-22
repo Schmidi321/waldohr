@@ -1,5 +1,6 @@
 // Arten-Katalog — zentrale Datenquelle für Erkennung & UI.
 // rarity: 'common' | 'rare' | 'mammal'  (steuert Farbe/Badge)
+import { EXTRA_SPECIES } from './species-extra.js';
 
 const BIRD = '<path d="M16 7c1.5 0 3 1 3 3 0 3-3 5-3 5l-7 1c-3 0-5-2-5-4 0-1 .5-2 2-2"/><path d="M16 7l4-2-2 3"/><circle cx="15" cy="8.5" r=".8" fill="currentColor" stroke="none"/><path d="M9 15l-2 4M12 16l-1 4"/>';
 const FISHER = '<path d="M5 13c3-1 6-4 9-4s5 2 5 4-2 4-5 4-7-2-9-4z"/><path d="M5 13l-2 3M19 13l2 1"/><circle cx="15" cy="11" r=".8" fill="currentColor" stroke="none"/>';
@@ -241,6 +242,8 @@ export const SPECIES = {
     steckbrief:'70–90 cm Körperlänge · nachtaktiv, lebt in großen unterirdischen Bauen ("Dachsburgen") · Allesfresser.'
   }
 };
+
+Object.assign(SPECIES, EXTRA_SPECIES);
 
 export const SPECIES_LIST = Object.values(SPECIES);
 

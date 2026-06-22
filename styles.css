@@ -42,6 +42,13 @@ h1,h2,h3,.brand,.big{font-family:'Outfit',sans-serif}
 .brand .logo svg{width:20px;height:20px}
 .brand .wordmark{font-weight:700;font-size:21px;letter-spacing:.3px;background:linear-gradient(120deg,var(--ink),var(--lime));-webkit-background-clip:text;background-clip:text;color:transparent}
 .chip{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--glass);border:1px solid var(--stroke);padding:7px 11px;border-radius:30px}
+.chip.loc-active,.chip.loc-searching,.chip.loc-off{padding:7px 9px;font-size:10px;font-weight:600;letter-spacing:.3px;gap:4px}
+.chip.loc-active{color:var(--lime)}
+.chip.loc-active svg{color:var(--lime)}
+.chip.loc-searching{color:var(--amber)}
+.chip.loc-searching svg{color:var(--amber);animation:recpulse 1.4s infinite}
+.chip.loc-off{color:var(--faint)}
+.chip.loc-off svg{color:var(--faint)}
 .chip svg{width:13px;height:13px;opacity:.8}
 .gear{width:38px;height:38px;flex:0 0 38px;border-radius:12px;background:var(--glass);border:1px solid var(--stroke);color:var(--muted);display:grid;place-items:center;cursor:pointer;transition:.2s}
 .gear:active{transform:scale(.92)}
@@ -199,6 +206,9 @@ body.listening .mic{background:linear-gradient(140deg,#fb7185,#f43f5e);box-shado
 .spc .cnt{font-size:11px;color:var(--muted);margin-top:6px;display:flex;align-items:center;gap:5px}
 .spc .cnt svg{width:12px;height:12px}
 .badge{position:absolute;top:9px;right:9px;font-size:9px;font-weight:600;padding:3px 7px;border-radius:20px;text-transform:uppercase;letter-spacing:.4px}
+.rec-badge{position:absolute;top:9px;left:9px;width:22px;height:22px;border-radius:50%;background:rgba(163,230,53,.18);border:1px solid #a3e63555;color:var(--lime);display:grid;place-items:center;cursor:pointer}
+.rec-badge svg{width:11px;height:11px}
+.rec-badge:active{transform:scale(.9)}
 
 .sectitle{font-family:'Outfit';font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin:4px 0 12px;display:flex;align-items:center;gap:8px}
 .sectitle::after{content:"";flex:1;height:1px;background:var(--stroke)}

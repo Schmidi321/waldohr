@@ -1,8 +1,8 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
-import { AudioEngine } from './audio.js';
+import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording } from './ui.js';
 
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
@@ -11,29 +11,35 @@ const micIcon = document.getElementById('micIcon');
 const audio = new AudioEngine();
 let rec = null;
 
-const setLoc = (t) => { const el = document.getElementById('locTxt'); if (el) el.textContent = t; };
+// Chip bleibt bewusst knapp ("GPS") — der volle Status (Genauigkeit, "verweigert" etc.)
+// steckt im title-Tooltip, die Farbe signalisiert den Zustand auf einen Blick.
+const locChip = document.getElementById('locChip');
+const setLoc = (state, detail) => {
+  const el = document.getElementById('locTxt'); if (el) el.textContent = 'GPS';
+  if (locChip) { locChip.className = 'chip loc-' + state; locChip.title = detail || ''; }
+};
 
 // Standort-Erfassung: läuft unabhängig vom Mikro, sobald die App startet (nicht erst beim
 // Lauschen) — Karte & Kompass-Richtung sollen auch ohne aktives Mikro die Position kennen.
 const geo = {
   watchId: null, pos: null,
   start() {
-    if (!('geolocation' in navigator)) { setLoc('kein GPS'); return; }
+    if (!('geolocation' in navigator)) { setLoc('off', 'kein GPS'); return; }
     if (this.watchId != null) return;
-    setLoc('Standort: suche…');
+    setLoc('searching', 'Standort: suche…');
     this.watchId = navigator.geolocation.watchPosition(
       p => {
         const had = !!this.pos;
         this.pos = { lat: p.coords.latitude, lng: p.coords.longitude };
-        setLoc('Standort ±' + Math.round(p.coords.accuracy) + ' m');
+        setLoc('active', 'Standort ±' + Math.round(p.coords.accuracy) + ' m');
         setLivePos(this.pos);   // live fürs Kompass-Feature, ohne vollen Re-Render
         if (!had) refresh();   // erster Fix: "Heute hier" sofort aktualisieren
       },
-      e => { console.warn('geo', e); setLoc(e.code === 1 ? 'GPS verweigert' : 'kein GPS'); },
+      e => { console.warn('geo', e); setLoc('off', e.code === 1 ? 'GPS verweigert' : 'kein GPS'); },
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 12000 }
     );
   },
-  stop() { if (this.watchId != null) { navigator.geolocation.clearWatch(this.watchId); this.watchId = null; } setLoc('Standort aus'); }
+  stop() { if (this.watchId != null) { navigator.geolocation.clearWatch(this.watchId); this.watchId = null; } setLoc('off', 'Standort aus'); }
 };
 
 async function boot() {
@@ -96,11 +102,13 @@ function markAutoRecorded(key) {
     if (!list.includes(key)) { list.push(key); localStorage.setItem('waldohr.autorec.' + todayKey(), JSON.stringify(list)); }
   } catch {}
 }
-function maybeAutoRecord(det, samples, sampleRate) {
+async function maybeAutoRecord(det, samples, sampleRate) {
   if (det.confidence < AUTO_RECORD_CONFIDENCE) return;
   if (autoRecordedToday().includes(det.key)) return;
   markAutoRecorded(det.key);
-  const blob = encodeWav(samples, sampleRate);
+  let enhanced = samples;
+  try { enhanced = await enhanceSamples(samples, sampleRate); } catch (e) { console.warn('enhance', e); }
+  const blob = encodeWav(enhanced, sampleRate);
   const url = URL.createObjectURL(blob);
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const prefix = det.species.toLowerCase().replace(/[^a-z0-9]+/g, '_');
@@ -110,6 +118,7 @@ function maybeAutoRecord(det, samples, sampleRate) {
   const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.wav'; dl.textContent = '⬇'; dl.title = 'Herunterladen';
   row.append(a, lb, dl);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
+  registerRecording(det.key, url);
 }
 
 // ---- Mikrofon-Steuerung ----
@@ -148,7 +157,7 @@ const recorder = {
   mr: null, chunks: [], timer: null, t0: 0,
   fmt() { const s = Math.floor((Date.now() - this.t0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
   setBtn(on) { if (!recBtn) return; recBtn.classList.toggle('rec-on', on); if (!on) recBtn.textContent = '● Aufnahme'; },
-  async toggle(label) {
+  async toggle(label, key) {
     if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
     if (!audio.running) {
       tryFullscreen();
@@ -162,18 +171,25 @@ const recorder = {
     }
     try { this.mr = type ? new MediaRecorder(audio.stream, { mimeType: type }) : new MediaRecorder(audio.stream); }
     catch (e) { console.warn('rec', e); return; }
-    this.chunks = []; this.label = label || null;
+    this.chunks = []; this.label = label || null; this.key = key || null;
     this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
     this.mr.onstop = () => { clearInterval(this.timer); this.setBtn(false); this.save(); };
     this.mr.start();
     this.t0 = Date.now(); this.setBtn(true);
     this.timer = setInterval(() => { if (recBtn) recBtn.textContent = '■ ' + this.fmt(); }, 500);
   },
-  save() {
+  async save() {
     if (!this.chunks.length) return;
-    const blob = new Blob(this.chunks, { type: this.chunks[0].type || 'audio/webm' });
-    const url = URL.createObjectURL(blob);
-    const ext = blob.type.includes('mp4') ? 'm4a' : 'webm';
+    const raw = new Blob(this.chunks, { type: this.chunks[0].type || 'audio/webm' });
+    // Aufnahme lauter & klarer machen: tiefes Rauschen raus, Pegel normalisieren, als WAV sichern.
+    let url, ext;
+    try {
+      const { samples, sampleRate } = await enhanceBlob(raw);
+      url = URL.createObjectURL(encodeWav(samples, sampleRate)); ext = 'wav';
+    } catch (e) {
+      console.warn('enhance', e);
+      url = URL.createObjectURL(raw); ext = raw.type.includes('mp4') ? 'm4a' : 'webm';
+    }
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     const prefix = this.label ? this.label.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'waldohr';
     const name = prefix + '_' + stamp + '.' + ext;
@@ -184,11 +200,13 @@ const recorder = {
     if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
     row.appendChild(dl);
     const list = document.getElementById('recList'); if (list) list.prepend(row);
+    if (this.key) registerRecording(this.key, url);
   }
 };
 if (recBtn) recBtn.onclick = () => recorder.toggle();
-// Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen.
-window.__waldohrRecordSpecies = (name) => recorder.toggle(name);
+// Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen und
+// verknüpft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
+window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);
 
 // ---- Fotoaufnahme (Fotografen-Funktion): Direktbeleg-Foto zu einem Fund, öffnet die Gerätekamera ----
 const photoInput = document.getElementById('photoInput');
