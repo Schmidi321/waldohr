@@ -29,6 +29,7 @@
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           <div class="chip" id="locChip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg><span id="locTxt">Standort aus</span></div>
+          <button class="gear" id="favQuickBtn" aria-label="Beobachtungsliste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l2.6 5.8 6.3.6-4.7 4.3 1.4 6.2L12 16.9l-5.6 3 1.4-6.2-4.7-4.3 6.3-.6L12 3z"/></svg></button>
           <button class="gear" id="gearBtn" aria-label="Einstellungen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-2.7-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg></button>
         </div>
       </div>
@@ -68,6 +69,7 @@
         <span><i style="background:var(--emerald)"></i>häufig</span>
         <span><i style="background:var(--amber)"></i>selten</span>
         <span><i style="background:var(--rose)"></i>Säugetier</span>
+        <span><i style="background:var(--lime)"></i>beobachtet</span>
       </div>
     </section>
 
@@ -97,6 +99,10 @@
     <!-- ============ STATS ============ -->
     <section class="view" id="v-stat">
       <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 19v-6M13 19V9M18 19v-9"/></svg></span>Statistik</div><div class="chip">Juni 2026</div></div>
+      <div class="segmented" id="statToggle">
+        <button class="on" data-mode="global">Global</button>
+        <button data-mode="here">Heute hier</button>
+      </div>
       <div class="kpis" id="kpis"></div>
       <div class="card">
         <div class="ch">Häufigste Arten <em>nach Anzahl Rufe</em></div>

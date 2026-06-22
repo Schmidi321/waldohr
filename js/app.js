@@ -91,12 +91,15 @@ function setUI(mode, msg) {
   statusTxt.textContent = msg || 'Lauscht über dein Mikrofon…';
 }
 
-// Vollbildmodus: nur per Nutzergeste auslösbar -> beim Start des Mikros anfragen.
+// Vollbildmodus: nur per Nutzergeste auslösbar. Bisher hing das nur am Mikro-Tap —
+// jetzt auf jeden ersten Tap irgendwo in der App, damit Vollbild zuverlässig ankommt,
+// egal welchen Button der Nutzer zuerst antippt.
 function tryFullscreen() {
   const el = document.documentElement;
   if (document.fullscreenElement || !el.requestFullscreen) return;
   el.requestFullscreen().catch(() => {});
 }
+document.addEventListener('click', tryFullscreen);
 
 document.getElementById('micBtn').onclick = async () => {
   if (audio.running) { audio.stop(); setUI('off'); return; }

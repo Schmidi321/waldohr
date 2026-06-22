@@ -1,7 +1,7 @@
 // Rendering: Erkennungs-Karte, Sammlung, Statistik-Diagramme, Detail-Sheet, Navigation.
 import { SPECIES, SPECIES_LIST } from './species.js';
 import { gemini } from './gemini.js';
-import { todayNearby, groupByLocation, haversineKm, bearingDeg } from './db.js';
+import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats } from './db.js';
 
 const $ = id => document.getElementById(id);
 const DEFAULT_GRAD = ['#0e5840', '#0a4733'];
@@ -90,10 +90,13 @@ export function initUI() {
     if (after !== before) location.reload();   // Recognizer wird beim Start gewählt
   };
 
-  // Beobachtungsliste
+  // Beobachtungsliste — Schnellzugriff (Stern-Icon im Topbar) UND Settings-Eintrag öffnen dieselbe Liste.
   const favModal = $('favModal');
+  const openFavList = () => { renderFavList(); favModal.classList.add('open'); };
   const favOpenBtn = $('favOpenBtn');
-  if (favOpenBtn && favModal) favOpenBtn.onclick = () => { closeSettings(); renderFavList(); favModal.classList.add('open'); };
+  if (favOpenBtn && favModal) favOpenBtn.onclick = () => { closeSettings(); openFavList(); };
+  const favQuickBtn = $('favQuickBtn');
+  if (favQuickBtn && favModal) favQuickBtn.onclick = openFavList;
   const favScrim = $('favScrim'); if (favScrim) favScrim.onclick = () => favModal.classList.remove('open');
   const favClose = $('favClose'); if (favClose) favClose.onclick = () => favModal.classList.remove('open');
 
@@ -109,6 +112,17 @@ export function initUI() {
       $('collHere').hidden = collMode !== 'here';
       $('collGlobal').hidden = collMode !== 'global';
       renderCollStats();
+    });
+  }
+
+  // Statistik: "Global" / "Heute hier"
+  const statToggle = $('statToggle');
+  if (statToggle) {
+    statToggle.querySelectorAll('button').forEach(b => b.onclick = () => {
+      statToggle.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      statMode = b.dataset.mode;
+      renderStatsForMode();
     });
   }
 }
@@ -144,6 +158,7 @@ function renderFavList() {
     saveFavorites();
     btn.classList.toggle('on');
     btn.textContent = FAVORITES.has(key) ? '★' : '☆';
+    renderMap(lastMapDets);   // Kartenfarben sofort an die neue Auswahl anpassen
   });
 }
 
@@ -206,6 +221,13 @@ function renderLive() {
 
 export function renderAll(stats, dets, pos) {
   renderCollection(stats, dets || [], pos || null);
+  lastStatDets = dets || []; lastStatPos = pos || null;
+  renderStatsForMode();
+}
+
+let statMode = 'global', lastStatDets = [], lastStatPos = null;
+function renderStatsForMode() {
+  const stats = statMode === 'here' ? computeStats(todayNearbyDetections(lastStatDets, lastStatPos)) : computeStats(lastStatDets);
   renderStats(stats);
   drawDayChart(stats.hourly);
 }
@@ -361,8 +383,9 @@ function loadLeaflet() {
   return leafletPromise;
 }
 
-let mapInst = null, markersLayer = null, userMarker = null;
+let mapInst = null, markersLayer = null, userMarker = null, lastMapDets = [];
 export async function renderMap(dets) {
+  lastMapDets = dets;
   const mapEl = document.getElementById('map');
   if (!mapEl) return;
   const geo = dets.filter(d => typeof d.lat === 'number' && typeof d.lng === 'number');
@@ -388,7 +411,8 @@ export async function renderMap(dets) {
     markersLayer = L.layerGroup().addTo(mapInst);
   }
   markersLayer.clearLayers();
-  const colorFor = d => d.rarity === 'rare' ? '#fbbf24' : d.rarity === 'mammal' ? '#fb7185' : '#34d399';
+  // Funde von Arten aus der Beobachtungsliste heben sich farblich ab — unabhängig von ihrer Seltenheit.
+  const colorFor = d => FAVORITES.has(d.key) ? '#a3e635' : d.rarity === 'rare' ? '#fbbf24' : d.rarity === 'mammal' ? '#fb7185' : '#34d399';
   const bounds = [];
   for (const d of geo.slice(-200)) {
     const m = L.circleMarker([d.lat, d.lng], { radius: 7, color: colorFor(d), weight: 2, fillColor: colorFor(d), fillOpacity: .8 });
