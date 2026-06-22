@@ -32,6 +32,43 @@ async function fetchSpeciesWiki(sci) {
   try { localStorage.setItem(cacheKey, JSON.stringify(out)); } catch {}
   return out;
 }
+// ---- Bildnachweis (Urheber + Lizenz) von Wikimedia Commons ----
+// Commons lässt nur frei lizenzierte Bilder zu (CC-BY, CC-BY-SA, CC0 o.ä.) — die meisten davon
+// verlangen aber eine Namensnennung. Nur fürs Detail-Sheet abgefragt (dort ist das Foto am
+// prominentesten), nicht für jeden kleinen Avatar in Listen.
+const CREDIT_CACHE = new Map();
+async function fetchImageCredit(imgUrl) {
+  if (!imgUrl) return null;
+  if (CREDIT_CACHE.has(imgUrl)) return CREDIT_CACHE.get(imgUrl);
+  const cacheKey = 'waldohr.credit.' + imgUrl;
+  try { const cached = localStorage.getItem(cacheKey); if (cached) { const v = JSON.parse(cached); CREDIT_CACHE.set(imgUrl, v); return v; } } catch {}
+  let out = null;
+  try {
+    // Bei /thumb/-URLs ist das letzte Segment die größenpräfigierte Variante (z.B. "330px-Foo.jpg"),
+    // nicht der echte Commons-Dateiname — Präfix abschneiden, um die Originaldatei zu treffen.
+    const filename = decodeURIComponent(imgUrl.split('/').pop()).replace(/^\d+px-/, '');
+    const r = await fetch('https://commons.wikimedia.org/w/api.php?action=query&titles=' +
+      encodeURIComponent('File:' + filename) + '&prop=imageinfo&iiprop=extmetadata&format=json&origin=*');
+    if (r.ok) {
+      const j = await r.json();
+      const pages = j.query && j.query.pages;
+      const page = pages && Object.values(pages)[0];
+      const meta = page && page.imageinfo && page.imageinfo[0] && page.imageinfo[0].extmetadata;
+      if (meta) {
+        const strip = h => (h || '').replace(/<[^>]+>/g, '').trim();
+        out = {
+          artist: strip(meta.Artist && meta.Artist.value),
+          license: (meta.LicenseShortName && meta.LicenseShortName.value) || '',
+          pageUrl: 'https://commons.wikimedia.org/wiki/File:' + encodeURIComponent(filename)
+        };
+      }
+    }
+  } catch {}
+  CREDIT_CACHE.set(imgUrl, out);
+  try { localStorage.setItem(cacheKey, JSON.stringify(out)); } catch {}
+  return out;
+}
+
 // Setzt das Bild nachträglich auf einem Avatar-Element, sobald es geladen ist (Element kann inzwischen entfernt sein).
 function applySpeciesImage(el, sci) {
   if (!el || !sci) return;
@@ -638,6 +675,10 @@ function openModal(key) {
   stopCallAudio();
   const playBtn = $('mPlayBtn'); if (playBtn) playBtn.onclick = () => togglePlayCall(sp.sci);
 
+  // Bildnachweis: nur einblenden, wenn ein Foto geladen wurde und Commons Urheber/Lizenz liefert.
+  const creditEl = $('mPhotoCredit');
+  if (creditEl) { creditEl.hidden = true; creditEl.onclick = null; }
+
   // Richtungsanzeige: nur sichtbar, wenn es einen verorteten Fund dieser Art gibt UND wir selbst einen Standort haben.
   curTargetGeo = lastGeoForKey(key);
   const dirBlock = $('mDirBlock');
@@ -656,6 +697,18 @@ function openModal(key) {
 
   const token = ++modalToken;
   let textSource = 'catalog';
+
+  if (sp.sci) {
+    fetchSpeciesWiki(sp.sci).then(w => {
+      if (token !== modalToken || !w || !w.img) return;
+      fetchImageCredit(w.img).then(c => {
+        if (token !== modalToken || !creditEl || !c || (!c.artist && !c.license)) return;
+        creditEl.innerHTML = `📷 ${c.artist || 'Wikimedia Commons'}${c.license ? ' · ' + c.license : ''}`;
+        creditEl.onclick = () => c.pageUrl && window.open(c.pageUrl, '_blank');
+        creditEl.hidden = false;
+      });
+    });
+  }
 
   // Generische BirdNET-Arten (key beginnt mit "x_") haben nur einen Platzhalter-Steckbrief —
   // Wikipedia-Auszug liefert echten Inhalt, kostenlos & ohne API-Key. Gemini (falls vorhanden) gewinnt immer.
