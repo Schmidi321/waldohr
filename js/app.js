@@ -1,7 +1,7 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
 import { AudioEngine } from './audio.js';
 import { createRecognizer, MockRecognizer } from './recognizer.js';
-import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll } from './db.js';
+import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos } from './ui.js';
 
 const body = document.body;
@@ -59,7 +59,9 @@ async function boot() {
 async function refresh() {
   let dets = [];
   try { dets = await allDetections(); } catch (e) { console.warn('read', e); }
-  renderAll(computeStats(dets), dets, geo.pos);
+  // Statistik & Sammlung zählen nur Funde ab 75% Konfidenz (Rauschen raus) — Karte zeigt weiter alles.
+  const qualifying = qualifyingDetections(dets);
+  renderAll(computeStats(qualifying), qualifying, geo.pos);
   renderMap(dets);
 }
 

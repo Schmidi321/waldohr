@@ -100,8 +100,8 @@
     <section class="view" id="v-stat">
       <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 19v-6M13 19V9M18 19v-9"/></svg></span>Statistik</div><div class="chip">Juni 2026</div></div>
       <div class="segmented" id="statToggle">
-        <button class="on" data-mode="global">Global</button>
-        <button data-mode="here">Heute hier</button>
+        <button class="on" data-mode="here">Heute hier</button>
+        <button data-mode="global">Global</button>
       </div>
       <div class="kpis" id="kpis"></div>
       <div class="card">
@@ -225,7 +225,8 @@
       <div class="sheet">
         <div class="grab"></div>
         <h2 style="font-size:20px;margin-bottom:4px">Beobachtungsliste</h2>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Markierte Arten lösen wie seltene Funde sofort einen Alarm aus, sobald sie live erkannt werden.</p>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Markierte Arten lösen wie seltene Funde sofort einen Alarm aus, sobald sie live erkannt werden.</p>
+        <input id="favSearch" type="search" autocomplete="off" placeholder="Art suchen, z. B. Wanderfalke oder Falco peregrinus…" class="favsearch" />
         <div class="favlist" id="favList"></div>
         <div class="actions"><button class="btn ghost" id="favClose">Schließen</button></div>
       </div>

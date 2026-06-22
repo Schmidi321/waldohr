@@ -1,5 +1,5 @@
 // Rendering: Erkennungs-Karte, Sammlung, Statistik-Diagramme, Detail-Sheet, Navigation.
-import { SPECIES, SPECIES_LIST } from './species.js';
+import { SPECIES, SPECIES_LIST, ensureSpecies } from './species.js';
 import { gemini } from './gemini.js';
 import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats } from './db.js';
 
@@ -92,13 +92,18 @@ export function initUI() {
 
   // Beobachtungsliste — Schnellzugriff (Stern-Icon im Topbar) UND Settings-Eintrag öffnen dieselbe Liste.
   const favModal = $('favModal');
-  const openFavList = () => { renderFavList(); favModal.classList.add('open'); };
+  const favSearch = $('favSearch');
+  const openFavList = () => { if (favSearch) favSearch.value = ''; renderFavList(); favModal.classList.add('open'); };
   const favOpenBtn = $('favOpenBtn');
   if (favOpenBtn && favModal) favOpenBtn.onclick = () => { closeSettings(); openFavList(); };
   const favQuickBtn = $('favQuickBtn');
   if (favQuickBtn && favModal) favQuickBtn.onclick = openFavList;
   const favScrim = $('favScrim'); if (favScrim) favScrim.onclick = () => favModal.classList.remove('open');
   const favClose = $('favClose'); if (favClose) favClose.onclick = () => favModal.classList.remove('open');
+  if (favSearch) {
+    let t = null;
+    favSearch.oninput = () => { clearTimeout(t); t = setTimeout(() => renderFavList(favSearch.value), 150); };
+  }
 
   setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
 
@@ -140,26 +145,78 @@ function xcKeySet(v) { v = (v || '').trim(); try { v ? localStorage.setItem('wal
 function loadFavorites() { try { return JSON.parse(localStorage.getItem('waldohr.favorites') || '[]'); } catch { return []; } }
 function saveFavorites() { try { localStorage.setItem('waldohr.favorites', JSON.stringify([...FAVORITES])); } catch {} }
 const FAVORITES = new Set(loadFavorites());
-function favRow(sp) {
-  const g = sp.grad || DEFAULT_GRAD, on = FAVORITES.has(sp.key);
-  return `<div class="favrow">
-    <div class="ph" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(sp.key, 20)}</div>
-    <div class="favmeta"><div class="nm">${sp.name}</div><div class="lt">${sp.sci || ''}</div></div>
-    <button class="favstar${on ? ' on' : ''}" data-key="${sp.key}">${on ? '★' : '☆'}</button>
+
+// Komplette BirdNET-Artenliste (6500+ Arten weltweit) — lazy nachgeladen aus dem Modell-Ordner
+// (252 KB Text), erst sobald in der Beobachtungsliste tatsächlich gesucht wird, nicht beim Boot.
+let allSpeciesPromise = null;
+function loadAllSpecies() {
+  if (!allSpeciesPromise) {
+    allSpeciesPromise = fetch('models/birdnet/labels.txt').then(r => r.text()).then(text =>
+      text.trim().split('\n').reduce((arr, line) => {
+        const i = line.indexOf('_');
+        if (i === -1) return arr;
+        arr.push({ sci: line.slice(0, i).trim(), name: line.slice(i + 1).trim() });
+        return arr;
+      }, [])
+    ).catch(e => { console.warn('labels.txt', e); return []; });
+  }
+  return allSpeciesPromise;
+}
+
+function favRow(entry) {
+  const key = entry.key || '';
+  const sp = key ? SPECIES[key] : null;
+  const g = (sp && sp.grad) || DEFAULT_GRAD;
+  const on = key && FAVORITES.has(key);
+  return `<div class="favrow" data-sci="${entry.sci || ''}" data-name="${(entry.name || '').replace(/"/g, '&quot;')}" data-key="${key}">
+    <div class="ph" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(key, 20)}</div>
+    <div class="favmeta"><div class="nm">${entry.name}</div><div class="lt">${entry.sci || ''}</div></div>
+    <button class="favstar${on ? ' on' : ''}">${on ? '★' : '☆'}</button>
   </div>`;
 }
-function renderFavList() {
-  const list = $('favList'); if (!list) return;
-  const all = [...SPECIES_LIST].sort((a, b) => a.name.localeCompare(b.name, 'de'));
-  list.innerHTML = all.map(favRow).join('');
-  list.querySelectorAll('.favstar').forEach(btn => btn.onclick = () => {
-    const key = btn.dataset.key;
-    if (FAVORITES.has(key)) FAVORITES.delete(key); else FAVORITES.add(key);
-    saveFavorites();
-    btn.classList.toggle('on');
-    btn.textContent = FAVORITES.has(key) ? '★' : '☆';
-    renderMap(lastMapDets);   // Kartenfarben sofort an die neue Auswahl anpassen
+
+// Arten aus der vollen BirdNET-Liste werden erst beim ersten Markieren in den echten
+// Katalog übernommen (ensureSpecies) — der Key bleibt dadurch identisch zu dem, den eine
+// spätere Live-Erkennung derselben Art erzeugen würde.
+function wireFavRows(list) {
+  list.querySelectorAll('.favrow').forEach(row => {
+    const btn = row.querySelector('.favstar');
+    btn.onclick = () => {
+      let key = row.dataset.key;
+      if (!key) {
+        key = ensureSpecies({ sci: row.dataset.sci, name: row.dataset.name });
+        row.dataset.key = key;
+        row.querySelector('.ph').innerHTML = avatarSVG(key, 20);
+      }
+      if (FAVORITES.has(key)) FAVORITES.delete(key); else FAVORITES.add(key);
+      saveFavorites();
+      btn.classList.toggle('on');
+      btn.textContent = FAVORITES.has(key) ? '★' : '☆';
+      renderMap(lastMapDets);   // Kartenfarben sofort an die neue Auswahl anpassen
+    };
   });
+}
+
+async function renderFavList(query) {
+  const list = $('favList'); if (!list) return;
+  query = (query || '').trim().toLowerCase();
+
+  if (!query) {
+    // Ohne Suche: eigene Auswahl zuerst, dann die kuratierten/bereits gehörten Arten.
+    const all = [...SPECIES_LIST].sort((a, b) =>
+      (FAVORITES.has(b.key) ? 1 : 0) - (FAVORITES.has(a.key) ? 1 : 0) || a.name.localeCompare(b.name, 'de'));
+    list.innerHTML = all.map(favRow).join('');
+    wireFavRows(list);
+    return;
+  }
+
+  list.innerHTML = '<div class="favhint">Suche…</div>';
+  const allSpecies = await loadAllSpecies();
+  const matches = allSpecies.filter(s => s.name.toLowerCase().includes(query) || s.sci.toLowerCase().includes(query)).slice(0, 150);
+  // Bereits katalogisierte Treffer bekommen ihren echten Key (richtiges Icon + Favoriten-Status).
+  const merged = matches.map(s => SPECIES_LIST.find(sp => sp.sci.toLowerCase() === s.sci.toLowerCase()) || s);
+  list.innerHTML = merged.length ? merged.map(favRow).join('') : '<div class="favhint">Keine Art gefunden.</div>';
+  wireFavRows(list);
 }
 
 // ---- Live-Liste „jetzt zu hören" ----
@@ -225,7 +282,7 @@ export function renderAll(stats, dets, pos) {
   renderStatsForMode();
 }
 
-let statMode = 'global', lastStatDets = [], lastStatPos = null;
+let statMode = 'here', lastStatDets = [], lastStatPos = null;
 function renderStatsForMode() {
   const stats = statMode === 'here' ? computeStats(todayNearbyDetections(lastStatDets, lastStatPos)) : computeStats(lastStatDets);
   renderStats(stats);
