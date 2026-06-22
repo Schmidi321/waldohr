@@ -114,6 +114,7 @@ async function maybeAutoRecord(det, samples, sampleRate) {
   const prefix = det.species.toLowerCase().replace(/[^a-z0-9]+/g, '_');
   const row = document.createElement('div'); row.className = 'rec-row';
   const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
+  wireAudioRouting(a);
   const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
   const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.wav'; dl.textContent = '⬇'; dl.title = 'Herunterladen';
   row.append(a, lb, dl);
@@ -195,6 +196,7 @@ const recorder = {
     const name = prefix + '_' + stamp + '.' + ext;
     const row = document.createElement('div'); row.className = 'rec-row';
     const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
+    wireAudioRouting(a);
     const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = name; dl.textContent = '⬇'; dl.title = 'Herunterladen';
     row.appendChild(a);
     if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
@@ -232,6 +234,25 @@ if (photoInput) {
 }
 // Kamera-Knopf an Live-Zeile/Seltenheits-Toast -> beschriftet das Foto mit dem Artnamen.
 window.__waldohrCapturePhoto = (name) => { photoLabel = name || null; photoInput && photoInput.click(); };
+
+// ---- Wiedergabe über Lautsprecher statt Hörer ----
+// Läuft das Mikro noch (laufende Erkennung), routen iOS/Android die Audioausgabe beim
+// gleichzeitigen Abspielen oft leise über den Hörer statt den Lautsprecher (geteilte
+// "Aufnahme+Wiedergabe"-Audiosession). Pausiert den AudioContext kurz fürs Abspielen einer
+// Referenz-/eigenen Aufnahme — verhindert nebenbei auch, dass das eigene Mikro die gerade
+// abgespielte Aufnahme als neue Live-Erkennung missversteht.
+window.__waldohrSuspendMicForPlayback = async () => {
+  try { if (audio.ctx && audio.ctx.state === 'running') { await audio.ctx.suspend(); return true; } } catch (e) { console.warn('suspend', e); }
+  return false;
+};
+window.__waldohrResumeMicAfterPlayback = async () => {
+  try { if (audio.ctx && audio.ctx.state === 'suspended') await audio.ctx.resume(); } catch (e) { console.warn('resume', e); }
+};
+// Verdrahtet ein <audio controls>-Element (eigene Aufnahmen) mit derselben Lautsprecher-Logik.
+function wireAudioRouting(a) {
+  a.onplay = () => window.__waldohrSuspendMicForPlayback();
+  a.onpause = a.onended = () => window.__waldohrResumeMicAfterPlayback();
+}
 
 // ---- Spektrogramm (nur echtes Mikro) ----
 function startSpectrogram() {

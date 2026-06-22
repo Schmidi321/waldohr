@@ -376,7 +376,16 @@ function refreshRecordingBadges() {
       b.className = 'rec-badge';
       b.title = 'Eigene Aufnahme abspielen';
       b.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
-      b.onclick = ev => { ev.stopPropagation(); const r = RECORDINGS.get(el.dataset.key); if (r) new Audio(r.url).play().catch(() => {}); };
+      b.onclick = async ev => {
+        ev.stopPropagation();
+        const r = RECORDINGS.get(el.dataset.key);
+        if (!r) return;
+        if (typeof window.__waldohrSuspendMicForPlayback === 'function') await window.__waldohrSuspendMicForPlayback();
+        const a = new Audio(r.url);
+        const resume = () => { if (typeof window.__waldohrResumeMicAfterPlayback === 'function') window.__waldohrResumeMicAfterPlayback(); };
+        a.onended = resume; a.onerror = resume;
+        a.play().catch(resume);
+      };
       el.appendChild(b);
     } else if (!has && b) { b.remove(); }
   });
@@ -703,6 +712,7 @@ async function fetchSpeciesAudio(sci) {
 let callAudio = null;
 function stopCallAudio() {
   if (callAudio) { callAudio.pause(); callAudio = null; }
+  if (typeof window.__waldohrResumeMicAfterPlayback === 'function') window.__waldohrResumeMicAfterPlayback();
   const icon = $('mPlayIcon'), label = $('mPlayLabel');
   if (icon) icon.innerHTML = '<path d="M6 4l14 8-14 8z"/>';
   if (label) label.textContent = 'Ruf anhören';
@@ -717,10 +727,14 @@ async function togglePlayCall(sci) {
   const label = $('mPlayLabel'); if (label) label.textContent = 'Suche Aufnahme …';
   const url = await fetchSpeciesAudio(sci);
   if (!url) { if (label) label.textContent = 'Keine Aufnahme gefunden'; setTimeout(() => { if (label) label.textContent = 'Ruf anhören'; }, 2500); return; }
+  // Mikro kurz pausieren: sonst routen iOS/Android die Wiedergabe leise über den Hörer statt
+  // den Lautsprecher (geteilte Aufnahme+Wiedergabe-Audiosession), und das eigene Mikro würde
+  // die abgespielte Referenzaufnahme sonst als neue Live-Erkennung missverstehen.
+  if (typeof window.__waldohrSuspendMicForPlayback === 'function') await window.__waldohrSuspendMicForPlayback();
   callAudio = new Audio(url);
   callAudio.onended = stopCallAudio;
-  callAudio.onerror = () => { if (label) label.textContent = 'Wiedergabe fehlgeschlagen'; };
-  try { await callAudio.play(); } catch (e) { console.warn('play', e); if (label) label.textContent = 'Wiedergabe fehlgeschlagen'; return; }
+  callAudio.onerror = () => { if (label) label.textContent = 'Wiedergabe fehlgeschlagen'; stopCallAudio(); };
+  try { await callAudio.play(); } catch (e) { console.warn('play', e); if (label) label.textContent = 'Wiedergabe fehlgeschlagen'; stopCallAudio(); return; }
   if (label) label.textContent = 'Spielt … (Xeno-canto)';
   const icon = $('mPlayIcon'); if (icon) icon.innerHTML = '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>';
 }
