@@ -165,6 +165,10 @@
           <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z"/></svg>Steckbrief</h3>
           <p id="mSteckbrief"></p>
         </div>
+        <div class="infoblock" id="mLastBlock" hidden>
+          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>Letzter Fund</h3>
+          <p id="mLastInfo"></p>
+        </div>
         <div class="infoblock" id="mDirBlock" hidden>
           <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M16 8l-5 3-2 5 5-3z"/></svg>Richtung zum letzten Fund</h3>
           <div class="compass-row">
@@ -208,6 +212,11 @@
           <div style="font-size:11px;color:var(--faint);margin-top:8px">Status: <span id="serverStat">nicht gesetzt</span></div>
         </div>
         <div class="infoblock">
+          <h3><span style="font-size:15px">📸</span> Tipps für Fotografen</h3>
+          <p style="margin-bottom:12px">Allgemeine Tipps, um Vögel und Wildtiere besser vor die Linse zu bekommen.</p>
+          <button class="btn ghost" id="tipsOpenBtn" style="width:100%">Tipps anzeigen</button>
+        </div>
+        <div class="infoblock">
           <h3><span style="font-size:15px">⭐</span> Beobachtungsliste</h3>
           <p style="margin-bottom:12px">Wähle gezielt Arten/Tiere aus, bei denen du sofort benachrichtigt werden willst (Vibration + Toast) — wie beim Seltenheits-Alarm, aber nach deiner eigenen Auswahl.</p>
           <button class="btn ghost" id="favOpenBtn" style="width:100%">Liste öffnen</button>
@@ -221,6 +230,27 @@
           <button class="btn primary" id="settingsSave"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>Speichern</button>
           <button class="btn ghost" id="settingsClose">Schließen</button>
         </div>
+      </div>
+    </div>
+
+    <!-- ============ FOTO-TIPPS ============ -->
+    <div class="modal" id="tipsModal">
+      <div class="scrim" id="tipsScrim"></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <h2 style="font-size:20px;margin-bottom:14px">📸 Tipps für Fotografen</h2>
+        <div class="tiplist">
+          <div class="tiprow"><b>Goldene Stunde nutzen</b><span>Früh morgens und kurz vor Sonnenuntergang gibt warmes, weiches Licht die besten Fotos — gleichzeitig ist dann auch die Vogelaktivität am höchsten.</span></div>
+          <div class="tiprow"><b>Sonne im Rücken</b><span>Mit der Sonne hinter dir fotografieren, nicht gegen das Licht — sonst wird das Tier zur Silhouette.</span></div>
+          <div class="tiprow"><b>Langsam und ruhig bewegen</b><span>Hektische Bewegungen verscheuchen Vögel sofort. Lieber in kleinen Schritten annähern und zwischendurch stehen bleiben.</span></div>
+          <div class="tiprow"><b>Warten statt hinterherlaufen</b><span>An einer Sitzwarte, Futterstelle oder einem Wasserloch in Deckung warten bringt meist bessere Bilder als aktives Verfolgen.</span></div>
+          <div class="tiprow"><b>Gedeckte Kleidung</b><span>Unauffällige, gedeckte Farben statt grell — am besten aus dem Auto oder einem Tarnversteck fotografieren.</span></div>
+          <div class="tiprow"><b>Schnelle Verschlusszeit</b><span>Für Vögel in Bewegung mindestens 1/1000 s, sonst verwischen Flügel und Kopf.</span></div>
+          <div class="tiprow"><b>Fokus aufs Auge</b><span>Das Auge sollte immer scharf sein — es entscheidet, ob ein Tierfoto lebendig wirkt.</span></div>
+          <div class="tiprow"><b>Abstand halten</b><span>Brutplätze und Nester nie stören oder zu nah herangehen — Tierwohl geht vor dem perfekten Bild.</span></div>
+          <div class="tiprow"><b>Auf den Hintergrund achten</b><span>Ein ruhiger, einfarbiger Hintergrund lässt das Tier viel stärker hervortreten als ein unruhiges Geäst.</span></div>
+        </div>
+        <div class="actions"><button class="btn ghost" id="tipsClose">Schließen</button></div>
       </div>
     </div>
 

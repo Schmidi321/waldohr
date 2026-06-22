@@ -13,6 +13,21 @@ function avatarSVG(key, size) {
 }
 function grad(key) { return (SPECIES[key] || {}).grad || DEFAULT_GRAD; }
 
+// Relative Zeitangabe für "zuletzt gehört" (Sammlung-Karte + Detail-Sheet).
+function relTime(ts) {
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'gerade eben';
+  if (min < 60) return 'vor ' + min + ' Min.';
+  const h = Math.floor(min / 60);
+  if (h < 24) return 'vor ' + h + ' Std.';
+  const d = new Date(ts);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: sameYear ? undefined : 'numeric' }) +
+    ', ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr';
+}
+
 // ---- Artbilder + Kurztext (Wikipedia-Summary, gecacht) ----
 // Liefert sowohl das Vorschaubild als auch einen echten Auszugstext (extract) — letzterer
 // füllt für generische BirdNET-Arten den Steckbrief mit echtem Inhalt statt eines Platzhalters,
@@ -142,6 +157,13 @@ export function initUI() {
     let t = null;
     favSearch.oninput = () => { clearTimeout(t); t = setTimeout(() => renderFavList(favSearch.value), 150); };
   }
+
+  // Foto-Tipps
+  const tipsModal = $('tipsModal');
+  const tipsOpenBtn = $('tipsOpenBtn');
+  if (tipsOpenBtn && tipsModal) tipsOpenBtn.onclick = () => { closeSettings(); tipsModal.classList.add('open'); };
+  const tipsScrim = $('tipsScrim'); if (tipsScrim) tipsScrim.onclick = () => tipsModal.classList.remove('open');
+  const tipsClose = $('tipsClose'); if (tipsClose) tipsClose.onclick = () => tipsModal.classList.remove('open');
 
   setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
 
@@ -362,10 +384,12 @@ function refreshRecordingBadges() {
 
 function speciesCard(s) {
   const g = grad(s.key);
+  const geo = lastGeoForKey(s.key);
   return `<div class="spc" data-key="${s.key}">${badge(s)}
     <div class="ph" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(s.key, 34)}</div>
     <div class="nm">${s.name}</div><div class="lt">${s.sci}</div>
     <div class="cnt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>${s.count}× gehört</div>
+    <div class="spc-meta">${relTime(s.last)}${geo ? ' · <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg> verortet' : ''}</div>
   </div>`;
 }
 
@@ -625,6 +649,16 @@ function lastGeoForKey(key) {
   }
   return best;
 }
+// Wie lastGeoForKey, aber auch ohne GPS-Koordinaten — liefert immer den letzten Fund für die
+// Uhrzeit, der Ort wird nur angezeigt, wenn vorhanden.
+function lastDetForKey(key) {
+  let best = null;
+  for (const d of lastCollDets) {
+    if (d.key !== key) continue;
+    if (!best || d.ts > best.ts) best = d;
+  }
+  return best;
+}
 function updateCompassUI() {
   const block = $('mDirBlock');
   if (!block || block.hidden || !curTargetGeo) return;
@@ -727,6 +761,21 @@ function openModal(key) {
       updateCompassUI();
     } else {
       dirBlock.hidden = true;
+    }
+  }
+
+  // Letzter Fund: Uhrzeit immer, Ort nur wenn verortet — unabhängig vom eigenen Live-Standort.
+  const lastBlock = $('mLastBlock');
+  if (lastBlock) {
+    const lastDet = lastDetForKey(key);
+    if (lastDet) {
+      lastBlock.hidden = false;
+      const when = relTime(lastDet.ts);
+      const where = (typeof lastDet.lat === 'number' && typeof lastDet.lng === 'number')
+        ? lastDet.lat.toFixed(4) + '° N, ' + lastDet.lng.toFixed(4) + '° O' : null;
+      $('mLastInfo').textContent = where ? when + ' · ' + where : when;
+    } else {
+      lastBlock.hidden = true;
     }
   }
 
