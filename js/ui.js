@@ -488,7 +488,7 @@ function loadLeaflet() {
   return leafletPromise;
 }
 
-let mapInst = null, markersLayer = null, userMarker = null, lastMapDets = [];
+let mapInst = null, markersLayer = null, userMarker = null, lastMapDets = [], mapCenteredOnLive = false;
 export async function renderMap(dets) {
   lastMapDets = dets;
   const mapEl = document.getElementById('map');
@@ -507,27 +507,37 @@ export async function renderMap(dets) {
   try { L = await loadLeaflet(); } catch (e) { console.warn('leaflet', e); return; }
   if (!mapEl.isConnected) return;
 
-  if (!mapInst) {
-    const initCenter = geo.length ? [geo[geo.length - 1].lat, geo[geo.length - 1].lng] : [livePos.lat, livePos.lng];
+  const recentGeo = geo.slice(-200);
+  const isNewMap = !mapInst;
+  if (isNewMap) {
+    const initCenter = livePos ? [livePos.lat, livePos.lng] : [geo[geo.length - 1].lat, geo[geo.length - 1].lng];
     mapInst = L.map(mapEl, { attributionControl: true }).setView(initCenter, 14);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '© OpenStreetMap-Mitwirkende'
     }).addTo(mapInst);
     markersLayer = L.layerGroup().addTo(mapInst);
+    if (livePos) mapCenteredOnLive = true;
+    else if (recentGeo.length > 1) mapInst.fitBounds(recentGeo.map(d => [d.lat, d.lng]), { padding: [28, 28], maxZoom: 16 });
   }
+
   markersLayer.clearLayers();
   // Funde von Arten aus der Beobachtungsliste heben sich farblich ab — unabhängig von ihrer Seltenheit.
   const colorFor = d => FAVORITES.has(d.key) ? '#a3e635' : d.rarity === 'rare' ? '#fbbf24' : d.rarity === 'mammal' ? '#fb7185' : '#34d399';
-  const bounds = [];
-  for (const d of geo.slice(-200)) {
+  for (const d of recentGeo) {
     const m = L.circleMarker([d.lat, d.lng], { radius: 7, color: colorFor(d), weight: 2, fillColor: colorFor(d), fillOpacity: .8 });
     m.on('click', () => openModal(d.key));
     m.addTo(markersLayer);
-    bounds.push([d.lat, d.lng]);
   }
-  if (bounds.length > 1) mapInst.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
-  else if (bounds.length === 1) mapInst.setView(bounds[0], 15);
-  else if (livePos) mapInst.setView([livePos.lat, livePos.lng], 14);
+
+  // Sobald die eigene Position das erste Mal eintrifft (z.B. weil GPS verzögert reagiert hat),
+  // einmalig dorthin zentrieren. Danach NICHT mehr automatisch nachführen — sonst reißt die Karte
+  // bei jedem neuen Fund/GPS-Tick die Ansicht weg, während der Nutzer sie selbst bedient. Das war
+  // der eigentliche Bug: vorher wurde bei jedem Render auf die Fund-Pins gefittet, wodurch die
+  // eigene Position nie sichtbar im Bild blieb.
+  if (!mapCenteredOnLive && livePos) {
+    mapInst.setView([livePos.lat, livePos.lng], 14);
+    mapCenteredOnLive = true;
+  }
   updateUserMarker();
   setTimeout(() => mapInst && mapInst.invalidateSize(), 60);
 }
