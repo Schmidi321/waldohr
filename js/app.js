@@ -160,6 +160,7 @@ async function maybeAutoRecord(det, samples, sampleRate) {
   row.append(a, lb, dl, del);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
   registerRecording(det.key, url);
+  if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
 }
 
 // Löschen-Button für eine Aufnahme/Foto-Zeile: entfernt die Zeile, gibt die Object-URL frei,
@@ -330,6 +331,7 @@ const recorder = {
     row.appendChild(makeDeleteBtn(row, url, this.key, attId));
     const list = document.getElementById('recList'); if (list) list.prepend(row);
     if (this.key) registerRecording(this.key, url);
+    if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
   }
 };
 if (recBtn) recBtn.onclick = () => toggleDetection();
@@ -342,7 +344,32 @@ const galleryModal = document.getElementById('galleryModal');
 const galleryBtn = document.getElementById('galleryBtn');
 const galleryClose = document.getElementById('galleryClose');
 const galleryScrim = document.getElementById('galleryScrim');
-const openGallery = () => galleryModal && galleryModal.classList.add('open');
+
+const LS_BADGE = 'waldohr.gallery.newCount';
+function galleryBadgeAdd(n) {
+  try {
+    const cur = parseInt(localStorage.getItem(LS_BADGE)) || 0;
+    const next = cur + n;
+    localStorage.setItem(LS_BADGE, next);
+    const el = document.getElementById('galleryBadge');
+    if (el) { el.textContent = next > 9 ? '9+' : next; el.hidden = false; }
+  } catch {}
+}
+function galleryBadgeClear() {
+  try { localStorage.setItem(LS_BADGE, '0'); } catch {}
+  const el = document.getElementById('galleryBadge');
+  if (el) el.hidden = true;
+}
+// Restore badge count from previous session
+(function() {
+  const n = parseInt(localStorage.getItem(LS_BADGE)) || 0;
+  if (n > 0) {
+    const el = document.getElementById('galleryBadge');
+    if (el) { el.textContent = n > 9 ? '9+' : n; el.hidden = false; }
+  }
+})();
+
+const openGallery = () => { galleryModal && galleryModal.classList.add('open'); galleryBadgeClear(); };
 const closeGallery = () => galleryModal && galleryModal.classList.remove('open');
 if (galleryBtn) galleryBtn.onclick = openGallery;
 if (galleryClose) galleryClose.onclick = closeGallery;
@@ -375,6 +402,7 @@ if (photoInput) {
     catch (e) { console.warn('addAttachment', e); }
     row.appendChild(makeDeleteBtn(row, url, null, attId));
     const list = document.getElementById('recList'); if (list) list.prepend(row);
+    if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
   };
 }
 // Kamera-Knopf an Live-Zeile/Seltenheits-Toast -> beschriftet das Foto mit dem Artnamen.
