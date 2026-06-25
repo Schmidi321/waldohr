@@ -2,7 +2,10 @@
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap } from './ui.js';
+import { fetchWeather } from './weather.js';
+import { routeTracker } from './route.js';
+import { checkAlarms } from './alarm.js';
 
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
@@ -57,12 +60,16 @@ function wireSplash() {
 
 async function boot() {
   initUI();
+  routeTracker.init(geo);
+  routeTracker.onUpdate = pts => updateRouteMap(pts);
   try { await seedIfEmpty(); } catch (e) { console.warn('seed', e); }
   try { await migrateGeo(); } catch (e) { console.warn('migrateGeo', e); }
   try { const n = await cleanupFakeGeo(); if (n) console.info(n + ' Fund(e) hatten eine falsche Fake-Position (Bug) — Koordinaten entfernt.'); } catch (e) { console.warn('cleanupFakeGeo', e); }
   await refresh();
   hydrateAttachments();
   geo.start();
+  checkAlarms(geo.pos?.lat, geo.pos?.lng, onAlarm);
+  setInterval(() => checkAlarms(geo.pos?.lat, geo.pos?.lng, onAlarm), 60000);
 
   rec = await createRecognizer();
   if (rec.id === 'birdnet') statusTxt.textContent = 'BirdNET-Modell wird geladen…';
@@ -106,6 +113,15 @@ let compassHeading = null;
   }, { passive: true });
 })();
 
+function onAlarm(type) {
+  const isMC = type === 'morgenchor';
+  showInfoToast(isMC ? '🌅 Morgenchor-Alarm' : '🦉 Nacht-Modus', isMC ? 'Sonnenaufgang naht — Lauschen gestartet!' : 'Geplante Zeit — Lauschen gestartet!', isMC ? '🌅' : '🦉');
+  if (!audio.running) {
+    tryFullscreen();
+    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); }).catch(e => console.warn('alarm mic', e));
+  }
+}
+
 async function onWindow(samples, sampleRate) {
   if (!rec || !detectionActive) return;
   if (rec.setGeo) rec.setGeo(geo.pos);   // Standort für bessere Treffer (Server-Modus)
@@ -118,6 +134,7 @@ async function onWindow(samples, sampleRate) {
   };
   if (geo.pos) { det.lat = geo.pos.lat; det.lng = geo.pos.lng; }
   if (compassHeading !== null) det.heading = compassHeading;
+  try { const w = await fetchWeather(geo.pos?.lat, geo.pos?.lng); if (w) det.weather = w; } catch {}
   try { det.id = await addDetection(det); } catch (e) { console.warn('store', e); }
   liveAdd(det);
   maybeAutoRecord(det, samples, sampleRate);
@@ -275,10 +292,22 @@ function tryFullscreen() {
 }
 document.addEventListener('click', tryFullscreen);
 
+function stopSession() {
+  const s = routeTracker.stop();
+  if (s && s.pointCount >= 2) {
+    const dist = s.distKm < 1 ? Math.round(s.distKm * 1000) + ' m' : s.distKm.toFixed(2) + ' km';
+    showInfoToast('Route beendet', dist + ' · ' + s.pointCount + ' GPS-Punkte', '📍', () => {
+      const gpx = routeTracker.exportGpx(); if (!gpx) return;
+      const a = document.createElement('a'); a.href = 'data:application/gpx+xml;charset=utf-8,' + encodeURIComponent(gpx); a.download = 'waldohr-route-' + new Date().toISOString().slice(0, 10) + '.gpx'; a.click();
+    }, 'GPX exportieren');
+  }
+  updateRouteMap([]);
+}
+
 function toggleDetection() {
   if (!audio.running) {
     tryFullscreen();
-    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); })
+    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); })
       .catch(e => { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); });
     return;
   }
@@ -292,10 +321,12 @@ if (orbBtn) orbBtn.addEventListener('click', async ev => {
   if (ev.target.closest('.rec-pill')) return;
   if (audio.running) {
     if (recorder.mr && recorder.mr.state === 'recording') recorder.mr.stop();
-    audio.stop(); detectionActive = false; setUI('off'); return;
+    audio.stop(); detectionActive = false; setUI('off');
+    stopSession();
+    return;
   }
   tryFullscreen();
-  try { await audio.start(); geo.start(); setUI('mic-ready'); }
+  try { await audio.start(); geo.start(); setUI('mic-ready'); routeTracker.start(); }
   catch (e) { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); }
 });
 

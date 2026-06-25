@@ -2,6 +2,8 @@
 import { SPECIES, SPECIES_LIST, ensureSpecies } from './species.js';
 import { gemini } from './gemini.js';
 import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats, getQualifyConfidence, setQualifyConfidence } from './db.js';
+import { getMorgenchor, setMorgenchor, getNachtModus, setNachtModus } from './alarm.js';
+import { weatherEmoji, weatherLabel } from './weather.js';
 
 const $ = id => document.getElementById(id);
 const DEFAULT_GRAD = ['#0e5840', '#0a4733'];
@@ -130,6 +132,13 @@ export function initUI() {
     const sv = serverUrlGet();
     $('serverUrl').value = sv;
     $('serverStat').textContent = sv ? 'gesetzt ✓' : 'nicht gesetzt (Demo)';
+    const mc = getMorgenchor();
+    if ($('mcEnabled')) $('mcEnabled').checked = mc.enabled;
+    if ($('mcOffset')) $('mcOffset').value = mc.offsetMin;
+    if ($('mcOffsetVal')) $('mcOffsetVal').textContent = mc.offsetMin + ' Min';
+    const nm = getNachtModus();
+    if ($('nmEnabled')) $('nmEnabled').checked = nm.enabled;
+    if ($('nmTime')) $('nmTime').value = String(nm.hour).padStart(2, '0') + ':' + String(nm.minute).padStart(2, '0');
     settings.classList.add('open');
   };
   $('settingsScrim').onclick = closeSettings;
@@ -139,6 +148,13 @@ export function initUI() {
     xcKeySet($('xcKey').value);
     const before = serverUrlGet();
     const after = serverUrlSet($('serverUrl').value);
+    if ($('mcEnabled') && $('mcOffset')) {
+      setMorgenchor({ enabled: $('mcEnabled').checked, offsetMin: parseInt($('mcOffset').value) || 15 });
+    }
+    if ($('nmEnabled') && $('nmTime')) {
+      const parts = ($('nmTime').value || '22:00').split(':');
+      setNachtModus({ enabled: $('nmEnabled').checked, hour: parseInt(parts[0]) || 22, minute: parseInt(parts[1]) || 0 });
+    }
     closeSettings();
     if (after !== before) location.reload();   // Recognizer wird beim Start gewählt
   };
@@ -364,14 +380,24 @@ function rareAlert(det) {
 
 // Schlichte Bestätigung für nicht-art-bezogene Aktionen (z. B. "Daten gelöscht") — selber
 // Toast wie der Seltenheits-Alarm, aber neutral eingefärbt und ohne Kamera-Knopf/Klick-Ziel.
-export function showInfoToast(title, sub, icon = 'ℹ️') {
+// Optionaler actionCb + actionLabel zeigt einen kleinen Button im Toast.
+export function showInfoToast(title, sub, icon = 'ℹ️', actionCb, actionLabel) {
   const toast = $('rareToast'); if (!toast) return;
+  let actionHtml = '';
+  if (actionCb && actionLabel) {
+    actionHtml = `<button class="rt-action" style="margin-top:6px;padding:4px 10px;border-radius:10px;border:1px solid var(--stroke-strong);background:transparent;color:var(--lime);font-size:11px;cursor:pointer;font-family:inherit">${actionLabel}</button>`;
+  }
   toast.innerHTML = `<span class="rt-ico">${icon}</span>
-    <div class="rt-txt"><div class="rt-t">${title}</div><div class="rt-s">${sub || ''}</div></div>`;
+    <div class="rt-txt"><div class="rt-t">${title}</div><div class="rt-s">${sub || ''}</div>${actionHtml}</div>`;
   toast.className = 'rare-toast show info';
+  const dur = actionCb ? 8000 : 3500;
+  if (actionCb) {
+    const btn = toast.querySelector('.rt-action');
+    if (btn) btn.onclick = ev => { ev.stopPropagation(); actionCb(); toast.classList.remove('show'); };
+  }
   toast.onclick = () => toast.classList.remove('show');
   clearTimeout(rareToastTimer);
-  rareToastTimer = setTimeout(() => toast.classList.remove('show'), 3500);
+  rareToastTimer = setTimeout(() => toast.classList.remove('show'), dur);
 }
 export function renderLive() {
   const list = $('liveList'); if (!list) return;
@@ -678,6 +704,17 @@ function updateUserMarker() {
   }
 }
 
+let routeLayer = null;
+export function updateRouteMap(points) {
+  if (!mapInst || !window.L) return;
+  const L = window.L;
+  if (routeLayer) { routeLayer.remove(); routeLayer = null; }
+  if (!points || points.length < 2) return;
+  routeLayer = L.polyline(points.map(p => [p.lat, p.lng]), {
+    color: '#a3e635', weight: 3, opacity: 0.8,
+  }).addTo(mapInst);
+}
+
 // Nach Tab-Wechsel auf die Kartenansicht: Leaflet kannte die Containergröße evtl. noch nicht (display:none beim Init).
 export function invalidateMapSize() {
   if (mapInst) setTimeout(() => mapInst.invalidateSize(), 80);
@@ -976,7 +1013,9 @@ function openModal(key) {
       const dirs = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
       const dir = (typeof lastDet.heading === 'number')
         ? '🧭 ' + dirs[Math.round(lastDet.heading / 45) % 8] + ' (' + lastDet.heading + '°)' : null;
-      $('mLastInfo').textContent = [when, where, dir].filter(Boolean).join(' · ');
+      const wx = lastDet.weather
+        ? weatherEmoji(lastDet.weather.wmo) + ' ' + lastDet.weather.temp + '°C' : null;
+      $('mLastInfo').textContent = [when, where, dir, wx].filter(Boolean).join(' · ');
     } else {
       lastBlock.hidden = true;
     }

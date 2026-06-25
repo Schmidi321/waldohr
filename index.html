@@ -270,6 +270,28 @@
           <button class="btn ghost" id="favOpenBtn" style="width:100%">Liste öffnen</button>
         </div>
         <div class="infoblock">
+          <h3><span style="font-size:15px">🌅</span> Morgenchor-Alarm</h3>
+          <p style="margin-bottom:12px">Startet das Lauschen automatisch kurz vor Sonnenaufgang — wenn die Vögel am lautesten singen. Benötigt GPS und eine offene App.</p>
+          <label class="switch-row">
+            <span>Morgenchor-Alarm aktivieren</span>
+            <span class="switch"><input type="checkbox" id="mcEnabled" /><span class="switch-track"></span></span>
+          </label>
+          <div class="sliderlabel" style="margin-top:14px"><span>Minuten vor Sonnenaufgang starten</span><span id="mcOffsetVal">15 Min</span></div>
+          <input type="range" id="mcOffset" min="0" max="60" step="5" value="15" oninput="document.getElementById('mcOffsetVal').textContent=this.value+' Min'" />
+        </div>
+        <div class="infoblock">
+          <h3><span style="font-size:15px">🦉</span> Nacht-Modus</h3>
+          <p style="margin-bottom:12px">Startet das Lauschen automatisch zu einer festen Uhrzeit — z. B. für Nachteulen oder Fledermäuse. App muss geöffnet bleiben.</p>
+          <label class="switch-row">
+            <span>Nacht-Modus aktivieren</span>
+            <span class="switch"><input type="checkbox" id="nmEnabled" /><span class="switch-track"></span></span>
+          </label>
+          <div style="margin-top:14px">
+            <label style="font-size:13px;color:var(--muted);display:block;margin-bottom:6px">Startzeit</label>
+            <input type="time" id="nmTime" value="22:00" style="padding:10px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px;width:auto" />
+          </div>
+        </div>
+        <div class="infoblock">
           <h3><span style="font-size:15px">🗑️</span> Datenbank zurücksetzen</h3>
           <p style="margin-bottom:12px">Löscht ALLE gespeicherten Funde unwiderruflich — Demo-Daten, eigene Aufnahmen, Karte, Sammlung, Statistik. Fragt vorher nach Bestätigung.</p>
           <button class="btn ghost" id="dbResetBtn" style="width:100%;color:var(--rose);border-color:#fb718555">Alle Funde löschen</button>
