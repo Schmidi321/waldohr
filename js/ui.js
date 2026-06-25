@@ -815,11 +815,43 @@ function openModal(key) {
   av.style.background = `linear-gradient(140deg,${g[0]},${g[1]})`;
   av.style.backgroundImage = ''; av.style.backgroundSize = ''; av.style.backgroundPosition = '';
   av.innerHTML = avatarSVG(key, 34);
+  av.style.cursor = 'pointer'; av.title = 'Bild vergrößern';
+  av.onclick = () => {
+    const bg = av.style.backgroundImage;
+    if (!bg || !bg.includes('url(')) return;
+    const m = bg.match(/url\(["']?([^"')]+)["']?\)/); if (!m) return;
+    const full = m[1].replace(/\/thumb\//, '/').replace(/\/\d+px-[^/]+$/, '');
+    let ov = document.getElementById('_imgOv');
+    if (!ov) {
+      ov = document.createElement('div'); ov.id = '_imgOv';
+      ov.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(2,8,6,.93);display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+      const img = document.createElement('img');
+      img.style.cssText = 'max-width:95%;max-height:95%;object-fit:contain;border-radius:16px;box-shadow:0 8px 40px #000';
+      ov.appendChild(img); ov.onclick = () => ov.remove(); document.body.appendChild(ov);
+    }
+    ov.querySelector('img').src = full;
+    if (!ov.isConnected) document.body.appendChild(ov);
+  };
   applySpeciesImage(av, sp.sci);
   $('mMeaning').innerHTML = sp.meaning;
   $('mSteckbrief').textContent = sp.steckbrief;
   const badge = $('mAi'); if (badge) badge.hidden = true;
+  const photoTipBlock = $('mPhotoTipBlock'); if (photoTipBlock) photoTipBlock.hidden = true;
   $('sheet').classList.add('open');
+
+  const shareBtn = $('mShareBtn');
+  if (shareBtn) shareBtn.onclick = () => {
+    const text = `Ich habe gerade ${sp.name} (${sp.sci}) erkannt! 🐦 #WaldOhr #Naturbeobachtung`;
+    if (navigator.share) {
+      navigator.share({ title: 'WaldOhr – ' + sp.name, text, url: location.href }).catch(() => {});
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => {
+        const orig = shareBtn.innerHTML;
+        shareBtn.textContent = '✓';
+        setTimeout(() => { shareBtn.innerHTML = orig; }, 2000);
+      }).catch(() => {});
+    }
+  };
 
   stopCallAudio();
   const playBtn = $('mPlayBtn'); if (playBtn) playBtn.onclick = () => togglePlayCall(sp.sci);
@@ -894,6 +926,10 @@ function openModal(key) {
       $('mSteckbrief').textContent = res.steckbrief;
       textSource = 'gemini';
       if (badge) badge.textContent = '✨ erklärt von Gemini';
+      if (res.photoTip) {
+        const b = $('mPhotoTipBlock'), p = $('mPhotoTip');
+        if (b && p) { p.textContent = res.photoTip; b.hidden = false; }
+      }
     });
   }
 }

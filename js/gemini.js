@@ -14,10 +14,10 @@ export const gemini = {
   hasKey() { return !!this.getKey(); },
   model() { try { return localStorage.getItem(LS_MODEL) || DEFAULT_MODEL; } catch { return DEFAULT_MODEL; } },
 
-  _cacheGet(sci) { try { return JSON.parse(localStorage.getItem('waldohr.gem.' + sci) || 'null'); } catch { return null; } },
-  _cacheSet(sci, v) { try { localStorage.setItem('waldohr.gem.' + sci, JSON.stringify(v)); } catch {} },
+  _cacheGet(sci) { try { return JSON.parse(localStorage.getItem('waldohr.gem2.' + sci) || 'null'); } catch { return null; } },
+  _cacheSet(sci, v) { try { localStorage.setItem('waldohr.gem2.' + sci, JSON.stringify(v)); } catch {} },
 
-  // -> { meaning, steckbrief } | null
+  // -> { meaning, steckbrief, photoTip } | null
   async enrich(sci, name) {
     if (sci) { const c = this._cacheGet(sci); if (c) return c; }
     const key = this.getKey();
@@ -27,6 +27,8 @@ export const gemini = {
       `"meaning": Erkläre in 2-3 Sätzen anschaulich für Laien, was Ruf/Gesang dieser Art ` +
       `typischerweise bedeutet (Reviergesang, Warnruf, Balz, Kontaktruf …).\n` +
       `"steckbrief": 1-2 Sätze (Größe, Lebensraum, Besonderheit).\n` +
+      `"photoTip": 1-2 Sätze spezifischer Fotografen-Tipp für genau diese Art — ` +
+      `wann, wo und wie man sie am besten ablichten kann (Tageszeit, Verhalten, bevorzugter Standort).\n` +
       `Auf Deutsch, sachlich korrekt; bei Unsicherheit vorsichtig formulieren.`;
     const body = {
       contents: [{ parts: [{ text: prompt }] }],
@@ -35,8 +37,8 @@ export const gemini = {
         responseMimeType: 'application/json',
         responseSchema: {
           type: 'OBJECT',
-          properties: { meaning: { type: 'STRING' }, steckbrief: { type: 'STRING' } },
-          required: ['meaning', 'steckbrief']
+          properties: { meaning: { type: 'STRING' }, steckbrief: { type: 'STRING' }, photoTip: { type: 'STRING' } },
+          required: ['meaning', 'steckbrief', 'photoTip']
         }
       }
     };
