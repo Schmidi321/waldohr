@@ -5,8 +5,50 @@ import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cle
 import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal } from './ui.js';
 import { fetchWeather } from './weather.js';
 import { routeTracker } from './route.js';
-import { checkAlarms, getFotoWecker } from './alarm.js';
+import { checkAlarms, getFotoWecker, getDauerUeberwachung } from './alarm.js';
 import { openCamera } from './camera.js';
+
+// ---- In-App Lightbox für Fotos ----
+function openPhotoLightbox(url) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center';
+  const img = document.createElement('img');
+  img.src = url;
+  img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;border-radius:6px';
+  const close = document.createElement('button');
+  close.innerHTML = '&times;';
+  close.style.cssText = 'position:absolute;top:max(16px,env(safe-area-inset-top));right:16px;background:rgba(0,0,0,.6);border:none;color:#fff;font-size:28px;line-height:1;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center';
+  const dismiss = () => { ov.remove(); try { document.removeEventListener('keydown', onKey); } catch {} };
+  const onKey = e => { if (e.key === 'Escape') dismiss(); };
+  close.onclick = dismiss;
+  ov.onclick = e => { if (e.target === ov) dismiss(); };
+  document.addEventListener('keydown', onKey);
+  ov.append(img, close);
+  document.body.appendChild(ov);
+}
+
+// ---- Dauerüberwachung Timer ----
+let _duTimeout = null, _duInterval = null;
+function startDauerUeberwachung() {
+  stopDauerUeberwachung();
+  const du = getDauerUeberwachung();
+  if (!du.enabled) return;
+  const ms = du.durationMin * 60 * 1000;
+  const end = Date.now() + ms;
+  _duInterval = setInterval(() => {
+    const rem = Math.max(0, Math.ceil((end - Date.now()) / 60000));
+    if (audio.running) setUI('mic', 'Lauscht… noch ' + rem + ' Min');
+  }, 30000);
+  _duTimeout = setTimeout(() => {
+    stopDauerUeberwachung();
+    showInfoToast('⏱ Dauerüberwachung', 'Zeitlimit erreicht — Lauschen gestoppt.', '⏱');
+    if (audio.running) { audio.stop(); detectionActive = false; setUI('off'); stopSession(); }
+  }, ms);
+}
+function stopDauerUeberwachung() {
+  if (_duTimeout) { clearTimeout(_duTimeout); _duTimeout = null; }
+  if (_duInterval) { clearInterval(_duInterval); _duInterval = null; }
+}
 
 let alarmCtx = null;
 function warmAlarmCtx() {
@@ -152,14 +194,14 @@ function onAlarm(type) {
   }
   if (type === 'nacht-end') {
     showInfoToast('🦉 Nacht-Modus beendet', 'Geplante Endzeit erreicht — Lauschen gestoppt.', '🦉');
-    if (audio.running) { audio.stop(); detectionActive = false; setUI('off'); stopSession(); }
+    if (audio.running) { stopDauerUeberwachung(); audio.stop(); detectionActive = false; setUI('off'); stopSession(); }
     return;
   }
   const isMC = type === 'morgenchor';
   showInfoToast(isMC ? '🌅 Morgenchor-Alarm' : '🦉 Nacht-Modus', isMC ? 'Sonnenaufgang naht — Lauschen gestartet!' : 'Geplante Zeit — Lauschen gestartet!', isMC ? '🌅' : '🦉');
   if (!audio.running) {
     tryFullscreen();
-    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); }).catch(e => console.warn('alarm mic', e));
+    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); }).catch(e => console.warn('alarm mic', e));
   }
 }
 
@@ -452,7 +494,7 @@ function attachmentRow(a) {
     row.appendChild(el);
   } else {
     const img = document.createElement('img'); img.className = 'photo-thumb'; img.src = url; img.alt = a.label || 'Foto';
-    img.onclick = () => window.open(url, '_blank');
+    img.onclick = () => openPhotoLightbox(url);
     row.appendChild(img);
   }
   if (a.label) {
@@ -547,7 +589,7 @@ if (routeToggleBtn) routeToggleBtn.onclick = () => {
 function toggleDetection() {
   if (!audio.running) {
     tryFullscreen();
-    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); })
+    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); })
       .catch(e => { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); });
     return;
   }
@@ -561,12 +603,12 @@ if (orbBtn) orbBtn.addEventListener('click', async ev => {
   if (ev.target.closest('.rec-pill')) return;
   if (audio.running) {
     if (recorder.mr && recorder.mr.state === 'recording') recorder.mr.stop();
-    audio.stop(); detectionActive = false; setUI('off');
+    stopDauerUeberwachung(); audio.stop(); detectionActive = false; setUI('off');
     stopSession();
     return;
   }
   tryFullscreen();
-  try { await audio.start(); geo.start(); setUI('mic-ready'); routeTracker.start(); updateRouteToggleBtn(true); }
+  try { await audio.start(); geo.start(); setUI('mic-ready'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); }
   catch (e) { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); }
 });
 
@@ -691,7 +733,7 @@ async function _saveCapture({ blob, mime, kind, label, key }) {
     row.appendChild(vid);
   } else {
     const img = document.createElement('img'); img.className = 'photo-thumb'; img.src = url; img.alt = label || 'Foto';
-    img.onclick = () => window.open(url, '_blank');
+    img.onclick = () => openPhotoLightbox(url);
     row.appendChild(img);
   }
   if (label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.style.flex = '1'; lb.textContent = label; row.appendChild(lb); }

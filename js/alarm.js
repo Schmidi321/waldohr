@@ -88,3 +88,12 @@ export async function checkAlarms(lat, lng, onFire) {
     if (Math.abs(nowMin - (fw.hour * 60 + fw.minute)) <= 1) { _fired.fotowecker = todayStr; onFire('fotowecker'); }
   }
 }
+
+const LS_DU = 'waldohr.dauerub';
+export function getDauerUeberwachung() {
+  try { return JSON.parse(localStorage.getItem(LS_DU)) || { enabled: false, durationMin: 30 }; }
+  catch { return { enabled: false, durationMin: 30 }; }
+}
+export function setDauerUeberwachung(cfg) {
+  try { localStorage.setItem(LS_DU, JSON.stringify(cfg)); } catch {}
+}

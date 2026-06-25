@@ -2,7 +2,7 @@
 import { SPECIES, SPECIES_LIST, ensureSpecies } from './species.js';
 import { gemini } from './gemini.js';
 import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats, getQualifyConfidence, setQualifyConfidence } from './db.js';
-import { getMorgenchor, setMorgenchor, getNachtModus, setNachtModus, getFotoWecker, setFotoWecker, getSunriseFull } from './alarm.js';
+import { getMorgenchor, setMorgenchor, getNachtModus, setNachtModus, getFotoWecker, setFotoWecker, getSunriseFull, getDauerUeberwachung, setDauerUeberwachung } from './alarm.js';
 import { weatherEmoji, weatherLabel, fetchTomorrowMorning } from './weather.js';
 
 const $ = id => document.getElementById(id);
@@ -181,10 +181,18 @@ export function initUI() {
     const fw = getFotoWecker();
     const fwParts = ($('fwTime')?.value || '05:30').split(':');
     setFotoWecker({ enabled: $('fwEnabled')?.checked ?? fw.enabled, hour: parseInt(fwParts[0]) || 5, minute: parseInt(fwParts[1]) || 30, vibrateOnly: $('fwVibrateOnly')?.checked ?? fw.vibrateOnly ?? false });
+    const duPreset = $('duPresets')?.querySelector('.du-preset.on');
+    setDauerUeberwachung({ enabled: $('duEnabled')?.checked ?? false, durationMin: parseInt(duPreset?.dataset.min ?? '30') });
   }
-  ['mcEnabled','nmEnabled','nmEndEnabled','fwEnabled','fwVibrateOnly'].forEach(id => {
+  ['mcEnabled','nmEnabled','nmEndEnabled','fwEnabled','fwVibrateOnly','duEnabled'].forEach(id => {
     const el = $(id); if (el) el.addEventListener('change', autoSaveTiming);
   });
+  const duPresetsEl = $('duPresets');
+  if (duPresetsEl) duPresetsEl.querySelectorAll('.du-preset').forEach(b => b.addEventListener('click', () => {
+    duPresetsEl.querySelectorAll('.du-preset').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    autoSaveTiming();
+  }));
   ['nmTime','nmEndTime','fwTime'].forEach(id => {
     const el = $(id); if (el) el.addEventListener('change', autoSaveTiming);
   });
@@ -670,7 +678,22 @@ function exportOrnitho(dets) {
   _dlBlob(_csvBlob(rows), 'waldohr-ornitho-' + new Date().toISOString().slice(0, 10) + '.csv');
 }
 function renderExportTab() {
-  const dets = lastStatDets;
+  // Scope-Toggle einmalig verdrahten
+  const scopeEl = $('exportScope');
+  if (scopeEl && !scopeEl._wired) {
+    scopeEl._wired = true;
+    scopeEl.querySelectorAll('button').forEach(b => b.onclick = () => {
+      scopeEl.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      _renderExportContent();
+    });
+  }
+  _renderExportContent();
+}
+function _renderExportContent() {
+  const scopeEl = $('exportScope');
+  const scope = scopeEl?.querySelector('button.on')?.dataset.scope ?? 'here';
+  const dets = scope === 'here' ? todayNearbyDetections(lastStatDets, lastStatPos) : lastStatDets;
   const groups = _groupByDateSpecies(dets);
   const dates = [...new Set(groups.map(g => g.date))].sort();
   const speciesCount = new Set(groups.map(g => g.key)).size;
@@ -1153,6 +1176,12 @@ export async function openTimingModal(pos) {
   if ($('fwEnabled')) $('fwEnabled').checked = fw.enabled;
   if ($('fwTime')) $('fwTime').value = String(fw.hour).padStart(2, '0') + ':' + String(fw.minute).padStart(2, '0');
   if ($('fwVibrateOnly')) $('fwVibrateOnly').checked = fw.vibrateOnly ?? false;
+  // Dauerüberwachung: gespeicherten Zustand laden
+  const du = getDauerUeberwachung();
+  if ($('duEnabled')) $('duEnabled').checked = du.enabled;
+  const duPr = $('duPresets');
+  if (duPr) duPr.querySelectorAll('.du-preset').forEach(b => b.classList.toggle('on', parseInt(b.dataset.min) === du.durationMin));
+
   // Sonnenaufgang-Karte: Klick → Detail-Popup toggle (einmalig verdrahten)
   const srCard = $('fwSunriseCard');
   if (srCard && !srCard._popupWired) {
