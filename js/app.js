@@ -2,7 +2,7 @@
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard } from './ui.js';
 
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
@@ -191,6 +191,21 @@ function makeDeleteBtn(row, url, key, attId) {
   return del;
 }
 
+// Teilen-Button für Foto-Zeilen: baut Share-Karte mit eigenem Foto und öffnet nativen Share-Dialog.
+function makeShareBtn(url, key, label) {
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.title = 'Teilen'; btn.className = 'rec-dl'; btn.style.color = 'var(--muted)';
+  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
+  btn.onclick = async ev => {
+    ev.stopPropagation();
+    const orig = btn.innerHTML; btn.disabled = true; btn.textContent = '⏳';
+    try { await sharePhotoCard(url, key, label, geo.pos); }
+    catch (e) { if (e && e.name !== 'AbortError') console.warn('share', e); }
+    finally { btn.innerHTML = orig; btn.disabled = false; }
+  };
+  return btn;
+}
+
 // Baut eine Aufnahme/Foto-Zeile aus einem gespeicherten Anhang (nach Reload) — selbe Optik wie
 // frisch erzeugte Zeilen, aber aus dem in IndexedDB gesicherten Blob statt einer Live-Aufnahme.
 function attachmentRow(a) {
@@ -218,6 +233,7 @@ function attachmentRow(a) {
   const prefix = (a.label || 'waldohr').toLowerCase().replace(/[^a-z0-9]+/g, '_');
   const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.' + ext; dl.textContent = '⬇'; dl.title = 'Herunterladen';
   row.appendChild(dl);
+  if (a.kind === 'photo') row.appendChild(makeShareBtn(url, a.key, a.label));
   row.appendChild(makeDeleteBtn(row, url, a.key, a.id));
   return row;
 }
@@ -411,6 +427,7 @@ if (photoInput) {
     let attId = null;
     try { attId = await addAttachment({ key: photoKey, label: photoLabel, kind: 'photo', blob: file, mime: file.type }); }
     catch (e) { console.warn('addAttachment', e); }
+    row.appendChild(makeShareBtn(url, photoKey, photoLabel));
     row.appendChild(makeDeleteBtn(row, url, null, attId));
     const list = document.getElementById('recList'); if (list) list.prepend(row);
     if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
