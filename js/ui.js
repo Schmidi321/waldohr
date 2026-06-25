@@ -805,6 +805,92 @@ async function togglePlayCall(sci) {
   const icon = $('mPlayIcon'); if (icon) icon.innerHTML = '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>';
 }
 
+// ---- Share-Karte (Canvas, 1080×1080, Instagram/WhatsApp-tauglich) ----
+function _rRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+function _wrapText(ctx, text, x, y, maxW, lh) {
+  const words = text.split(' '); let line = '';
+  for (const w of words) {
+    const t = line ? line + ' ' + w : w;
+    if (ctx.measureText(t).width > maxW && line) { ctx.fillText(line, x, y); line = w; y += lh; }
+    else { line = t; }
+  }
+  if (line) ctx.fillText(line, x, y);
+}
+async function buildShareCard(sp, imgUrl, credit, pos) {
+  const W = 1080, H = 1080;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  // Background gradient
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#061a0f'); bg.addColorStop(0.65, '#04130d'); bg.addColorStop(1, '#020d09');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  // Subtle lime grid
+  ctx.strokeStyle = 'rgba(163,230,53,0.04)'; ctx.lineWidth = 1;
+  for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  for (let x = 0; x < W; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  // Bird image
+  const IY = 54, IH = 560;
+  if (imgUrl) {
+    await new Promise(res => {
+      const img = new Image(); img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const ir = img.width / img.height;
+        let iw = W - 120, ih = IH;
+        if (iw / ih > ir) iw = ih * ir; else ih = iw / ir;
+        const ix = (W - iw) / 2, iy = IY + (IH - ih) / 2;
+        ctx.save(); _rRect(ctx, ix, iy, iw, ih, 22); ctx.clip();
+        ctx.drawImage(img, ix, iy, iw, ih);
+        const fade = ctx.createLinearGradient(0, iy + ih * 0.55, 0, iy + ih);
+        fade.addColorStop(0, 'rgba(4,19,13,0)'); fade.addColorStop(1, 'rgba(4,19,13,0.5)');
+        ctx.fillStyle = fade; ctx.fillRect(ix, iy, iw, ih);
+        ctx.restore(); res();
+      };
+      img.onerror = res; img.src = imgUrl;
+    });
+  }
+  // Lime accent line
+  ctx.fillStyle = 'rgba(163,230,53,0.65)'; ctx.fillRect(80, 640, W - 160, 3);
+  ctx.textAlign = 'center';
+  // Species name
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 86px Outfit, sans-serif';
+  _wrapText(ctx, sp.name || '', W / 2, 716, W - 100, 98);
+  // Scientific name
+  ctx.fillStyle = 'rgba(163,230,53,0.88)'; ctx.font = 'italic 38px Inter, sans-serif';
+  ctx.fillText(sp.sci || '', W / 2, 800);
+  // Location + date
+  const dateStr = new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
+  ctx.font = '28px Inter, sans-serif';
+  if (pos) {
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillText('📍 ' + pos.lat.toFixed(4) + '° N, ' + pos.lng.toFixed(4) + '° O · ' + dateStr, W / 2, 870);
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText(dateStr, W / 2, 870);
+  }
+  // Separator
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(80, 928); ctx.lineTo(W - 80, 928); ctx.stroke();
+  // Branding
+  ctx.fillStyle = 'rgba(163,230,53,0.9)'; ctx.font = '600 32px Outfit, sans-serif';
+  ctx.fillText('🌿 WaldOhr', W / 2, 982);
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = '22px Inter, sans-serif';
+  ctx.fillText('Tierstimmen erkennen', W / 2, 1016);
+  // Photo credit
+  if (credit && credit.artist) {
+    ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.font = '18px Inter, sans-serif';
+    ctx.fillText('Foto: ' + credit.artist + (credit.license ? ' · ' + credit.license : ''), W / 2, 1055);
+  }
+  return new Promise(res => cv.toBlob(res, 'image/jpeg', 0.93));
+}
+
 let modalToken = 0;
 function openModal(key) {
   const sp = SPECIES[key] || SPECIES.amsel;
@@ -824,12 +910,27 @@ function openModal(key) {
     let ov = document.getElementById('_imgOv');
     if (!ov) {
       ov = document.createElement('div'); ov.id = '_imgOv';
-      ov.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(2,8,6,.93);display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+      ov.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(2,8,6,.68);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:zoom-out';
       const img = document.createElement('img');
-      img.style.cssText = 'max-width:95%;max-height:95%;object-fit:contain;border-radius:16px;box-shadow:0 8px 40px #000';
-      ov.appendChild(img); ov.onclick = () => ov.remove(); document.body.appendChild(ov);
+      img.style.cssText = 'max-width:92%;max-height:80vh;object-fit:contain;border-radius:18px;box-shadow:0 12px 60px rgba(0,0,0,.75)';
+      const cr = document.createElement('div'); cr.id = '_imgCredit';
+      cr.style.cssText = 'margin-top:10px;font-size:11px;color:rgba(255,255,255,.4);text-align:center;max-width:85%;cursor:default;padding:0 8px';
+      ov.append(img, cr);
+      ov.onclick = e => { if (e.target === ov || e.target === img) ov.remove(); };
+      document.body.appendChild(ov);
     }
     ov.querySelector('img').src = full;
+    const crEl = document.getElementById('_imgCredit');
+    if (crEl) {
+      const c = av._credit;
+      if (c && (c.artist || c.license)) {
+        crEl.textContent = '📷 ' + (c.artist || 'Wikimedia Commons') + (c.license ? ' · ' + c.license : '');
+        crEl.style.cursor = c.pageUrl ? 'pointer' : 'default';
+        crEl.onclick = c.pageUrl ? e => { e.stopPropagation(); window.open(c.pageUrl, '_blank'); } : null;
+      } else {
+        crEl.textContent = 'Wikimedia Commons';
+      }
+    }
     if (!ov.isConnected) document.body.appendChild(ov);
   };
   applySpeciesImage(av, sp.sci);
@@ -840,17 +941,34 @@ function openModal(key) {
   $('sheet').classList.add('open');
 
   const shareBtn = $('mShareBtn');
-  if (shareBtn) shareBtn.onclick = () => {
-    const text = `Ich habe gerade ${sp.name} (${sp.sci}) erkannt! 🐦 #WaldOhr #Naturbeobachtung`;
-    if (navigator.share) {
-      navigator.share({ title: 'WaldOhr – ' + sp.name, text, url: location.href }).catch(() => {});
-    } else if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(() => {
-        const orig = shareBtn.innerHTML;
-        shareBtn.textContent = '✓';
-        setTimeout(() => { shareBtn.innerHTML = orig; }, 2000);
-      }).catch(() => {});
-    }
+  if (shareBtn) shareBtn.onclick = async () => {
+    const det = lastDetForKey(key);
+    const pos = (det && typeof det.lat === 'number') ? { lat: det.lat, lng: det.lng } : (livePos || null);
+    const imgUrl = (() => {
+      const b = av.style.backgroundImage;
+      if (!b || !b.includes('url(')) return null;
+      const mm = b.match(/url\(["']?([^"')]+)["']?\)/);
+      return mm ? mm[1].replace(/\/thumb\//, '/').replace(/\/\d+px-[^/]+$/, '') : null;
+    })();
+    const origHtml = shareBtn.innerHTML;
+    shareBtn.innerHTML = '<span style="font-size:12px;line-height:1">⏳</span>';
+    shareBtn.disabled = true;
+    try {
+      const blob = await buildShareCard(sp, imgUrl, av._credit || null, pos);
+      const fname = 'waldohr-' + (sp.name || 'vogel').toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.jpg';
+      const file = blob ? new File([blob], fname, { type: 'image/jpeg' }) : null;
+      let locTxt = pos ? '\n📍 ' + pos.lat.toFixed(4) + '° N, ' + pos.lng.toFixed(4) + '° O' : '';
+      const text = sp.name + ' (' + sp.sci + ') entdeckt! 🐦' + locTxt + '\n\n#WaldOhr #Ornithologie #Vogelbeobachtung #Natur';
+      if (file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ title: 'WaldOhr – ' + sp.name, text, files: [file] });
+      } else if (navigator.share) {
+        await navigator.share({ title: 'WaldOhr – ' + sp.name, text, url: location.href });
+      } else if (blob) {
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+        a.download = fname; a.click();
+      }
+    } catch (e) { if (e && e.name !== 'AbortError') console.warn('share', e); }
+    finally { shareBtn.innerHTML = origHtml; shareBtn.disabled = false; }
   };
 
   stopCallAudio();
@@ -898,7 +1016,9 @@ function openModal(key) {
     fetchSpeciesWiki(sp.sci).then(w => {
       if (token !== modalToken || !w || !w.img) return;
       fetchImageCredit(w.img).then(c => {
-        if (token !== modalToken || !creditEl || !c || (!c.artist && !c.license)) return;
+        if (token !== modalToken || !c) return;
+        av._credit = c;
+        if (!creditEl || (!c.artist && !c.license)) return;
         creditEl.innerHTML = `📷 ${c.artist || 'Wikimedia Commons'}${c.license ? ' · ' + c.license : ''}`;
         creditEl.onclick = () => c.pageUrl && window.open(c.pageUrl, '_blank');
         creditEl.hidden = false;
