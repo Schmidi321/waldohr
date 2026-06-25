@@ -2,7 +2,7 @@
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal } from './ui.js';
 import { fetchWeather } from './weather.js';
 import { routeTracker } from './route.js';
 import { checkAlarms } from './alarm.js';
@@ -114,11 +114,21 @@ let compassHeading = null;
 })();
 
 function onAlarm(type) {
+  if (type === 'fotowecker') {
+    showInfoToast('📷 Fotografen-Wecker', 'Zeit fürs Sonnenaufgang-Shooting! Viel Licht!', '📷');
+    try { if ('vibrate' in navigator) navigator.vibrate([400, 200, 400, 200, 800]); } catch {}
+    return;
+  }
+  if (type === 'nacht-end') {
+    showInfoToast('🦉 Nacht-Modus beendet', 'Geplante Endzeit erreicht — Lauschen gestoppt.', '🦉');
+    if (audio.running) { audio.stop(); detectionActive = false; setUI('off'); stopSession(); }
+    return;
+  }
   const isMC = type === 'morgenchor';
   showInfoToast(isMC ? '🌅 Morgenchor-Alarm' : '🦉 Nacht-Modus', isMC ? 'Sonnenaufgang naht — Lauschen gestartet!' : 'Geplante Zeit — Lauschen gestartet!', isMC ? '🌅' : '🦉');
   if (!audio.running) {
     tryFullscreen();
-    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); }).catch(e => console.warn('alarm mic', e));
+    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); }).catch(e => console.warn('alarm mic', e));
   }
 }
 
@@ -292,8 +302,14 @@ function tryFullscreen() {
 }
 document.addEventListener('click', tryFullscreen);
 
+const routeToggleBtn = document.getElementById('routeToggleBtn');
+function updateRouteToggleBtn(active) {
+  if (routeToggleBtn) routeToggleBtn.classList.toggle('active', active);
+}
+
 function stopSession() {
   const s = routeTracker.stop();
+  updateRouteToggleBtn(false);
   if (s && s.pointCount >= 2) {
     const dist = s.distKm < 1 ? Math.round(s.distKm * 1000) + ' m' : s.distKm.toFixed(2) + ' km';
     showInfoToast('Route beendet', dist + ' · ' + s.pointCount + ' GPS-Punkte', '📍', () => {
@@ -304,10 +320,26 @@ function stopSession() {
   updateRouteMap([]);
 }
 
+// Timing-Knopf (neben Galerie): öffnet Alarme/Zeitplanung-Modal.
+const timingBtn = document.getElementById('timingBtn');
+if (timingBtn) timingBtn.onclick = () => openTimingModal(geo.pos);
+
+// Route-Toggle im Karte-Tab: Route manuell starten/stoppen ohne Mikro.
+if (routeToggleBtn) routeToggleBtn.onclick = () => {
+  if (routeTracker._timer) {
+    stopSession();
+  } else {
+    geo.start();
+    routeTracker.start();
+    updateRouteToggleBtn(true);
+    showInfoToast('Route gestartet', 'GPS-Track wird aufgezeichnet.', '📍');
+  }
+};
+
 function toggleDetection() {
   if (!audio.running) {
     tryFullscreen();
-    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); })
+    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); })
       .catch(e => { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); });
     return;
   }
@@ -326,7 +358,7 @@ if (orbBtn) orbBtn.addEventListener('click', async ev => {
     return;
   }
   tryFullscreen();
-  try { await audio.start(); geo.start(); setUI('mic-ready'); routeTracker.start(); }
+  try { await audio.start(); geo.start(); setUI('mic-ready'); routeTracker.start(); updateRouteToggleBtn(true); }
   catch (e) { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); }
 });
 

@@ -2,7 +2,7 @@
 import { SPECIES, SPECIES_LIST, ensureSpecies } from './species.js';
 import { gemini } from './gemini.js';
 import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats, getQualifyConfidence, setQualifyConfidence } from './db.js';
-import { getMorgenchor, setMorgenchor, getNachtModus, setNachtModus } from './alarm.js';
+import { getMorgenchor, setMorgenchor, getNachtModus, setNachtModus, getFotoWecker, setFotoWecker, getSunrise } from './alarm.js';
 import { weatherEmoji, weatherLabel } from './weather.js';
 
 const $ = id => document.getElementById(id);
@@ -132,13 +132,6 @@ export function initUI() {
     const sv = serverUrlGet();
     $('serverUrl').value = sv;
     $('serverStat').textContent = sv ? 'gesetzt ✓' : 'nicht gesetzt (Demo)';
-    const mc = getMorgenchor();
-    if ($('mcEnabled')) $('mcEnabled').checked = mc.enabled;
-    if ($('mcOffset')) $('mcOffset').value = mc.offsetMin;
-    if ($('mcOffsetVal')) $('mcOffsetVal').textContent = mc.offsetMin + ' Min';
-    const nm = getNachtModus();
-    if ($('nmEnabled')) $('nmEnabled').checked = nm.enabled;
-    if ($('nmTime')) $('nmTime').value = String(nm.hour).padStart(2, '0') + ':' + String(nm.minute).padStart(2, '0');
     settings.classList.add('open');
   };
   $('settingsScrim').onclick = closeSettings;
@@ -148,23 +141,14 @@ export function initUI() {
     xcKeySet($('xcKey').value);
     const before = serverUrlGet();
     const after = serverUrlSet($('serverUrl').value);
-    if ($('mcEnabled') && $('mcOffset')) {
-      setMorgenchor({ enabled: $('mcEnabled').checked, offsetMin: parseInt($('mcOffset').value) || 15 });
-    }
-    if ($('nmEnabled') && $('nmTime')) {
-      const parts = ($('nmTime').value || '22:00').split(':');
-      setNachtModus({ enabled: $('nmEnabled').checked, hour: parseInt(parts[0]) || 22, minute: parseInt(parts[1]) || 0 });
-    }
     closeSettings();
-    if (after !== before) location.reload();   // Recognizer wird beim Start gewählt
+    if (after !== before) location.reload();
   };
 
-  // Beobachtungsliste — Schnellzugriff (Stern-Icon im Topbar) UND Settings-Eintrag öffnen dieselbe Liste.
+  // Beobachtungsliste — nur noch über Stern-Icon im Topbar.
   const favModal = $('favModal');
   const favSearch = $('favSearch');
   const openFavList = () => { if (favSearch) favSearch.value = ''; renderFavList(); favModal.classList.add('open'); };
-  const favOpenBtn = $('favOpenBtn');
-  if (favOpenBtn && favModal) favOpenBtn.onclick = () => { closeSettings(); openFavList(); };
   const favQuickBtn = $('favQuickBtn');
   if (favQuickBtn && favModal) favQuickBtn.onclick = openFavList;
   const favScrim = $('favScrim'); if (favScrim) favScrim.onclick = () => favModal.classList.remove('open');
@@ -180,6 +164,26 @@ export function initUI() {
   if (tipsOpenBtn && tipsModal) tipsOpenBtn.onclick = () => { closeSettings(); tipsModal.classList.add('open'); };
   const tipsScrim = $('tipsScrim'); if (tipsScrim) tipsScrim.onclick = () => tipsModal.classList.remove('open');
   const tipsClose = $('tipsClose'); if (tipsClose) tipsClose.onclick = () => tipsModal.classList.remove('open');
+
+  // Timing-Modal — close/save verdrahten (open erfolgt über exportiertes openTimingModal)
+  const timingModal = $('timingModal');
+  const closeTimingModal = () => timingModal && timingModal.classList.remove('open');
+  const timingScrim = $('timingScrim'); if (timingScrim) timingScrim.onclick = closeTimingModal;
+  const timingClose = $('timingClose'); if (timingClose) timingClose.onclick = closeTimingModal;
+  const timingSave = $('timingSave');
+  if (timingSave) timingSave.onclick = () => {
+    const mc = getMorgenchor();
+    setMorgenchor({ enabled: $('mcEnabled')?.checked ?? mc.enabled, offsetMin: parseInt($('mcOffset')?.value) || 15 });
+    const nm = getNachtModus();
+    const nmStart = ($('nmTime')?.value || '22:00').split(':');
+    const nmEnd = ($('nmEndTime')?.value || '23:30').split(':');
+    setNachtModus({ enabled: $('nmEnabled')?.checked ?? nm.enabled, hour: parseInt(nmStart[0]) || 22, minute: parseInt(nmStart[1]) || 0, endEnabled: $('nmEndEnabled')?.checked ?? nm.endEnabled, endHour: parseInt(nmEnd[0]) || 23, endMinute: parseInt(nmEnd[1]) || 30 });
+    const fw = getFotoWecker();
+    const fwParts = ($('fwTime')?.value || '05:30').split(':');
+    setFotoWecker({ enabled: $('fwEnabled')?.checked ?? fw.enabled, hour: parseInt(fwParts[0]) || 5, minute: parseInt(fwParts[1]) || 30 });
+    closeTimingModal();
+    showInfoToast('Timing gespeichert', 'Alarme werden zur eingestellten Zeit ausgelöst.', '⏰');
+  };
 
   setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
   initWakeLockToggle();
@@ -1066,6 +1070,40 @@ function openModal(key) {
   }
 }
 function closeSheet() { $('sheet').classList.remove('open'); stopOrientation(); stopCallAudio(); curTargetGeo = null; }
+
+// Timing-Modal öffnen: lädt aktuelle Einstellungen + Sonnenaufgang für heute.
+export async function openTimingModal(pos) {
+  const modal = $('timingModal');
+  if (!modal) return;
+  // Morgenchor
+  const mc = getMorgenchor();
+  if ($('mcEnabled')) $('mcEnabled').checked = mc.enabled;
+  if ($('mcOffset')) { $('mcOffset').value = mc.offsetMin; if ($('mcOffsetVal')) $('mcOffsetVal').textContent = mc.offsetMin + ' Min'; }
+  // Nacht-Modus
+  const nm = getNachtModus();
+  if ($('nmEnabled')) $('nmEnabled').checked = nm.enabled;
+  if ($('nmTime')) $('nmTime').value = String(nm.hour).padStart(2, '0') + ':' + String(nm.minute).padStart(2, '0');
+  if ($('nmEndTime')) $('nmEndTime').value = String(nm.endHour ?? 23).padStart(2, '0') + ':' + String(nm.endMinute ?? 30).padStart(2, '0');
+  if ($('nmEndEnabled')) $('nmEndEnabled').checked = nm.endEnabled ?? false;
+  // Fotografen-Wecker
+  const fw = getFotoWecker();
+  if ($('fwEnabled')) $('fwEnabled').checked = fw.enabled;
+  if ($('fwTime')) $('fwTime').value = String(fw.hour).padStart(2, '0') + ':' + String(fw.minute).padStart(2, '0');
+  // Sonnenaufgang abrufen (asynchron, füllt #fwSunriseTime)
+  const srEl = $('fwSunriseTime');
+  if (srEl) srEl.textContent = '…';
+  if (pos && pos.lat != null) {
+    getSunrise(pos.lat, pos.lng).then(sr => {
+      if (!sr || !srEl) return;
+      const h = sr.getHours().toString().padStart(2, '0');
+      const m = sr.getMinutes().toString().padStart(2, '0');
+      if (srEl) srEl.textContent = h + ':' + m;
+    }).catch(() => { if (srEl) srEl.textContent = '– : –'; });
+  } else {
+    if (srEl) srEl.textContent = '– : –';
+  }
+  modal.classList.add('open');
+}
 
 // Galerie-Share: eigenes Foto → Share-Karte → nativer Share-Dialog.
 // Wird von app.js aus den Foto-Zeilen der Galerie aufgerufen.

@@ -1,6 +1,7 @@
-// Morgenchor-Alarm + Nacht-Modus: automatisches Starten des Lauschens zu geplanten Zeiten.
+// Morgenchor-Alarm + Nacht-Modus + Fotografen-Wecker: automatisches Lauschen & Wecken.
 const LS_MC = 'waldohr.morgenchor';
 const LS_NM = 'waldohr.nacht';
+const LS_FW = 'waldohr.fotowecker';
 
 // --- Morgenchor (Alarm vor Sonnenaufgang) ---
 export function getMorgenchor() {
@@ -11,18 +12,27 @@ export function setMorgenchor(cfg) {
   try { localStorage.setItem(LS_MC, JSON.stringify(cfg)); } catch {}
 }
 
-// --- Nacht-Modus (fester Startzeitpunkt) ---
+// --- Nacht-Modus (fester Start + optionales Ende) ---
 export function getNachtModus() {
-  try { return JSON.parse(localStorage.getItem(LS_NM)) || { enabled: false, hour: 22, minute: 0 }; }
-  catch { return { enabled: false, hour: 22, minute: 0 }; }
+  try { return JSON.parse(localStorage.getItem(LS_NM)) || { enabled: false, hour: 22, minute: 0, endEnabled: false, endHour: 23, endMinute: 30 }; }
+  catch { return { enabled: false, hour: 22, minute: 0, endEnabled: false, endHour: 23, endMinute: 30 }; }
 }
 export function setNachtModus(cfg) {
   try { localStorage.setItem(LS_NM, JSON.stringify(cfg)); } catch {}
 }
 
+// --- Fotografen-Wecker (Weckzeit für Sonnenaufgang-Shooting) ---
+export function getFotoWecker() {
+  try { return JSON.parse(localStorage.getItem(LS_FW)) || { enabled: false, hour: 5, minute: 30 }; }
+  catch { return { enabled: false, hour: 5, minute: 30 }; }
+}
+export function setFotoWecker(cfg) {
+  try { localStorage.setItem(LS_FW, JSON.stringify(cfg)); } catch {}
+}
+
 let _sunriseCache = null; // { dateStr, sunrise: Date }
 
-async function getSunrise(lat, lng) {
+export async function getSunrise(lat, lng) {
   const dateStr = new Date().toISOString().slice(0, 10);
   if (_sunriseCache && _sunriseCache.dateStr === dateStr) return _sunriseCache.sunrise;
   try {
@@ -39,8 +49,7 @@ async function getSunrise(lat, lng) {
   } catch { return null; }
 }
 
-// Tracks which alarms already fired today so we don't repeat in the same minute-check.
-const _fired = {}; // 'morgenchor' | 'nacht' => dateStr
+const _fired = {}; // type => dateStr
 
 export async function checkAlarms(lat, lng, onFire) {
   const now = new Date();
@@ -49,27 +58,32 @@ export async function checkAlarms(lat, lng, onFire) {
 
   // Morgenchor
   const mc = getMorgenchor();
-  if (mc.enabled && _fired.morgenchor !== todayStr) {
-    if (lat != null && lng != null) {
-      const sunrise = await getSunrise(lat, lng);
-      if (sunrise) {
-        const target = new Date(sunrise.getTime() - mc.offsetMin * 60000);
-        const tMin = target.getHours() * 60 + target.getMinutes();
-        if (Math.abs(nowMin - tMin) <= 1) {
-          _fired.morgenchor = todayStr;
-          onFire('morgenchor');
-        }
-      }
+  if (mc.enabled && _fired.morgenchor !== todayStr && lat != null && lng != null) {
+    const sunrise = await getSunrise(lat, lng);
+    if (sunrise) {
+      const target = new Date(sunrise.getTime() - mc.offsetMin * 60000);
+      const tMin = target.getHours() * 60 + target.getMinutes();
+      if (Math.abs(nowMin - tMin) <= 1) { _fired.morgenchor = todayStr; onFire('morgenchor'); }
     }
   }
 
-  // Nacht-Modus
+  // Nacht-Modus Start
   const nm = getNachtModus();
   if (nm.enabled && _fired.nacht !== todayStr) {
     const tMin = nm.hour * 60 + nm.minute;
-    if (Math.abs(nowMin - tMin) <= 1) {
-      _fired.nacht = todayStr;
-      onFire('nacht');
-    }
+    if (Math.abs(nowMin - tMin) <= 1) { _fired.nacht = todayStr; onFire('nacht'); }
+  }
+
+  // Nacht-Modus Ende
+  if (nm.enabled && nm.endEnabled && _fired['nacht-end'] !== todayStr) {
+    const tMin = nm.endHour * 60 + nm.endMinute;
+    if (Math.abs(nowMin - tMin) <= 1) { _fired['nacht-end'] = todayStr; onFire('nacht-end'); }
+  }
+
+  // Fotografen-Wecker
+  const fw = getFotoWecker();
+  if (fw.enabled && _fired.fotowecker !== todayStr) {
+    const tMin = fw.hour * 60 + fw.minute;
+    if (Math.abs(nowMin - tMin) <= 1) { _fired.fotowecker = todayStr; onFire('fotowecker'); }
   }
 }
