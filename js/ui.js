@@ -1003,7 +1003,10 @@ function openModal(key) {
       const when = relTime(lastDet.ts);
       const where = (typeof lastDet.lat === 'number' && typeof lastDet.lng === 'number')
         ? lastDet.lat.toFixed(4) + '° N, ' + lastDet.lng.toFixed(4) + '° O' : null;
-      $('mLastInfo').textContent = where ? when + ' · ' + where : when;
+      const dirs = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
+      const dir = (typeof lastDet.heading === 'number')
+        ? '🧭 ' + dirs[Math.round(lastDet.heading / 45) % 8] + ' (' + lastDet.heading + '°)' : null;
+      $('mLastInfo').textContent = [when, where, dir].filter(Boolean).join(' · ');
     } else {
       lastBlock.hidden = true;
     }

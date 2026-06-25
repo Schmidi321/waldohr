@@ -96,6 +96,16 @@ async function refresh() {
   renderMap(qualifying);
 }
 
+// Kompass-Heading: passiv mithören — auf iOS greift das erst nach der Kompass-Freigabe im Detail-Sheet.
+let compassHeading = null;
+(function() {
+  const ev = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
+  window.addEventListener(ev, e => {
+    if (typeof e.webkitCompassHeading === 'number') compassHeading = Math.round(e.webkitCompassHeading);
+    else if (e.absolute && typeof e.alpha === 'number') compassHeading = Math.round((360 - e.alpha) % 360);
+  }, { passive: true });
+})();
+
 async function onWindow(samples, sampleRate) {
   if (!rec || !detectionActive) return;
   if (rec.setGeo) rec.setGeo(geo.pos);   // Standort für bessere Treffer (Server-Modus)
@@ -107,6 +117,7 @@ async function onWindow(samples, sampleRate) {
     ts: Date.now(), source: r.source || 'mic'
   };
   if (geo.pos) { det.lat = geo.pos.lat; det.lng = geo.pos.lng; }
+  if (compassHeading !== null) det.heading = compassHeading;
   try { det.id = await addDetection(det); } catch (e) { console.warn('store', e); }
   liveAdd(det);
   maybeAutoRecord(det, samples, sampleRate);
