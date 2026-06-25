@@ -9,6 +9,7 @@ const statusTxt = document.getElementById('statusTxt');
 
 const audio = new AudioEngine();
 let rec = null;
+let detectionActive = false;
 
 // Chip bleibt bewusst knapp ("GPS") — der volle Status (Genauigkeit, "verweigert" etc.)
 // steckt im title-Tooltip, die Farbe signalisiert den Zustand auf einen Blick.
@@ -96,7 +97,7 @@ async function refresh() {
 }
 
 async function onWindow(samples, sampleRate) {
-  if (!rec) return;
+  if (!rec || !detectionActive) return;
   if (rec.setGeo) rec.setGeo(geo.pos);   // Standort für bessere Treffer (Server-Modus)
   let r = null;
   try { r = await rec.classify(samples, sampleRate); } catch (e) { console.warn('classify', e); }
@@ -226,8 +227,11 @@ async function hydrateAttachments() {
 }
 
 // ---- Mikrofon-Steuerung ----
+// 'off': alles aus  |  'mic-ready': Mikro läuft, aber keine Erkennung  |  'mic': REC aktiv + Erkennung
 function setUI(mode, msg) {
-  if (mode === 'off') { body.classList.remove('listening'); statusTxt.textContent = msg || 'Tippe zum Lauschen'; renderLive(); return; }
+  body.classList.remove('listening', 'mic-ready');
+  if (mode === 'off') { statusTxt.textContent = msg || 'Tippe zum Lauschen'; renderLive(); return; }
+  if (mode === 'mic-ready') { body.classList.add('mic-ready'); statusTxt.textContent = msg || 'Mikrofon bereit – REC drücken'; renderLive(); return; }
   body.classList.add('listening');
   statusTxt.textContent = msg || 'Lauscht über dein Mikrofon…';
   renderLive();
@@ -246,9 +250,12 @@ document.addEventListener('click', tryFullscreen);
 const orbBtn = document.getElementById('orbBtn');
 if (orbBtn) orbBtn.addEventListener('click', async ev => {
   if (ev.target.closest('.rec-pill')) return;
-  if (audio.running) { audio.stop(); setUI('off'); return; }
+  if (audio.running) {
+    if (recorder.mr && recorder.mr.state === 'recording') recorder.mr.stop();
+    audio.stop(); detectionActive = false; setUI('off'); return;
+  }
   tryFullscreen();
-  try { await audio.start(); setUI('mic'); }
+  try { await audio.start(); geo.start(); setUI('mic-ready'); }
   catch (e) { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); }
 });
 
@@ -258,12 +265,16 @@ if (recBtn && !window.MediaRecorder) recBtn.style.display = 'none';
 const recorder = {
   mr: null, chunks: [], timer: null, t0: 0,
   fmt() { const s = Math.floor((Date.now() - this.t0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
-  setBtn(on) { if (!recBtn) return; recBtn.classList.toggle('rec-on', on); if (!on) { const t = document.getElementById('recTime'); if (t) t.textContent = 'REC'; } },
+  setBtn(on) {
+    if (recBtn) recBtn.classList.toggle('rec-on', on);
+    const fab = document.getElementById('recFab'); if (fab) fab.classList.toggle('rec-on', on);
+    if (!on) { const t = document.getElementById('recTime'); if (t) t.textContent = 'REC'; }
+  },
   async toggle(label, key) {
     if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
     if (!audio.running) {
       tryFullscreen();
-      try { await audio.start(); geo.start(); setUI('mic'); }
+      try { await audio.start(); geo.start(); }
       catch (e) { console.warn('mic', e); statusTxt.textContent = 'Mikro nicht erlaubt'; return; }
     }
     if (!audio.stream) return;
@@ -275,8 +286,14 @@ const recorder = {
     catch (e) { console.warn('rec', e); return; }
     this.chunks = []; this.label = label || null; this.key = key || null;
     this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
-    this.mr.onstop = () => { clearInterval(this.timer); this.setBtn(false); this.save(); };
+    this.mr.onstop = () => {
+      clearInterval(this.timer); this.setBtn(false);
+      detectionActive = false;
+      if (audio.running) setUI('mic-ready'); else setUI('off');
+      this.save();
+    };
     this.mr.start();
+    detectionActive = true; setUI('mic');
     this.t0 = Date.now(); this.setBtn(true);
     this.timer = setInterval(() => { const t = document.getElementById('recTime'); if (t) t.textContent = this.fmt(); }, 500);
   },
@@ -313,6 +330,9 @@ const recorder = {
   }
 };
 if (recBtn) recBtn.onclick = () => recorder.toggle();
+const recFab = document.getElementById('recFab');
+if (recFab && !window.MediaRecorder) recFab.style.display = 'none';
+if (recFab) recFab.onclick = () => recorder.toggle();
 // Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen und
 // verknüpft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
 window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);
