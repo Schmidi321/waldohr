@@ -193,9 +193,16 @@ function startOfWeek() {
 
 // Schwelle, ab der ein Fund in Statistik, Sammlung & Karte mitzählt — filtert unsichere
 // Erkennungen raus, ohne sie aus der Datenbank zu löschen (die Live-Liste zeigt weiter alles).
-export const QUALIFY_CONFIDENCE = 0.70;
+// In den Einstellungen einstellbar, Default 70 %.
+const DEFAULT_QUALIFY_CONFIDENCE = 0.70;
+export function getQualifyConfidence() {
+  try { const v = parseFloat(localStorage.getItem('waldohr.qualifyConf')); return isNaN(v) ? DEFAULT_QUALIFY_CONFIDENCE : v; }
+  catch { return DEFAULT_QUALIFY_CONFIDENCE; }
+}
+export function setQualifyConfidence(v) { try { localStorage.setItem('waldohr.qualifyConf', String(v)); } catch {} }
 export function qualifyingDetections(dets) {
-  return dets.filter(d => typeof d.confidence !== 'number' || d.confidence >= QUALIFY_CONFIDENCE);
+  const threshold = getQualifyConfidence();
+  return dets.filter(d => typeof d.confidence !== 'number' || d.confidence >= threshold);
 }
 
 export function computeStats(dets) {

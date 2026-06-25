@@ -139,14 +139,40 @@ export class BirdNetRecognizer {
 
 // 16-bit-PCM-Mono-WAV aus Float32-Samples bauen (fürs Hochladen ans Backend, auch für die
 // automatische Aufnahme in app.js wiederverwendet).
-export function encodeWav(samples, sampleRate) {
-  const n = samples.length, buf = new ArrayBuffer(44 + n * 2), dv = new DataView(buf);
+// Optionaler meta-Parameter: { name, date, comment } → RIFF LIST/INFO chunk (INAM/ICRD/ICMT).
+export function encodeWav(samples, sampleRate, meta) {
+  // Baut den optionalen LIST/INFO-Chunk für Vogelname, Datum, GPS-Kommentar.
+  let infoBuf = null;
+  if (meta) {
+    const enc = new TextEncoder();
+    const fields = [];
+    if (meta.name)    fields.push(['INAM', enc.encode(meta.name)]);
+    if (meta.date)    fields.push(['ICRD', enc.encode(meta.date)]);
+    if (meta.comment) fields.push(['ICMT', enc.encode(meta.comment)]);
+    if (fields.length) {
+      const subBytes = fields.reduce((a, [, b]) => a + 8 + b.length + (b.length % 2), 0);
+      infoBuf = new Uint8Array(12 + subBytes); // 'LIST'(4)+size(4)+'INFO'(4)+subchunks
+      const idv = new DataView(infoBuf.buffer);
+      const ws4 = (o, s) => { for (let i = 0; i < 4; i++) infoBuf[o + i] = s.charCodeAt(i); };
+      ws4(0, 'LIST'); idv.setUint32(4, 4 + subBytes, true); ws4(8, 'INFO');
+      let o = 12;
+      for (const [id, bytes] of fields) {
+        ws4(o, id); o += 4;
+        idv.setUint32(o, bytes.length, true); o += 4;
+        infoBuf.set(bytes, o); o += bytes.length;
+        if (bytes.length % 2) { infoBuf[o] = 0; o += 1; }
+      }
+    }
+  }
+  const n = samples.length, extra = infoBuf ? infoBuf.length : 0;
+  const buf = new ArrayBuffer(44 + n * 2 + extra), dv = new DataView(buf);
   const ws = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
-  ws(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); ws(8, 'WAVE'); ws(12, 'fmt ');
+  ws(0, 'RIFF'); dv.setUint32(4, 36 + n * 2 + extra, true); ws(8, 'WAVE'); ws(12, 'fmt ');
   dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
   dv.setUint32(24, sampleRate, true); dv.setUint32(28, sampleRate * 2, true);
   dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); ws(36, 'data'); dv.setUint32(40, n * 2, true);
   let o = 44; for (let i = 0; i < n; i++) { const s = Math.max(-1, Math.min(1, samples[i])); dv.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7FFF, true); o += 2; }
+  if (infoBuf) new Uint8Array(buf).set(infoBuf, o);
   return new Blob([buf], { type: 'audio/wav' });
 }
 const week48 = () => { const d = new Date(); return d.getMonth() * 4 + Math.min(3, ((d.getDate() - 1) / 7) | 0) + 1; };

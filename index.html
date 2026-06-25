@@ -26,7 +26,7 @@
       <div class="splash-icon" style="background-image:url('icons/icon-512.png')"></div>
       <div class="splash-word">WaldOhr</div>
       <div class="splash-tag">Erkennt Vogelstimmen &amp; Tierlaute live über dein Mikrofon — direkt beim Spaziergang, im Garten oder im Wald.</div>
-      <div class="splash-hint">Zum Fortfahren tippen</div>
+      <button class="splash-continue" id="splashContinue">Weiter</button>
       <div class="splash-by">AppReich</div>
     </div>
 
@@ -48,7 +48,7 @@
 
       <div class="orb-stage">
         <span class="ring"></span><span class="ring"></span><span class="ring"></span>
-        <div class="orb">
+        <div class="orb" id="orbBtn" role="button" tabindex="0" aria-label="Lauschmodus starten/stoppen">
           <div class="sweep"></div>
           <div class="orb-core">
             <svg viewBox="0 0 24 24" fill="none" stroke="var(--emerald)" stroke-width="1.6" stroke-linecap="round"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M6 12a6 6 0 0 1 6-6"/><path d="M9 12a3 3 0 0 1 3-3"/><circle cx="12" cy="12" r="1.4" fill="var(--emerald)" stroke="none"/></svg>
@@ -67,7 +67,7 @@
 
       <div class="livehead"><span>Jetzt zu hören</span><span class="livecount" id="liveCount" style="margin-left:6px">0</span></div>
       <div class="livelist" id="liveList">
-        <div class="live-empty" id="liveEmpty">Tippe unten das Mikrofon – erkannte Vögel erscheinen hier in Echtzeit.</div>
+        <div class="live-empty" id="liveEmpty">Tippe auf "Lauschmodus" oben – erkannte Vögel erscheinen hier in Echtzeit.</div>
       </div>
       <div class="reclist" id="recList"></div>
     </section>
@@ -139,13 +139,6 @@
 
     <!-- Fotografen-Funktion: Direktbeleg-Foto zu einem Fund, öffnet die Gerätekamera -->
     <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" />
-
-    <!-- ============ MIC ============ -->
-    <div class="micbar">
-      <button class="mic" id="micBtn" aria-label="Aufnahme starten/stoppen">
-        <svg id="micIcon" viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>
-      </button>
-    </div>
 
     <!-- ============ NAV ============ -->
     <nav class="nav">
@@ -222,6 +215,14 @@
           <p style="margin-bottom:12px">URL deines BirdNET-Backends (z. B. HuggingFace-Space). Leer = Demo-Modus. Nach dem Speichern lädt die App neu.</p>
           <input id="serverUrl" type="url" autocomplete="off" inputmode="url" placeholder="https://…hf.space" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
           <div style="font-size:11px;color:var(--faint);margin-top:8px">Status: <span id="serverStat">nicht gesetzt</span></div>
+        </div>
+        <div class="infoblock">
+          <h3><span style="font-size:15px">🎚️</span> Empfindlichkeit</h3>
+          <p style="margin-bottom:14px">Ab welcher Erkennungssicherheit ein Fund in Sammlung/Statistik/Karte auftaucht, und ab wann automatisch eine Aufnahme gespeichert wird.</p>
+          <div class="sliderlabel"><span>In Sammlung aufnehmen ab</span><span id="qualifyVal">70%</span></div>
+          <input type="range" id="qualifySlider" min="50" max="95" step="5" value="70" />
+          <div class="sliderlabel" style="margin-top:16px"><span>Auto-Aufnahme speichern ab</span><span id="autoRecVal">85%</span></div>
+          <input type="range" id="autoRecSlider" min="50" max="98" step="1" value="85" />
         </div>
         <div class="infoblock">
           <h3><span style="font-size:15px">📱</span> Display an lassen</h3>

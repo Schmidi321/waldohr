@@ -1,7 +1,7 @@
 // Rendering: Erkennungs-Karte, Sammlung, Statistik-Diagramme, Detail-Sheet, Navigation.
 import { SPECIES, SPECIES_LIST, ensureSpecies } from './species.js';
 import { gemini } from './gemini.js';
-import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats } from './db.js';
+import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats, getQualifyConfidence, setQualifyConfidence } from './db.js';
 
 const $ = id => document.getElementById(id);
 const DEFAULT_GRAD = ['#0e5840', '#0a4733'];
@@ -115,9 +115,6 @@ export function initUI() {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     $('v-' + b.dataset.v).classList.add('active');
     if (b.dataset.v === 'map') invalidateMapSize();
-    // Der Mikro-Knopf gehört nur auf die Lauschen-Seite, nicht auf Karte/Sammlung/Statistik.
-    const micbar = document.querySelector('.micbar');
-    if (micbar) micbar.style.display = b.dataset.v === 'listen' ? '' : 'none';
   });
   $('sheetScrim').onclick = closeSheet;
   $('sheetClose').onclick = closeSheet;
@@ -170,6 +167,7 @@ export function initUI() {
 
   setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
   initWakeLockToggle();
+  initSensitivitySliders();
 
   // Sammlung: "Heute hier" / "Global nach Ort"
   const toggle = $('collToggle');
@@ -218,6 +216,24 @@ function initWakeLockToggle() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && wakeLockGet()) applyWakeLock(true);
   });
+}
+
+function initSensitivitySliders() {
+  const qs = $('qualifySlider'), qv = $('qualifyVal');
+  const as = $('autoRecSlider'), av = $('autoRecVal');
+  if (!qs || !as) return;
+  const curQ = Math.round(getQualifyConfidence() * 100);
+  qs.value = curQ; if (qv) qv.textContent = curQ + '%';
+  const curA = (() => { try { const v = parseFloat(localStorage.getItem('waldohr.autoRecConf')); return isNaN(v) ? 85 : Math.round(v * 100); } catch { return 85; } })();
+  as.value = curA; if (av) av.textContent = curA + '%';
+  qs.oninput = () => {
+    const v = parseInt(qs.value, 10); if (qv) qv.textContent = v + '%';
+    setQualifyConfidence(v / 100);
+  };
+  as.oninput = () => {
+    const v = parseInt(as.value, 10); if (av) av.textContent = v + '%';
+    try { localStorage.setItem('waldohr.autoRecConf', String(v / 100)); } catch {}
+  };
 }
 
 function serverUrlGet() { try { return localStorage.getItem('waldohr.server') || ''; } catch { return ''; } }

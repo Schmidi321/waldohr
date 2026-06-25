@@ -6,7 +6,6 @@ import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, u
 
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
-const micIcon = document.getElementById('micIcon');
 
 const audio = new AudioEngine();
 let rec = null;
@@ -42,8 +41,20 @@ const geo = {
   stop() { if (this.watchId != null) { navigator.geolocation.clearWatch(this.watchId); this.watchId = null; } setLoc('off', 'Standort aus'); }
 };
 
+function wireSplash() {
+  const splash = document.getElementById('splash');
+  const btn = document.getElementById('splashContinue');
+  if (!splash) return;
+  const hide = () => splash.classList.add('hide');
+  if (btn) {
+    setTimeout(() => btn.classList.add('show'), 2000);
+    btn.addEventListener('click', hide, { once: true });
+  } else {
+    setTimeout(hide, 3000);
+  }
+}
+
 async function boot() {
-  const splashStart = Date.now();
   initUI();
   try { await seedIfEmpty(); } catch (e) { console.warn('seed', e); }
   try { await migrateGeo(); } catch (e) { console.warn('migrateGeo', e); }
@@ -63,14 +74,7 @@ async function boot() {
   startSpectrogram();
   registerSW();
 
-  // Startbildschirm bleibt mindestens etwas länger sichtbar, auch wenn der Boot (Demo-Daten,
-  // Recognizer) schneller fertig ist — verschwindet sofort, falls der Boot länger gedauert hat
-  // als die Mindestzeit. Per Tap jederzeit sofort überspringbar.
-  const MIN_SPLASH_MS = 2200;
-  const splash = document.getElementById('splash');
-  const hideSplash = () => { if (splash) splash.classList.add('hide'); };
-  if (splash) splash.addEventListener('click', hideSplash, { once: true });
-  setTimeout(hideSplash, Math.max(0, MIN_SPLASH_MS - (Date.now() - splashStart)));
+  wireSplash();
 }
 
 // Während der Nutzer gerade mit dem Finger auf dem Bildschirm scrollt, NICHT die Listen/Karten
@@ -108,10 +112,14 @@ async function onWindow(samples, sampleRate) {
   refresh();
 }
 
-// ---- Automatische Aufnahme: ab 85% Konfidenz wird der gerade klassifizierte Ausschnitt
-// direkt als WAV gespeichert — aber nur einmal pro Art und Kalendertag, gegen Datenflut bei
-// häufigen Arten. Tagesliste in localStorage, damit es auch über einen Reload hinweg gilt.
-const AUTO_RECORD_CONFIDENCE = 0.85;
+// ---- Automatische Aufnahme: ab einer einstellbaren Konfidenz (Default 85 %) wird der gerade
+// klassifizierte Ausschnitt direkt als WAV gespeichert — aber nur einmal pro Art und Kalendertag,
+// gegen Datenflut bei häufigen Arten. Tagesliste in localStorage, damit es auch über einen Reload
+// hinweg gilt.
+function getAutoRecordConfidence() {
+  try { const v = parseFloat(localStorage.getItem('waldohr.autoRecConf')); return isNaN(v) ? 0.85 : v; }
+  catch { return 0.85; }
+}
 const todayKey = () => { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); };
 function autoRecordedToday() {
   try { return JSON.parse(localStorage.getItem('waldohr.autorec.' + todayKey()) || '[]'); } catch { return []; }
@@ -123,20 +131,27 @@ function markAutoRecorded(key) {
   } catch {}
 }
 async function maybeAutoRecord(det, samples, sampleRate) {
-  if (det.confidence < AUTO_RECORD_CONFIDENCE) return;
+  if (det.confidence < getAutoRecordConfidence()) return;
   if (autoRecordedToday().includes(det.key)) return;
   markAutoRecorded(det.key);
   let enhanced = samples;
   try { enhanced = await enhanceSamples(samples, sampleRate); } catch (e) { console.warn('enhance', e); }
-  const blob = encodeWav(enhanced, sampleRate);
-  const url = URL.createObjectURL(blob);
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const now = new Date();
+  const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const prefix = det.species.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  const gpsStr = geo.pos ? geo.pos.lat.toFixed(5) + ',' + geo.pos.lng.toFixed(5) : '';
+  const blob = encodeWav(enhanced, sampleRate, {
+    name: det.species,
+    date: now.toISOString().slice(0, 10) + ' ' + now.toLocaleTimeString('de-DE'),
+    comment: gpsStr || undefined
+  });
+  const url = URL.createObjectURL(blob);
+  const gpsTag = geo.pos ? '_' + geo.pos.lat.toFixed(4) + '_' + geo.pos.lng.toFixed(4) : '';
   const row = document.createElement('div'); row.className = 'rec-row';
   const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
   wireAudioRouting(a);
   const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
-  const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.wav'; dl.textContent = '⬇'; dl.title = 'Herunterladen';
+  const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + gpsTag + '.wav'; dl.textContent = '⬇'; dl.title = 'Herunterladen';
   let attId = null;
   try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime: 'audio/wav' }); }
   catch (e) { console.warn('addAttachment', e); }
@@ -211,14 +226,9 @@ async function hydrateAttachments() {
 }
 
 // ---- Mikrofon-Steuerung ----
-function setIcon(stop) {
-  micIcon.innerHTML = stop
-    ? '<rect x="7" y="7" width="10" height="10" rx="2"/>'
-    : '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/>';
-}
 function setUI(mode, msg) {
-  if (mode === 'off') { body.classList.remove('listening'); statusTxt.textContent = msg || 'Tippe zum Lauschen'; setIcon(false); renderLive(); return; }
-  body.classList.add('listening'); setIcon(true);
+  if (mode === 'off') { body.classList.remove('listening'); statusTxt.textContent = msg || 'Tippe zum Lauschen'; renderLive(); return; }
+  body.classList.add('listening');
   statusTxt.textContent = msg || 'Lauscht über dein Mikrofon…';
   renderLive();
 }
@@ -233,12 +243,14 @@ function tryFullscreen() {
 }
 document.addEventListener('click', tryFullscreen);
 
-document.getElementById('micBtn').onclick = async () => {
+const orbBtn = document.getElementById('orbBtn');
+if (orbBtn) orbBtn.addEventListener('click', async ev => {
+  if (ev.target.closest('.rec-pill')) return;
   if (audio.running) { audio.stop(); setUI('off'); return; }
   tryFullscreen();
   try { await audio.start(); setUI('mic'); }
   catch (e) { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); }
-};
+});
 
 // ---- Tonaufnahme (manuell) ----
 const recBtn = document.getElementById('recBtn');
