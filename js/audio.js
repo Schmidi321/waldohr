@@ -95,8 +95,8 @@ export async function enhanceSamples(samples, sampleRate) {
   let peak = 0, sumSq = 0;
   for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > peak) peak = a; sumSq += data[i] * data[i]; }
   const rms = Math.sqrt(sumSq / data.length);
-  const TARGET_RMS = 0.12, PEAK_CEIL = 0.95;
-  let boost = rms > 0.0005 ? Math.min(TARGET_RMS / rms, 16) : 1;
+  const TARGET_RMS = 0.25, PEAK_CEIL = 0.95;
+  let boost = rms > 0.0005 ? Math.min(TARGET_RMS / rms, 24) : 1;
   if (peak * boost > PEAK_CEIL) boost = PEAK_CEIL / peak;
   const out = new Float32Array(data.length);
   for (let i = 0; i < data.length; i++) out[i] = Math.max(-1, Math.min(1, data[i] * boost));

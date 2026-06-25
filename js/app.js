@@ -338,6 +338,15 @@ if (clipBtn && !window.MediaRecorder) clipBtn.style.display = 'none';
 if (clipBtn) clipBtn.onclick = () => recorder.toggle();
 const photoFab = document.getElementById('photoFab');
 if (photoFab) photoFab.onclick = () => { photoLabel = null; photoKey = null; photoInput && photoInput.click(); };
+const galleryModal = document.getElementById('galleryModal');
+const galleryBtn = document.getElementById('galleryBtn');
+const galleryClose = document.getElementById('galleryClose');
+const galleryScrim = document.getElementById('galleryScrim');
+const openGallery = () => galleryModal && galleryModal.classList.add('open');
+const closeGallery = () => galleryModal && galleryModal.classList.remove('open');
+if (galleryBtn) galleryBtn.onclick = openGallery;
+if (galleryClose) galleryClose.onclick = closeGallery;
+if (galleryScrim) galleryScrim.onclick = closeGallery;
 // Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen und
 // verknüpft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
 window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);

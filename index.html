@@ -65,22 +65,10 @@
       <div class="spectro"><canvas id="spec"></canvas></div>
       <div class="level"><div class="level-fill" id="levelFill"></div></div>
 
-      <div class="livehead"><span>Jetzt zu hören</span><span class="livecount" id="liveCount" style="margin-left:6px">0</span></div>
+      <div class="livehead"><span>Jetzt zu hören</span><span class="livecount" id="liveCount" style="margin-left:6px">0</span><button class="gallery-btn" id="galleryBtn" title="Aufnahmen & Fotos" aria-label="Aufnahmen & Fotos öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none"/><path d="M21 15l-5-5L5 21"/></svg></button></div>
       <div class="livelist" id="liveList">
         <div class="live-empty" id="liveEmpty">Mikrofon starten, dann REC drücken – erkannte Vögel erscheinen hier.</div>
       </div>
-      <div class="rechead">
-        <span>Aufnahmen</span>
-        <div class="rec-actions">
-          <button class="rec-action-btn" id="clipBtn" title="Tonclip aufnehmen" aria-label="Tonclip aufnehmen">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>
-          </button>
-          <button class="rec-action-btn" id="photoFab" title="Foto aufnehmen" aria-label="Foto aufnehmen">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-          </button>
-        </div>
-      </div>
-      <div class="reclist" id="recList"></div>
     </section>
 
     <!-- ============ MAP ============ -->
@@ -150,6 +138,29 @@
 
     <!-- Fotografen-Funktion: Direktbeleg-Foto zu einem Fund, öffnet die Gerätekamera -->
     <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" />
+
+    <!-- ============ GALLERY ============ -->
+    <div class="modal" id="galleryModal">
+      <div class="scrim" id="galleryScrim"></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="rechead" style="padding:0 0 14px">
+          <span>Aufnahmen & Fotos</span>
+          <div class="rec-actions">
+            <button class="rec-action-btn" id="clipBtn" title="Tonclip aufnehmen" aria-label="Tonclip aufnehmen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>
+            </button>
+            <button class="rec-action-btn" id="photoFab" title="Foto aufnehmen" aria-label="Foto aufnehmen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+            </button>
+            <button class="rec-action-btn" id="galleryClose" title="Schließen" aria-label="Schließen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="reclist" id="recList"></div>
+      </div>
+    </div>
 
     <!-- ============ NAV ============ -->
     <nav class="nav">
