@@ -5,7 +5,37 @@ import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cle
 import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal } from './ui.js';
 import { fetchWeather } from './weather.js';
 import { routeTracker } from './route.js';
-import { checkAlarms } from './alarm.js';
+import { checkAlarms, getFotoWecker } from './alarm.js';
+
+let alarmCtx = null;
+function warmAlarmCtx() {
+  if (!alarmCtx || alarmCtx.state === 'closed') {
+    try { alarmCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+  } else if (alarmCtx.state === 'suspended') {
+    alarmCtx.resume().catch(() => {});
+  }
+}
+async function playFotoAlarm(vibrateOnly) {
+  try { if ('vibrate' in navigator) navigator.vibrate([400, 200, 400, 200, 800, 200, 1200]); } catch {}
+  if (vibrateOnly) return;
+  warmAlarmCtx();
+  if (!alarmCtx) return;
+  try {
+    if (alarmCtx.state === 'suspended') await alarmCtx.resume();
+    const t = alarmCtx.currentTime;
+    // C5→E5→G5→C6, zweimal wiederholt
+    [[523.25,0],[659.25,.28],[783.99,.56],[1046.5,.84],[523.25,1.5],[659.25,1.78],[783.99,2.06],[1046.5,2.34]].forEach(([freq, delay]) => {
+      const osc = alarmCtx.createOscillator();
+      const gain = alarmCtx.createGain();
+      osc.type = 'sine'; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, t + delay);
+      gain.gain.linearRampToValueAtTime(0.32, t + delay + 0.03);
+      gain.gain.linearRampToValueAtTime(0, t + delay + 0.22);
+      osc.connect(gain); gain.connect(alarmCtx.destination);
+      osc.start(t + delay); osc.stop(t + delay + 0.25);
+    });
+  } catch (e) { console.warn('alarm audio', e); }
+}
 
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
@@ -116,7 +146,7 @@ let compassHeading = null;
 function onAlarm(type) {
   if (type === 'fotowecker') {
     showInfoToast('📷 Fotografen-Wecker', 'Zeit fürs Sonnenaufgang-Shooting! Viel Licht!', '📷');
-    try { if ('vibrate' in navigator) navigator.vibrate([400, 200, 400, 200, 800]); } catch {}
+    playFotoAlarm(getFotoWecker().vibrateOnly);
     return;
   }
   if (type === 'nacht-end') {
@@ -322,7 +352,7 @@ function stopSession() {
 
 // Timing-Knopf (neben Galerie): öffnet Alarme/Zeitplanung-Modal.
 const timingBtn = document.getElementById('timingBtn');
-if (timingBtn) timingBtn.onclick = () => openTimingModal(geo.pos);
+if (timingBtn) timingBtn.onclick = () => { warmAlarmCtx(); openTimingModal(geo.pos); };
 
 // Route-Toggle im Karte-Tab: Route manuell starten/stoppen ohne Mikro.
 if (routeToggleBtn) routeToggleBtn.onclick = () => {

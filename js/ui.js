@@ -2,8 +2,8 @@
 import { SPECIES, SPECIES_LIST, ensureSpecies } from './species.js';
 import { gemini } from './gemini.js';
 import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats, getQualifyConfidence, setQualifyConfidence } from './db.js';
-import { getMorgenchor, setMorgenchor, getNachtModus, setNachtModus, getFotoWecker, setFotoWecker, getSunrise } from './alarm.js';
-import { weatherEmoji, weatherLabel } from './weather.js';
+import { getMorgenchor, setMorgenchor, getNachtModus, setNachtModus, getFotoWecker, setFotoWecker, getSunriseFull } from './alarm.js';
+import { weatherEmoji, weatherLabel, fetchTomorrowMorning } from './weather.js';
 
 const $ = id => document.getElementById(id);
 const DEFAULT_GRAD = ['#0e5840', '#0a4733'];
@@ -180,7 +180,7 @@ export function initUI() {
     setNachtModus({ enabled: $('nmEnabled')?.checked ?? nm.enabled, hour: parseInt(nmStart[0]) || 22, minute: parseInt(nmStart[1]) || 0, endEnabled: $('nmEndEnabled')?.checked ?? nm.endEnabled, endHour: parseInt(nmEnd[0]) || 23, endMinute: parseInt(nmEnd[1]) || 30 });
     const fw = getFotoWecker();
     const fwParts = ($('fwTime')?.value || '05:30').split(':');
-    setFotoWecker({ enabled: $('fwEnabled')?.checked ?? fw.enabled, hour: parseInt(fwParts[0]) || 5, minute: parseInt(fwParts[1]) || 30 });
+    setFotoWecker({ enabled: $('fwEnabled')?.checked ?? fw.enabled, hour: parseInt(fwParts[0]) || 5, minute: parseInt(fwParts[1]) || 30, vibrateOnly: $('fwVibrateOnly')?.checked ?? fw.vibrateOnly ?? false });
     closeTimingModal();
     showInfoToast('Timing gespeichert', 'Alarme werden zur eingestellten Zeit ausgelöst.', '⏰');
   };
@@ -1071,7 +1071,7 @@ function openModal(key) {
 }
 function closeSheet() { $('sheet').classList.remove('open'); stopOrientation(); stopCallAudio(); curTargetGeo = null; }
 
-// Timing-Modal öffnen: lädt aktuelle Einstellungen + Sonnenaufgang für heute.
+// Timing-Modal öffnen: lädt aktuelle Einstellungen + Sonnenaufgang + Morgen-Wetter.
 export async function openTimingModal(pos) {
   const modal = $('timingModal');
   if (!modal) return;
@@ -1089,18 +1089,56 @@ export async function openTimingModal(pos) {
   const fw = getFotoWecker();
   if ($('fwEnabled')) $('fwEnabled').checked = fw.enabled;
   if ($('fwTime')) $('fwTime').value = String(fw.hour).padStart(2, '0') + ':' + String(fw.minute).padStart(2, '0');
-  // Sonnenaufgang abrufen (asynchron, füllt #fwSunriseTime)
+  if ($('fwVibrateOnly')) $('fwVibrateOnly').checked = fw.vibrateOnly ?? false;
+  // Sonnenaufgang-Karte: Klick → Detail-Popup toggle (einmalig verdrahten)
+  const srCard = $('fwSunriseCard');
+  if (srCard && !srCard._popupWired) {
+    srCard._popupWired = true;
+    srCard.addEventListener('click', () => {
+      const popup = $('fwDetailPopup');
+      if (popup) popup.hidden = !popup.hidden;
+    });
+  }
+  // Sonnenaufgang + Dämmerungsphasen abrufen
   const srEl = $('fwSunriseTime');
   if (srEl) srEl.textContent = '…';
   if (pos && pos.lat != null) {
-    getSunrise(pos.lat, pos.lng).then(sr => {
-      if (!sr || !srEl) return;
-      const h = sr.getHours().toString().padStart(2, '0');
-      const m = sr.getMinutes().toString().padStart(2, '0');
-      if (srEl) srEl.textContent = h + ':' + m;
+    getSunriseFull(pos.lat, pos.lng).then(full => {
+      if (!full) { if (srEl) srEl.textContent = '– : –'; return; }
+      const fmt = d => d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+      if (srEl) srEl.textContent = fmt(full.sunrise);
+      const popup = $('fwDetailPopup');
+      if (popup) {
+        const golden = new Date(full.sunrise.getTime() + 60 * 60000);
+        const el = id => $(id);
+        if (el('fwPhaseAstro')) el('fwPhaseAstro').textContent = fmt(full.astronomicalBegin);
+        if (el('fwPhaseNaut')) el('fwPhaseNaut').textContent = fmt(full.nauticalBegin);
+        if (el('fwPhaseCivil')) el('fwPhaseCivil').textContent = fmt(full.civilBegin);
+        if (el('fwPhaseSunrise')) el('fwPhaseSunrise').textContent = fmt(full.sunrise);
+        if (el('fwPhaseGolden')) el('fwPhaseGolden').textContent = fmt(full.sunrise) + '–' + fmt(golden);
+      }
     }).catch(() => { if (srEl) srEl.textContent = '– : –'; });
+    // Morgen-Wetter laden
+    const wtEl = $('tmwWeatherContent');
+    if (wtEl) wtEl.innerHTML = '<div style="color:var(--faint);font-size:12px;text-align:center;padding:8px 0">Prognose wird geladen …</div>';
+    fetchTomorrowMorning(pos.lat, pos.lng).then(slots => {
+      if (!wtEl) return;
+      if (!slots || !slots.length) { wtEl.innerHTML = '<div style="color:var(--faint);font-size:12px;text-align:center">Keine Prognose verfügbar.</div>'; return; }
+      wtEl.innerHTML = '<div class="tmw-slots">' + slots.map(s => {
+        const fogRisk = s.visKm < 2 ? ' 🌫️' : s.visKm < 5 ? ' 🌁' : '';
+        return `<div class="tmw-slot">
+          <div class="tmw-h">${s.hour}:00</div>
+          <div class="tmw-ico">${weatherEmoji(s.wmo)}${fogRisk}</div>
+          <div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}°</div>
+          <div class="tmw-cc">${s.cloudcover}% ☁️</div>
+          <div class="tmw-rain">${s.precipProb > 0 ? '💧' + s.precipProb + '%' : ''}</div>
+        </div>`;
+      }).join('') + '</div>';
+    }).catch(() => { if (wtEl) wtEl.innerHTML = '<div style="color:var(--faint);font-size:12px;text-align:center">Fehler beim Laden.</div>'; });
   } else {
     if (srEl) srEl.textContent = '– : –';
+    const wtEl = $('tmwWeatherContent');
+    if (wtEl) wtEl.innerHTML = '<div style="color:var(--faint);font-size:12px;text-align:center;padding:8px 0">Standort benötigt · GPS aktivieren</div>';
   }
   modal.classList.add('open');
 }

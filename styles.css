@@ -375,3 +375,21 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .you-dot{position:absolute;inset:5px;border-radius:50%;background:var(--cyan);border:2px solid #04130d;box-shadow:0 0 0 1px #67e8f988}
 .you-pulse{position:absolute;inset:0;border-radius:50%;background:#67e8f955;animation:pulseyou 2s ease-out infinite}
 @keyframes pulseyou{0%{transform:scale(.4);opacity:.9}100%{transform:scale(2.2);opacity:0}}
+
+/* Fotografen-Wecker: Klapp-Popup Lichtphasen */
+.fw-detail-popup{background:rgba(0,0,0,.3);border:1px solid var(--stroke);border-radius:14px;padding:12px 14px;margin-top:10px}
+.fw-detail-popup[hidden]{display:none}
+.fw-phase{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--stroke);font-size:13px}
+.fw-phase:last-child{border-bottom:none}
+.fw-phase-label{flex:1;color:var(--muted)}
+.fw-phase-time{font-weight:600;font-variant-numeric:tabular-nums;color:var(--lime);min-width:72px;text-align:right}
+
+/* Timing-Modal: Morgen-Wetter stündliche Kacheln */
+.tmw-slots{display:flex;gap:8px;overflow-x:auto;padding:4px 0 8px;scrollbar-width:none}
+.tmw-slots::-webkit-scrollbar{display:none}
+.tmw-slot{flex:0 0 auto;min-width:58px;text-align:center;background:var(--glass);border:1px solid var(--stroke);border-radius:12px;padding:8px 6px}
+.tmw-h{font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;margin-bottom:4px}
+.tmw-ico{font-size:18px;margin-bottom:3px;line-height:1.2}
+.tmw-temp{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:2px}
+.tmw-cc{font-size:10px;color:var(--faint);margin-bottom:2px}
+.tmw-rain{font-size:10px;color:var(--cyan);min-height:14px}
