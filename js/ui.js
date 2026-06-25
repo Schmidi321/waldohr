@@ -208,14 +208,17 @@ export function initUI() {
     });
   }
 
-  // Statistik: "Global" / "Heute hier"
+  // Statistik: "Global" / "Heute hier" / "Export"
   const statToggle = $('statToggle');
   if (statToggle) {
     statToggle.querySelectorAll('button').forEach(b => b.onclick = () => {
       statToggle.querySelectorAll('button').forEach(x => x.classList.remove('on'));
       b.classList.add('on');
       statMode = b.dataset.mode;
-      renderStatsForMode();
+      const isExport = statMode === 'export';
+      const sc = $('statContent'); if (sc) sc.hidden = isExport;
+      const se = $('statExport'); if (se) se.hidden = !isExport;
+      if (isExport) renderExportTab(); else renderStatsForMode();
     });
   }
 }
@@ -624,6 +627,60 @@ export function drawDayChart(hourly) {
   $('dayArea').setAttribute('d', d + ` L${R},104 L${L},104 Z`);
   let mi = 0; act.forEach((v, i) => { if (v > act[mi]) mi = i; });
   const pk = $('dayPeak'); pk.setAttribute('cx', pts[mi][0].toFixed(1)); pk.setAttribute('cy', pts[mi][1].toFixed(1));
+}
+
+// ---- eBird / Ornitho Export ----
+function _csvBlob(rows) {
+  const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+  return new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+}
+function _dlBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 8000);
+}
+function _groupByDateSpecies(dets) {
+  const map = new Map();
+  for (const d of dets) {
+    const date = new Date(d.ts).toISOString().slice(0, 10);
+    const k = date + '__' + d.key;
+    if (!map.has(k)) map.set(k, { species: d.species, sci: d.sci || '', key: d.key, date, count: 0, firstTs: d.ts, lat: d.lat, lng: d.lng });
+    const g = map.get(k);
+    g.count++;
+    if (d.ts < g.firstTs) { g.firstTs = d.ts; if (d.lat != null) g.lat = d.lat; if (d.lng != null) g.lng = d.lng; }
+  }
+  return [...map.values()].sort((a, b) => a.date.localeCompare(b.date) || a.species.localeCompare(b.species));
+}
+function exportEbird(dets) {
+  const groups = _groupByDateSpecies(dets);
+  const rows = [['Common Name', 'Scientific Name', 'Count', 'Date', 'Start Time', 'Duration (Min)', 'All Obs Reported', 'Location', 'Latitude', 'Longitude', 'Protocol', 'Checklist Comments']];
+  for (const g of groups) {
+    const time = new Date(g.firstTs).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+    rows.push([g.species, g.sci, g.count, g.date, time, '60', 'Y', 'WaldOhr', g.lat?.toFixed(6) ?? '', g.lng?.toFixed(6) ?? '', 'Stationary', 'WaldOhr app']);
+  }
+  _dlBlob(_csvBlob(rows), 'waldohr-ebird-' + new Date().toISOString().slice(0, 10) + '.csv');
+}
+function exportOrnitho(dets) {
+  const groups = _groupByDateSpecies(dets);
+  const rows = [['Art', 'Wissenschaftlicher Name', 'Anzahl', 'Datum', 'Uhrzeit', 'Breitengrad', 'Längengrad', 'Ort', 'Quelle']];
+  for (const g of groups) {
+    const time = new Date(g.firstTs).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    rows.push([g.species, g.sci, g.count, g.date, time, g.lat?.toFixed(6) ?? '', g.lng?.toFixed(6) ?? '', 'WaldOhr', 'WaldOhr app']);
+  }
+  _dlBlob(_csvBlob(rows), 'waldohr-ornitho-' + new Date().toISOString().slice(0, 10) + '.csv');
+}
+function renderExportTab() {
+  const dets = lastStatDets;
+  const groups = _groupByDateSpecies(dets);
+  const dates = [...new Set(groups.map(g => g.date))].sort();
+  const speciesCount = new Set(groups.map(g => g.key)).size;
+  const totalCount = groups.reduce((s, g) => s + g.count, 0);
+  const dateRange = dates.length > 1 ? dates[0] + ' – ' + dates[dates.length - 1] : (dates[0] || '–');
+  const kpi = (n, l) => `<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+  const summary = $('exportSummary');
+  if (summary) summary.innerHTML = kpi(speciesCount, 'Arten') + kpi(totalCount, 'Beobachtungen') + kpi(dateRange, 'Zeitraum');
+  const eb = $('ebirdBtn'); if (eb) eb.onclick = () => exportEbird(dets);
+  const ob = $('ornithoBtn'); if (ob) ob.onclick = () => exportOrnitho(dets);
 }
 
 // ---- Echte Karte (Leaflet + OpenStreetMap), lazy geladen erst wenn die Kartenansicht gebraucht wird ----

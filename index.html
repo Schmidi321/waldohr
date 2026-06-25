@@ -114,25 +114,42 @@
       <div class="segmented" id="statToggle">
         <button class="on" data-mode="here">Heute hier</button>
         <button data-mode="global">Global</button>
+        <button data-mode="export">🔬 Export</button>
       </div>
-      <div class="kpis" id="kpis"></div>
-      <div class="card">
-        <div class="ch">Häufigste Arten <em>nach Anzahl Rufe</em></div>
-        <div class="hb" id="topSpecies"></div>
+      <div id="statContent">
+        <div class="kpis" id="kpis"></div>
+        <div class="card">
+          <div class="ch">Häufigste Arten <em>nach Anzahl Rufe</em></div>
+          <div class="hb" id="topSpecies"></div>
+        </div>
+        <div class="card">
+          <div class="ch">Diese Woche <em>Rufe pro Tag</em></div>
+          <div class="vb" id="weekBars"></div>
+        </div>
+        <div class="card">
+          <div class="ch">Aktivität über den Tag <em>Spitze: Morgenchor</em></div>
+          <svg id="dayChart" viewBox="0 0 320 120" style="width:100%;height:118px;display:block">
+            <defs><linearGradient id="dg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a3e635" stop-opacity=".45"/><stop offset="1" stop-color="#a3e635" stop-opacity="0"/></linearGradient></defs>
+            <path id="dayArea" fill="url(#dg)"></path>
+            <path id="dayLine" fill="none" stroke="#a3e635" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+            <circle id="dayPeak" r="4" fill="#fbbf24" stroke="#04130d" stroke-width="1.5"></circle>
+          </svg>
+          <div class="axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24 Uhr</span></div>
+        </div>
       </div>
-      <div class="card">
-        <div class="ch">Diese Woche <em>Rufe pro Tag</em></div>
-        <div class="vb" id="weekBars"></div>
-      </div>
-      <div class="card">
-        <div class="ch">Aktivität über den Tag <em>Spitze: Morgenchor</em></div>
-        <svg id="dayChart" viewBox="0 0 320 120" style="width:100%;height:118px;display:block">
-          <defs><linearGradient id="dg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a3e635" stop-opacity=".45"/><stop offset="1" stop-color="#a3e635" stop-opacity="0"/></linearGradient></defs>
-          <path id="dayArea" fill="url(#dg)"></path>
-          <path id="dayLine" fill="none" stroke="#a3e635" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
-          <circle id="dayPeak" r="4" fill="#fbbf24" stroke="#04130d" stroke-width="1.5"></circle>
-        </svg>
-        <div class="axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24 Uhr</span></div>
+      <div id="statExport" hidden>
+        <div class="kpis" id="exportSummary"></div>
+        <div class="export-btns">
+          <button class="export-btn" id="ebirdBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+            <div><strong>eBird CSV</strong><span>Checklisten-Format für eBird.org</span></div>
+          </button>
+          <button class="export-btn" id="ornithoBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+            <div><strong>Ornitho CSV</strong><span>Beobachtungs-Format für Ornitho.de</span></div>
+          </button>
+        </div>
+        <p class="export-note">Exportiert alle qualifizierenden Funde (≥70 % Konfidenz) — inkl. Koordinaten, Uhrzeit und Wetterdaten, sofern vorhanden.</p>
       </div>
     </section>
 
@@ -171,43 +188,79 @@
 
         <div class="infoblock">
           <h3><span style="font-size:15px">🌅</span> Morgenchor</h3>
-          <svg viewBox="0 0 220 90" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:280px;display:block;margin:0 auto 12px">
+          <svg viewBox="0 0 320 100" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:320px;display:block;margin:0 auto 12px">
             <defs>
-              <radialGradient id="mcSunGlow" cx="100%" cy="100%" r="70%"><stop offset="0%" stop-color="#fbbf24" stop-opacity=".45"/><stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/></radialGradient>
-              <radialGradient id="mcMoonGlow" cx="0%" cy="20%" r="35%"><stop offset="0%" stop-color="#7ba8ff" stop-opacity=".18"/><stop offset="100%" stop-color="#7ba8ff" stop-opacity="0"/></radialGradient>
-              <clipPath id="mcHorizon"><rect x="0" y="0" width="220" height="72"/></clipPath>
+              <radialGradient id="mcSunGlow" cx="100%" cy="100%" r="65%"><stop offset="0%" stop-color="#fbbf24" stop-opacity=".5"/><stop offset="55%" stop-color="#f97316" stop-opacity=".2"/><stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/></radialGradient>
+              <radialGradient id="mcMoonGlow" cx="4%" cy="4%" r="28%"><stop offset="0%" stop-color="#7ba8ff" stop-opacity=".2"/><stop offset="100%" stop-color="#7ba8ff" stop-opacity="0"/></radialGradient>
+              <clipPath id="mcHorizon"><rect x="0" y="0" width="320" height="80"/></clipPath>
             </defs>
-            <rect width="220" height="90" fill="#050a1a" rx="10"/>
-            <ellipse cx="220" cy="90" rx="130" ry="110" fill="url(#mcSunGlow)"/>
-            <ellipse cx="0" cy="0" rx="80" ry="80" fill="url(#mcMoonGlow)"/>
-            <circle cx="22" cy="12" r="1.1" fill="#fff" opacity=".7"/>
-            <circle cx="48" cy="7" r=".8" fill="#fff" opacity=".6"/>
-            <circle cx="75" cy="16" r="1.2" fill="#fff" opacity=".7"/>
-            <circle cx="100" cy="9" r=".7" fill="#fff" opacity=".5"/>
-            <circle cx="15" cy="30" r=".6" fill="#fff" opacity=".45"/>
-            <circle cx="60" cy="28" r=".9" fill="#fff" opacity=".55"/>
-            <circle cx="32" cy="26" r="11" fill="#d0e0ff" opacity=".88"/>
-            <circle cx="38" cy="23" r="9.5" fill="#050a1a"/>
-            <line x1="10" y1="72" x2="210" y2="72" stroke="#f97316" stroke-width="1" opacity=".4"/>
-            <path d="M175 72 A15 15 0 0 1 205 72" fill="#fbbf24" opacity=".9" clip-path="url(#mcHorizon)"/>
-            <line x1="190" y1="54" x2="190" y2="47" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" opacity=".65"/>
-            <line x1="203" y1="60" x2="208" y2="55" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round" opacity=".55"/>
-            <line x1="172" y1="61" x2="168" y2="56" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round" opacity=".5"/>
-            <line x1="18" y1="90" x2="18" y2="50" stroke="#243322" stroke-width="3.5" stroke-linecap="round"/>
-            <line x1="10" y1="54" x2="26" y2="54" stroke="#243322" stroke-width="2.5" stroke-linecap="round"/>
-            <line x1="208" y1="90" x2="208" y2="52" stroke="#243322" stroke-width="3.5" stroke-linecap="round"/>
-            <line x1="200" y1="56" x2="216" y2="56" stroke="#243322" stroke-width="2.5" stroke-linecap="round"/>
-            <path d="M18 54 Q113 62 208 56" stroke="#364436" stroke-width="1.4" fill="none"/>
-            <path d="M18 57 Q113 65 208 59" stroke="#364436" stroke-width="1.4" fill="none"/>
-            <path d="M93 57 L86 64 L92 58" fill="#182510"/>
-            <ellipse cx="103" cy="51" rx="10" ry="6" fill="#182510"/>
-            <circle cx="112" cy="48" r="5.5" fill="#182510"/>
-            <path d="M116.5 48 L122 46.5" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
-            <path d="M116.5 49 L122 50" stroke="#f59e0b" stroke-width="1.4" stroke-linecap="round"/>
-            <circle cx="114" cy="47" r="1.4" fill="#fff" opacity=".85"/>
-            <line x1="100" y1="57" x2="98" y2="62" stroke="#182510" stroke-width="1.3" stroke-linecap="round"/>
-            <line x1="105" y1="57" x2="107" y2="62" stroke="#182510" stroke-width="1.3" stroke-linecap="round"/>
-            <text x="123" y="43" fill="#a3e635" font-size="8" opacity=".7">♫</text>
+            <rect width="320" height="100" fill="#050a1a" rx="10"/>
+            <ellipse cx="320" cy="100" rx="180" ry="160" fill="url(#mcSunGlow)"/>
+            <ellipse cx="0" cy="0" rx="110" ry="110" fill="url(#mcMoonGlow)"/>
+            <circle cx="30" cy="10" r="1.1" fill="#fff" opacity=".7"/>
+            <circle cx="65" cy="6" r=".8" fill="#fff" opacity=".6"/>
+            <circle cx="96" cy="14" r="1.2" fill="#fff" opacity=".7"/>
+            <circle cx="130" cy="8" r=".7" fill="#fff" opacity=".5"/>
+            <circle cx="158" cy="18" r=".9" fill="#fff" opacity=".55"/>
+            <circle cx="20" cy="30" r=".6" fill="#fff" opacity=".45"/>
+            <circle cx="70" cy="26" r=".9" fill="#fff" opacity=".55"/>
+            <circle cx="112" cy="28" r=".7" fill="#fff" opacity=".5"/>
+            <circle cx="38" cy="22" r="12" fill="#d0e0ff" opacity=".9"/>
+            <circle cx="44" cy="18.5" r="10.5" fill="#050a1a"/>
+            <line x1="10" y1="80" x2="310" y2="80" stroke="#f97316" stroke-width="1" opacity=".4"/>
+            <path d="M270 80 A22 22 0 0 1 314 80" fill="#fbbf24" opacity=".9" clip-path="url(#mcHorizon)"/>
+            <line x1="292" y1="54" x2="292" y2="46" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" opacity=".65"/>
+            <line x1="307" y1="62" x2="314" y2="56" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round" opacity=".55"/>
+            <line x1="275" y1="63" x2="268" y2="57" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round" opacity=".5"/>
+            <line x1="20" y1="100" x2="20" y2="52" stroke="#1a2c1a" stroke-width="4" stroke-linecap="round"/>
+            <line x1="12" y1="56" x2="28" y2="56" stroke="#1a2c1a" stroke-width="2.5" stroke-linecap="round"/>
+            <line x1="308" y1="100" x2="308" y2="54" stroke="#1a2c1a" stroke-width="4" stroke-linecap="round"/>
+            <line x1="300" y1="58" x2="316" y2="58" stroke="#1a2c1a" stroke-width="2.5" stroke-linecap="round"/>
+            <path d="M20 56 Q164 66 308 58" stroke="#2d4a2d" stroke-width="1.4" fill="none"/>
+            <path d="M20 59 Q164 70 308 62" stroke="#2d4a2d" stroke-width="1.4" fill="none"/>
+            <!-- Bird 1: x=60, large, facing right -->
+            <path d="M49 58 L41 64 L49 59" fill="#101c10"/>
+            <ellipse cx="60" cy="52.5" rx="11" ry="6" fill="#141f14"/>
+            <circle cx="70" cy="49.5" r="6" fill="#141f14"/>
+            <path d="M75 49.5 L81 48 M75 50.5 L81 52" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="72" cy="48" r="1.6" fill="#fff" opacity=".9"/><circle cx="72.4" cy="48" r=".8" fill="#111"/>
+            <line x1="56" y1="58.5" x2="53" y2="63" stroke="#101c10" stroke-width="1.4" stroke-linecap="round"/>
+            <line x1="63" y1="58.5" x2="65" y2="63" stroke="#101c10" stroke-width="1.4" stroke-linecap="round"/>
+            <!-- Bird 2: x=110, medium, facing right, beak OPEN, singing -->
+            <path d="M99 60 L92 66 L99 61" fill="#101c10"/>
+            <ellipse cx="110" cy="54.5" rx="10" ry="5.5" fill="#182518"/>
+            <circle cx="119" cy="51.5" r="5.5" fill="#182518"/>
+            <line x1="123.5" y1="50.5" x2="129" y2="48.5" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="123.5" y1="53" x2="129" y2="55" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="121" cy="50" r="1.4" fill="#fff" opacity=".9"/><circle cx="121.3" cy="50" r=".7" fill="#111"/>
+            <line x1="106" y1="60" x2="104" y2="65" stroke="#182518" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="113" y1="60" x2="115" y2="65" stroke="#182518" stroke-width="1.3" stroke-linecap="round"/>
+            <text x="130" y="44" fill="#a3e635" font-size="9" opacity=".85">♫</text>
+            <!-- Bird 3: x=162, small, facing LEFT (toward moon) -->
+            <path d="M172 61.5 L180 67 L172 62.5" fill="#101c10"/>
+            <ellipse cx="160" cy="57" rx="9" ry="5" fill="#1a281a"/>
+            <circle cx="151" cy="54" r="5" fill="#1a281a"/>
+            <path d="M147 54 L141.5 53 M147 55 L141.5 56" stroke="#f59e0b" stroke-width="1.4" stroke-linecap="round"/>
+            <circle cx="149" cy="52.8" r="1.3" fill="#fff" opacity=".9"/><circle cx="148.7" cy="52.8" r=".65" fill="#111"/>
+            <line x1="157" y1="62" x2="155" y2="67" stroke="#1a281a" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="164" y1="62" x2="166" y2="67" stroke="#1a281a" stroke-width="1.3" stroke-linecap="round"/>
+            <!-- Bird 4: x=222, large, facing right -->
+            <path d="M211 61 L203 67 L211 62" fill="#101c10"/>
+            <ellipse cx="222" cy="55" rx="11" ry="6" fill="#182518"/>
+            <circle cx="232" cy="52" r="6" fill="#182518"/>
+            <path d="M237 52 L243 51 M237 53 L243 54" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="234" cy="50.5" r="1.5" fill="#fff" opacity=".9"/><circle cx="234.3" cy="50.5" r=".75" fill="#111"/>
+            <line x1="218" y1="61" x2="216" y2="66" stroke="#182518" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="225" y1="61" x2="227" y2="66" stroke="#182518" stroke-width="1.3" stroke-linecap="round"/>
+            <text x="243" y="44" fill="#a3e635" font-size="8" opacity=".65">♪</text>
+            <!-- Bird 5: x=88, small, on WIRE 2, facing left -->
+            <path d="M97 63 L104 68.5 L97 64" fill="#101c10"/>
+            <ellipse cx="85" cy="59" rx="8" ry="4.5" fill="#1e2f1e"/>
+            <circle cx="78" cy="56.5" r="4.2" fill="#1e2f1e"/>
+            <path d="M74.5 56.5 L70 55.5 M74.5 57.5 L70 58.5" stroke="#f59e0b" stroke-width="1.2" stroke-linecap="round"/>
+            <circle cx="76" cy="55.5" r="1.2" fill="#fff" opacity=".9"/><circle cx="75.7" cy="55.5" r=".6" fill="#111"/>
+            <line x1="82" y1="63.5" x2="80" y2="68" stroke="#1e2f1e" stroke-width="1.2" stroke-linecap="round"/>
+            <line x1="89" y1="63.5" x2="91" y2="68" stroke="#1e2f1e" stroke-width="1.2" stroke-linecap="round"/>
           </svg>
           <p style="margin-bottom:12px">Startet das Lauschen automatisch kurz vor Sonnenaufgang — wenn die Vögel am lautesten singen. Benötigt GPS und eine offene App.</p>
           <label class="switch-row">
@@ -491,6 +544,38 @@
         <input id="favSearch" type="search" autocomplete="off" placeholder="Art suchen, z. B. Wanderfalke oder Falco peregrinus…" class="favsearch" />
         <div class="favlist" id="favList"></div>
         <div class="actions"><button class="btn ghost" id="favClose">Schließen</button></div>
+      </div>
+    </div>
+
+    <!-- ============ CUSTOM CAMERA ============ -->
+    <div id="cameraModal" class="cam-modal">
+      <div class="cam-video-wrap">
+        <video id="camVideo" autoplay playsinline muted webkit-playsinline></video>
+        <canvas id="camCanvas" style="display:none"></canvas>
+        <div class="cam-top">
+          <button class="cam-ctrl-btn" id="camClose" aria-label="Schließen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="20" height="20"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+          <div class="cam-mode-toggle">
+            <button id="camModePhoto" class="cam-mode-btn on">📷 Foto</button>
+            <button id="camModeVideo" class="cam-mode-btn">🎬 Video</button>
+          </div>
+          <button class="cam-ctrl-btn" id="camFlip" aria-label="Kamera wechseln" title="Kamera wechseln">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+          </button>
+        </div>
+        <canvas id="camMeter" class="cam-meter" width="200" height="36"></canvas>
+        <div id="camRecIndicator" class="cam-rec-pill" hidden>⏺ REC</div>
+        <div class="cam-zoom-wrap" id="camZoomWrap" hidden>
+          <span class="cam-zoom-label">1×</span>
+          <input type="range" id="camZoom" class="cam-zoom-slider" min="1" max="5" step="0.1" value="1"/>
+          <span id="camZoomVal" class="cam-zoom-label">1×</span>
+        </div>
+        <div class="cam-bottom">
+          <select id="camMicSelect" class="cam-device-select" title="Mikrofon"></select>
+          <button id="camCapture" class="cam-shutter" aria-label="Auslösen"></button>
+          <select id="camCamSelect" class="cam-device-select" title="Kamera"></select>
+        </div>
       </div>
     </div>
 

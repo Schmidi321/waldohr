@@ -6,6 +6,7 @@ import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, u
 import { fetchWeather } from './weather.js';
 import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker } from './alarm.js';
+import { openCamera } from './camera.js';
 
 let alarmCtx = null;
 function warmAlarmCtx() {
@@ -459,7 +460,7 @@ const clipBtn = document.getElementById('clipBtn');
 if (clipBtn && !window.MediaRecorder) clipBtn.style.display = 'none';
 if (clipBtn) clipBtn.onclick = () => recorder.toggle();
 const photoFab = document.getElementById('photoFab');
-if (photoFab) photoFab.onclick = () => { photoLabel = null; photoKey = null; photoInput && photoInput.click(); };
+if (photoFab) photoFab.onclick = () => openCamera(capture => _saveCapture({ ...capture, label: null, key: null }));
 const galleryModal = document.getElementById('galleryModal');
 const galleryBtn = document.getElementById('galleryBtn');
 const galleryClose = document.getElementById('galleryClose');
@@ -498,36 +499,51 @@ if (galleryScrim) galleryScrim.onclick = closeGallery;
 // verknüpft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
 window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);
 
-// ---- Fotoaufnahme (Fotografen-Funktion): Direktbeleg-Foto zu einem Fund, öffnet die Gerätekamera ----
+// ---- Kamera-Aufnahme: Foto oder Video, über eigene Kamera-UI ----
+// Natives <input capture> bleibt als Fallback erhalten (camera.js greift darauf zurück falls getUserMedia verweigert).
 const photoInput = document.getElementById('photoInput');
-let photoLabel = null, photoKey = null;
-if (photoInput) {
-  photoInput.onchange = async () => {
-    const file = photoInput.files && photoInput.files[0];
-    photoInput.value = '';
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    const prefix = photoLabel ? photoLabel.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'waldohr';
-    const name = prefix + '_' + stamp + '.jpg';
-    const row = document.createElement('div'); row.className = 'rec-row';
-    const img = document.createElement('img'); img.className = 'photo-thumb'; img.src = url; img.alt = photoLabel || 'Foto';
+async function _saveCapture({ blob, mime, kind, label, key }) {
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const prefix = label ? label.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'waldohr';
+  const ext = mime.includes('mp4') ? 'mp4' : mime.includes('webm') ? 'webm' : 'jpg';
+  const row = document.createElement('div'); row.className = 'rec-row';
+  if (kind === 'video') {
+    const vid = document.createElement('video');
+    vid.src = url; vid.controls = true; vid.style.cssText = 'flex:1;max-width:100%;border-radius:8px;min-width:0';
+    row.appendChild(vid);
+  } else {
+    const img = document.createElement('img'); img.className = 'photo-thumb'; img.src = url; img.alt = label || 'Foto';
     img.onclick = () => window.open(url, '_blank');
-    const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = name; dl.textContent = '⬇'; dl.title = 'Herunterladen';
     row.appendChild(img);
-    if (photoLabel) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.style.flex = '1'; lb.textContent = photoLabel; row.appendChild(lb); }
-    row.appendChild(dl);
-    let attId = null;
-    try { attId = await addAttachment({ key: photoKey, label: photoLabel, kind: 'photo', blob: file, mime: file.type }); }
-    catch (e) { console.warn('addAttachment', e); }
-    row.appendChild(makeShareBtn(url, photoKey, photoLabel));
-    row.appendChild(makeDeleteBtn(row, url, null, attId));
-    const list = document.getElementById('recList'); if (list) list.prepend(row);
-    if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
-  };
+  }
+  if (label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.style.flex = '1'; lb.textContent = label; row.appendChild(lb); }
+  const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.' + ext; dl.textContent = '⬇'; dl.title = 'Herunterladen';
+  row.appendChild(dl);
+  if (kind === 'photo') row.appendChild(makeShareBtn(url, key, label));
+  let attId = null;
+  try { attId = await addAttachment({ key: key || null, label: label || null, kind, blob, mime }); }
+  catch (e) { console.warn('addAttachment', e); }
+  row.appendChild(makeDeleteBtn(row, url, key || null, attId));
+  const list = document.getElementById('recList'); if (list) list.prepend(row);
+  openGallery();
+  if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
 }
-// Kamera-Knopf an Live-Zeile/Seltenheits-Toast -> beschriftet das Foto mit dem Artnamen.
-window.__waldohrCapturePhoto = (name, key) => { photoLabel = name || null; photoKey = key || null; photoInput && photoInput.click(); };
+// Natives Input als letzter Fallback (wenn getUserMedia blockiert wird)
+if (photoInput) {
+  let _fallbackLabel = null, _fallbackKey = null;
+  photoInput.onchange = async () => {
+    const file = photoInput.files?.[0]; photoInput.value = '';
+    if (!file) return;
+    await _saveCapture({ blob: file, mime: file.type || 'image/jpeg', kind: 'photo', label: _fallbackLabel, key: _fallbackKey });
+    _fallbackLabel = null; _fallbackKey = null;
+  };
+  photoInput._setFallback = (l, k) => { _fallbackLabel = l; _fallbackKey = k; };
+}
+// Kamera-Knopf an Live-Zeile / Seltenheits-Toast → öffnet eigene Kamera-UI
+window.__waldohrCapturePhoto = (name, key) => {
+  openCamera(capture => _saveCapture({ ...capture, label: name || null, key: key || null }));
+};
 
 // ---- Wiedergabe über Lautsprecher statt Hörer ----
 // Läuft das Mikro noch (laufende Erkennung), routen iOS/Android die Audioausgabe beim
