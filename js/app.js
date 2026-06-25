@@ -247,6 +247,18 @@ function tryFullscreen() {
 }
 document.addEventListener('click', tryFullscreen);
 
+function toggleDetection() {
+  if (!audio.running) {
+    tryFullscreen();
+    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); })
+      .catch(e => { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); });
+    return;
+  }
+  detectionActive = !detectionActive;
+  setUI(detectionActive ? 'mic' : 'mic-ready');
+  if (recBtn) recBtn.classList.toggle('rec-on', detectionActive);
+}
+
 const orbBtn = document.getElementById('orbBtn');
 if (orbBtn) orbBtn.addEventListener('click', async ev => {
   if (ev.target.closest('.rec-pill')) return;
@@ -266,9 +278,7 @@ const recorder = {
   mr: null, chunks: [], timer: null, t0: 0,
   fmt() { const s = Math.floor((Date.now() - this.t0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
   setBtn(on) {
-    if (recBtn) recBtn.classList.toggle('rec-on', on);
-    const fab = document.getElementById('recFab'); if (fab) fab.classList.toggle('rec-on', on);
-    if (!on) { const t = document.getElementById('recTime'); if (t) t.textContent = 'REC'; }
+    const cb = document.getElementById('clipBtn'); if (cb) cb.classList.toggle('rec-on', on);
   },
   async toggle(label, key) {
     if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
@@ -286,16 +296,9 @@ const recorder = {
     catch (e) { console.warn('rec', e); return; }
     this.chunks = []; this.label = label || null; this.key = key || null;
     this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
-    this.mr.onstop = () => {
-      clearInterval(this.timer); this.setBtn(false);
-      detectionActive = false;
-      if (audio.running) setUI('mic-ready'); else setUI('off');
-      this.save();
-    };
+    this.mr.onstop = () => { this.setBtn(false); this.save(); };
     this.mr.start();
-    detectionActive = true; setUI('mic');
     this.t0 = Date.now(); this.setBtn(true);
-    this.timer = setInterval(() => { const t = document.getElementById('recTime'); if (t) t.textContent = this.fmt(); }, 500);
   },
   async save() {
     if (!this.chunks.length) return;
@@ -329,10 +332,12 @@ const recorder = {
     if (this.key) registerRecording(this.key, url);
   }
 };
-if (recBtn) recBtn.onclick = () => recorder.toggle();
-const recFab = document.getElementById('recFab');
-if (recFab && !window.MediaRecorder) recFab.style.display = 'none';
-if (recFab) recFab.onclick = () => recorder.toggle();
+if (recBtn) recBtn.onclick = () => toggleDetection();
+const clipBtn = document.getElementById('clipBtn');
+if (clipBtn && !window.MediaRecorder) clipBtn.style.display = 'none';
+if (clipBtn) clipBtn.onclick = () => recorder.toggle();
+const photoFab = document.getElementById('photoFab');
+if (photoFab) photoFab.onclick = () => { photoLabel = null; photoKey = null; photoInput && photoInput.click(); };
 // Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen und
 // verknüpft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
 window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);

@@ -71,10 +71,14 @@
       </div>
       <div class="rechead">
         <span>Aufnahmen</span>
-        <button class="rec-fab" id="recFab" aria-label="Aufnahme starten/stoppen">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
-          <span>REC</span>
-        </button>
+        <div class="rec-actions">
+          <button class="rec-action-btn" id="clipBtn" title="Tonclip aufnehmen" aria-label="Tonclip aufnehmen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>
+          </button>
+          <button class="rec-action-btn" id="photoFab" title="Foto aufnehmen" aria-label="Foto aufnehmen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+          </button>
+        </div>
       </div>
       <div class="reclist" id="recList"></div>
     </section>
