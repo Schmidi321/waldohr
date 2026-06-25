@@ -1,7 +1,7 @@
 // Rendering: Erkennungs-Karte, Sammlung, Statistik-Diagramme, Detail-Sheet, Navigation.
 import { SPECIES, SPECIES_LIST, ensureSpecies } from './species.js';
 import { gemini } from './gemini.js';
-import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats, getQualifyConfidence, setQualifyConfidence } from './db.js';
+import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats, getQualifyConfidence, setQualifyConfidence, allAttachments } from './db.js';
 
 const $ = id => document.getElementById(id);
 const DEFAULT_GRAD = ['#0e5840', '#0a4733'];
@@ -944,7 +944,7 @@ function openModal(key) {
   if (shareBtn) shareBtn.onclick = async () => {
     const det = lastDetForKey(key);
     const pos = (det && typeof det.lat === 'number') ? { lat: det.lat, lng: det.lng } : (livePos || null);
-    const imgUrl = (() => {
+    const wikiUrl = (() => {
       const b = av.style.backgroundImage;
       if (!b || !b.includes('url(')) return null;
       const mm = b.match(/url\(["']?([^"')]+)["']?\)/);
@@ -954,15 +954,28 @@ function openModal(key) {
     shareBtn.innerHTML = '<span style="font-size:12px;line-height:1">⏳</span>';
     shareBtn.disabled = true;
     try {
-      const blob = await buildShareCard(sp, imgUrl, av._credit || null, pos);
+      // Eigenes Foto bevorzugen — sonst Wikimedia-Bild
+      let ownPhotoUrl = null;
+      try {
+        const atts = await allAttachments();
+        const own = atts.filter(a => a.key === key && a.kind === 'photo').sort((a, b) => b.ts - a.ts)[0];
+        if (own) ownPhotoUrl = URL.createObjectURL(own.blob);
+      } catch {}
+      const cardImgUrl = ownPhotoUrl || wikiUrl;
+      const cardCredit = ownPhotoUrl ? { artist: 'Eigenes Foto' } : (av._credit || null);
+      const blob = await buildShareCard(sp, cardImgUrl, cardCredit, pos);
+      if (ownPhotoUrl) try { URL.revokeObjectURL(ownPhotoUrl); } catch {}
       const fname = 'waldohr-' + (sp.name || 'vogel').toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.jpg';
       const file = blob ? new File([blob], fname, { type: 'image/jpeg' }) : null;
       let locTxt = pos ? '\n📍 ' + pos.lat.toFixed(4) + '° N, ' + pos.lng.toFixed(4) + '° O' : '';
-      const text = sp.name + ' (' + sp.sci + ') entdeckt! 🐦' + locTxt + '\n\n#WaldOhr #Ornithologie #Vogelbeobachtung #Natur';
+      const appUrl = location.origin + location.pathname;
+      const text = sp.name + ' (' + sp.sci + ') entdeckt! 🐦' + locTxt
+        + '\n\n#WaldOhr #Ornithologie #Vogelbeobachtung #Natur'
+        + '\n\nErstellt mit WaldOhr 🌿 – ' + appUrl;
       if (file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ title: 'WaldOhr – ' + sp.name, text, files: [file] });
       } else if (navigator.share) {
-        await navigator.share({ title: 'WaldOhr – ' + sp.name, text, url: location.href });
+        await navigator.share({ title: 'WaldOhr – ' + sp.name, text, url: appUrl });
       } else if (blob) {
         const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
         a.download = fname; a.click();
