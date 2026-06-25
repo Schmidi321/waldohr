@@ -249,18 +249,195 @@ function makeDeleteBtn(row, url, key, attId) {
   return del;
 }
 
-// Teilen-Button für Foto-Zeilen: baut Share-Karte mit eigenem Foto und öffnet nativen Share-Dialog.
+// ---- Foto+Audio Mixer: Photo + Tonaufnahme → Video rendern (client-side, kein Server) ----
+async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
+  const W = 1080, H = 1080;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+
+  // Foto zeichnen (object-fit: cover, zentriert)
+  const pUrl = URL.createObjectURL(photoBlob);
+  await new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const ir = img.width / img.height, cr = W / H;
+      let sw, sh, sx, sy;
+      if (ir > cr) { sh = img.height; sw = sh * cr; sx = (img.width - sw) / 2; sy = 0; }
+      else { sw = img.width; sh = sw / cr; sx = 0; sy = (img.height - sh) / 2; }
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, W, H);
+      URL.revokeObjectURL(pUrl); res();
+    };
+    img.onerror = () => { URL.revokeObjectURL(pUrl); rej(new Error('Foto konnte nicht geladen werden')); };
+    img.src = pUrl;
+  });
+
+  // WaldOhr-Branding-Overlay unten
+  const ov = ctx.createLinearGradient(0, H - 130, 0, H);
+  ov.addColorStop(0, 'rgba(6,26,15,0)'); ov.addColorStop(1, 'rgba(6,26,15,.78)');
+  ctx.fillStyle = ov; ctx.fillRect(0, H - 130, W, 130);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(163,230,53,.92)'; ctx.font = '600 32px system-ui,sans-serif';
+  ctx.fillText('🌿 WaldOhr', W / 2, H - 50);
+  ctx.fillStyle = 'rgba(255,255,255,.45)'; ctx.font = '20px system-ui,sans-serif';
+  ctx.fillText(new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }), W / 2, H - 22);
+
+  // Audio dekodieren
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const arrBuf = await audioBlob.arrayBuffer();
+  const audioBuffer = await audioCtx.decodeAudioData(arrBuf);
+  const duration = audioBuffer.duration;
+
+  const dest = audioCtx.createMediaStreamDestination();
+  const src = audioCtx.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(dest);
+
+  // Canvas-Stream + Audio-Track zusammenführen
+  const videoStream = cv.captureStream(2);
+  const combined = new MediaStream([...videoStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
+
+  let mime = '';
+  for (const t of ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { mime = t; break; }
+  }
+
+  return new Promise((res, rej) => {
+    const mr = mime ? new MediaRecorder(combined, { mimeType: mime }) : new MediaRecorder(combined);
+    const chunks = [];
+    mr.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
+    mr.onstop = () => {
+      clearInterval(progTimer);
+      try { audioCtx.close(); } catch {}
+      res({ blob: new Blob(chunks, { type: mime || 'video/webm' }), mime: mime || 'video/webm', duration });
+    };
+    mr.onerror = e => { clearInterval(progTimer); rej(e); };
+
+    const t0 = Date.now();
+    const progTimer = setInterval(() => {
+      const pct = Math.min(95, Math.round((Date.now() - t0) / 1000 / duration * 100));
+      if (onProgress) onProgress(pct);
+    }, 300);
+
+    src.start(0);
+    mr.start();
+    setTimeout(() => { try { mr.stop(); } catch {} try { src.stop(); } catch {} }, duration * 1000 + 400);
+  });
+}
+
+async function openShareMixer(photoUrl, key, label) {
+  const modal = document.getElementById('mixerModal');
+  if (!modal) {
+    try { await sharePhotoCard(photoUrl, key, label, geo.pos); } catch (e) { if (e?.name !== 'AbortError') console.warn('share', e); }
+    return;
+  }
+  modal._photoUrl = photoUrl; modal._key = key; modal._label = label;
+  modal._selAudioBlob = null;
+
+  const directBtn = document.getElementById('mixerDirectShare');
+  const renderBtn = document.getElementById('mixerRenderBtn');
+  const prog = document.getElementById('mixerProgress');
+  const progFill = document.getElementById('mixerProgFill');
+  const progLabel = document.getElementById('mixerProgLabel');
+
+  // Zustand zurücksetzen
+  if (renderBtn) { renderBtn.disabled = true; renderBtn.textContent = '🎬 Video rendern & teilen'; }
+  if (prog) prog.hidden = true;
+  if (directBtn) directBtn.disabled = false;
+
+  // Direkt-Teilen
+  if (directBtn) {
+    directBtn.onclick = async () => {
+      modal.hidden = true;
+      try { await sharePhotoCard(photoUrl, key, label, geo.pos); } catch (e) { if (e?.name !== 'AbortError') console.warn('share', e); }
+    };
+  }
+
+  // Audio-Liste laden
+  const audioList = document.getElementById('mixerAudioList');
+  if (audioList) {
+    audioList.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:10px 0">Lade Aufnahmen…</div>';
+    try {
+      const all = await allAttachments();
+      const audios = all.filter(a => a.kind === 'audio');
+      if (!audios.length) {
+        audioList.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:10px 0">Keine Tonaufnahmen vorhanden — zuerst über REC aufnehmen.</div>';
+      } else {
+        audioList.innerHTML = '';
+        for (const att of audios) {
+          const row = document.createElement('div');
+          row.className = 'mixer-audio-row';
+          const lbl = att.label || 'Aufnahme';
+          const when = att.ts ? new Date(att.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '';
+          row.innerHTML = `<span class="mr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v4M8 23h8"/></svg></span><span class="mr-label">${lbl}</span><span class="mr-dur">${when}</span>`;
+          row.onclick = () => {
+            audioList.querySelectorAll('.mixer-audio-row').forEach(r => r.classList.remove('on'));
+            row.classList.add('on');
+            modal._selAudioBlob = att.blob;
+            if (renderBtn) renderBtn.disabled = false;
+          };
+          audioList.appendChild(row);
+        }
+      }
+    } catch (e) {
+      console.warn('mixer load', e);
+      audioList.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:10px 0">Fehler beim Laden der Aufnahmen.</div>';
+    }
+  }
+
+  // Render-Button
+  if (renderBtn) {
+    renderBtn.onclick = async () => {
+      if (!modal._selAudioBlob) return;
+      if (prog) prog.hidden = false;
+      if (progFill) progFill.style.width = '0%';
+      if (progLabel) progLabel.textContent = 'Foto wird geladen…';
+      renderBtn.disabled = true;
+      if (directBtn) directBtn.disabled = true;
+      try {
+        const photoBlob = await fetch(modal._photoUrl).then(r => r.blob());
+        if (progLabel) progLabel.textContent = 'Audio wird dekodiert…';
+        const { blob: vidBlob, mime } = await _renderPhotoAudioVideo(photoBlob, modal._selAudioBlob, pct => {
+          if (progFill) progFill.style.width = pct + '%';
+          if (progLabel) progLabel.textContent = 'Rendering… ' + pct + '%';
+        });
+        if (progFill) progFill.style.width = '100%';
+        if (progLabel) progLabel.textContent = 'Fertig!';
+        modal.hidden = true;
+
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        const ext = mime.includes('mp4') ? 'mp4' : 'webm';
+        const fname = 'waldohr-' + stamp + '.' + ext;
+        const file = new File([vidBlob], fname, { type: mime });
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ title: 'WaldOhr – ' + (modal._label || 'Video'), files: [file] });
+        } else {
+          const a = document.createElement('a'); a.href = URL.createObjectURL(vidBlob);
+          a.download = fname; a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+        }
+      } catch (e) {
+        console.warn('mixer render', e);
+        if (progLabel) progLabel.textContent = 'Fehler: ' + (e?.message || 'Rendering fehlgeschlagen');
+        if (renderBtn) renderBtn.disabled = false;
+        if (directBtn) directBtn.disabled = false;
+      }
+    };
+  }
+
+  // Scrim schließt Modal
+  const scrim = document.getElementById('mixerScrim');
+  if (scrim) scrim.onclick = () => { modal.hidden = true; };
+
+  modal.hidden = false;
+}
+
+// Teilen-Button für Foto-Zeilen: öffnet Mixer (Foto-Karte teilen ODER Foto+Audio→Video).
 function makeShareBtn(url, key, label) {
   const btn = document.createElement('button');
   btn.type = 'button'; btn.title = 'Teilen'; btn.className = 'rec-dl'; btn.style.color = 'var(--muted)';
   btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
-  btn.onclick = async ev => {
-    ev.stopPropagation();
-    const orig = btn.innerHTML; btn.disabled = true; btn.textContent = '⏳';
-    try { await sharePhotoCard(url, key, label, geo.pos); }
-    catch (e) { if (e && e.name !== 'AbortError') console.warn('share', e); }
-    finally { btn.innerHTML = orig; btn.disabled = false; }
-  };
+  btn.onclick = ev => { ev.stopPropagation(); openShareMixer(url, key, label); };
   return btn;
 }
 

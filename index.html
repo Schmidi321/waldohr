@@ -547,6 +547,27 @@
       </div>
     </div>
 
+    <!-- ============ FOTO+AUDIO MIXER ============ -->
+    <div id="mixerModal" class="mixer-modal" hidden>
+      <div id="mixerScrim" class="mixer-scrim"></div>
+      <div class="mixer-sheet">
+        <div class="grab"></div>
+        <h3 class="mixer-title">📤 Teilen</h3>
+        <button id="mixerDirectShare" class="export-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+          <div><strong>Foto-Karte teilen</strong><span>Fertige Share-Karte (1080 × 1080 JPG)</span></div>
+        </button>
+        <div class="mixer-or">— oder —</div>
+        <p class="mixer-combo-label">🎵 Foto + Tonaufnahme → Video</p>
+        <div id="mixerAudioList" class="mixer-audio-list"></div>
+        <button id="mixerRenderBtn" class="mixer-render-btn" disabled>🎬 Video rendern &amp; teilen</button>
+        <div id="mixerProgress" class="mixer-progress" hidden>
+          <div class="mixer-prog-track"><div id="mixerProgFill" class="mixer-prog-fill"></div></div>
+          <div id="mixerProgLabel" class="mixer-prog-label">Rendering…</div>
+        </div>
+      </div>
+    </div>
+
     <!-- ============ CUSTOM CAMERA ============ -->
     <div id="cameraModal" class="cam-modal">
       <div class="cam-video-wrap">
