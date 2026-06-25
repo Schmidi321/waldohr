@@ -262,7 +262,7 @@ async function maybeAutoRecord(det, samples, sampleRate) {
   const row = document.createElement('div'); row.className = 'rec-row';
   const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
   wireAudioRouting(a);
-  const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
+  const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto'; lb.style.flex = '1';
   const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + gpsTag + '.wav'; dl.textContent = '⬇'; dl.title = 'Herunterladen';
   let attId = null;
   try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime: 'audio/wav' }); }
@@ -293,7 +293,7 @@ function makeDeleteBtn(row, url, key, attId) {
 
 // ---- Foto+Audio Mixer: Photo + Tonaufnahme → Video rendern (client-side, kein Server) ----
 async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
-  const W = 1080, H = 1080;
+  const W = 1440, H = 1440;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
@@ -315,14 +315,17 @@ async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
   });
 
   // WaldOhr-Branding-Overlay unten
-  const ov = ctx.createLinearGradient(0, H - 130, 0, H);
-  ov.addColorStop(0, 'rgba(6,26,15,0)'); ov.addColorStop(1, 'rgba(6,26,15,.78)');
-  ctx.fillStyle = ov; ctx.fillRect(0, H - 130, W, 130);
+  const ov = ctx.createLinearGradient(0, H - 220, 0, H);
+  ov.addColorStop(0, 'rgba(6,26,15,0)'); ov.addColorStop(1, 'rgba(6,26,15,.88)');
+  ctx.fillStyle = ov; ctx.fillRect(0, H - 220, W, 220);
   ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(163,230,53,.92)'; ctx.font = '600 32px system-ui,sans-serif';
-  ctx.fillText('🌿 WaldOhr', W / 2, H - 50);
-  ctx.fillStyle = 'rgba(255,255,255,.45)'; ctx.font = '20px system-ui,sans-serif';
-  ctx.fillText(new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }), W / 2, H - 22);
+  ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 24;
+  ctx.fillStyle = 'rgba(163,230,53,.97)'; ctx.font = '700 62px system-ui,sans-serif';
+  ctx.fillText('🌿 WaldOhr', W / 2, H - 90);
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = 'rgba(255,255,255,.62)'; ctx.font = '500 32px system-ui,sans-serif';
+  ctx.fillText(new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }), W / 2, H - 38);
+  ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
 
   // Audio dekodieren
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -345,7 +348,7 @@ async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
   }
 
   return new Promise((res, rej) => {
-    const mr = mime ? new MediaRecorder(combined, { mimeType: mime }) : new MediaRecorder(combined);
+    const mr = mime ? new MediaRecorder(combined, { mimeType: mime, videoBitsPerSecond: 8_000_000 }) : new MediaRecorder(combined);
     const chunks = [];
     mr.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
     mr.onstop = () => {
@@ -499,7 +502,7 @@ function attachmentRow(a) {
   }
   if (a.label) {
     const lb = document.createElement('span'); lb.className = 'rec-label';
-    if (a.kind === 'photo') lb.style.flex = '1';
+    lb.style.flex = '1';
     lb.textContent = a.label;
     row.appendChild(lb);
   }
@@ -663,7 +666,7 @@ const recorder = {
     wireAudioRouting(a);
     const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = name; dl.textContent = '⬇'; dl.title = 'Herunterladen';
     row.appendChild(a);
-    if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
+    if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; lb.style.flex = '1'; row.appendChild(lb); }
     row.appendChild(dl);
     let attId = null;
     try { attId = await addAttachment({ key: this.key, label: this.label, kind: 'audio', blob: saveBlob, mime }); }
