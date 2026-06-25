@@ -170,8 +170,8 @@ export function initUI() {
   const closeTimingModal = () => timingModal && timingModal.classList.remove('open');
   const timingScrim = $('timingScrim'); if (timingScrim) timingScrim.onclick = closeTimingModal;
   const timingClose = $('timingClose'); if (timingClose) timingClose.onclick = closeTimingModal;
-  const timingSave = $('timingSave');
-  if (timingSave) timingSave.onclick = () => {
+  // Timing-Controls: Auto-Save bei jeder Änderung — kein Speichern-Button nötig
+  function autoSaveTiming() {
     const mc = getMorgenchor();
     setMorgenchor({ enabled: $('mcEnabled')?.checked ?? mc.enabled, offsetMin: parseInt($('mcOffset')?.value) || 15 });
     const nm = getNachtModus();
@@ -181,9 +181,15 @@ export function initUI() {
     const fw = getFotoWecker();
     const fwParts = ($('fwTime')?.value || '05:30').split(':');
     setFotoWecker({ enabled: $('fwEnabled')?.checked ?? fw.enabled, hour: parseInt(fwParts[0]) || 5, minute: parseInt(fwParts[1]) || 30, vibrateOnly: $('fwVibrateOnly')?.checked ?? fw.vibrateOnly ?? false });
-    closeTimingModal();
-    showInfoToast('Timing gespeichert', 'Alarme werden zur eingestellten Zeit ausgelöst.', '⏰');
-  };
+  }
+  ['mcEnabled','nmEnabled','nmEndEnabled','fwEnabled','fwVibrateOnly'].forEach(id => {
+    const el = $(id); if (el) el.addEventListener('change', autoSaveTiming);
+  });
+  ['nmTime','nmEndTime','fwTime'].forEach(id => {
+    const el = $(id); if (el) el.addEventListener('change', autoSaveTiming);
+  });
+  const mcOffsetEl = $('mcOffset');
+  if (mcOffsetEl) mcOffsetEl.addEventListener('input', autoSaveTiming);
 
   setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
   initWakeLockToggle();
