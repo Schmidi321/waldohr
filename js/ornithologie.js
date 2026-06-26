@@ -100,42 +100,70 @@ function _initDU() {
   const countdown = $('duCountdown');
   const timerEl = $('duTimer');
   const stopBtn = $('duStop');
+  const startBtn = $('duStartBtn');
   if (!enabled || !presetsEl) return;
   enabled.checked = du.enabled;
   presetsEl.querySelectorAll('.du-preset').forEach(b =>
     b.classList.toggle('on', parseInt(b.dataset.min) === du.durationMin)
   );
   const fmtTime = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  const banner = document.getElementById('pkBanner');
+  const bannerTimer = document.getElementById('pkBannerTimer');
+  const bannerLabel = document.querySelector('#pkBanner .pk-label');
+  const bannerStop = document.getElementById('pkBannerStop');
+
   function _endDU() {
     clearInterval(_duInterval); _duInterval = null;
     if (countdown) countdown.hidden = true;
+    if (startBtn) startBtn.hidden = false;
+    if (banner) banner.hidden = true;
+    if (bannerLabel) bannerLabel.textContent = 'Punkt-Zählung';
     if (window.__waldohr) window.__waldohr.stopDetection();
   }
+
   const save = () => {
     const preset = presetsEl.querySelector('.du-preset.on');
     setDauerUeberwachung({ enabled: enabled.checked, durationMin: parseInt(preset?.dataset.min ?? '30') });
   };
   enabled.addEventListener('change', save);
-  presetsEl.querySelectorAll('.du-preset').forEach(b => b.addEventListener('click', async () => {
+
+  // Preset buttons: only select duration, don't start detection
+  presetsEl.querySelectorAll('.du-preset').forEach(b => b.addEventListener('click', () => {
     presetsEl.querySelectorAll('.du-preset').forEach(x => x.classList.remove('on'));
     b.classList.add('on');
     save();
+  }));
+
+  // Start button triggers detection + countdown
+  if (startBtn) startBtn.addEventListener('click', async () => {
     if (_duInterval) { _endDU(); return; }
     if (window.__waldohr) {
-      await window.__waldohr.startDetection();
+      try { await window.__waldohr.startDetection(); } catch (e) { console.warn('du start', e); }
       window.__waldohr.switchTab('v-listen');
     }
     _showStartPopup('Dauerüberwachung');
-    let remaining = parseInt(b.dataset.min) * 60;
+    startBtn.hidden = true;
+    const preset = presetsEl.querySelector('.du-preset.on');
+    let remaining = parseInt(preset?.dataset.min ?? '30') * 60;
     if (timerEl) timerEl.textContent = fmtTime(remaining);
     if (countdown) countdown.hidden = false;
+    if (banner) {
+      if (bannerLabel) bannerLabel.textContent = 'Dauerüberwachung';
+      if (bannerTimer) bannerTimer.textContent = fmtTime(remaining);
+      banner.hidden = false;
+    }
     _duInterval = setInterval(() => {
       remaining--;
-      if (timerEl) timerEl.textContent = fmtTime(remaining);
+      const ts = fmtTime(remaining);
+      if (timerEl) timerEl.textContent = ts;
+      if (bannerTimer) bannerTimer.textContent = ts;
       if (remaining <= 0) _endDU();
     }, 1000);
-  }));
+  });
+
   if (stopBtn) stopBtn.addEventListener('click', _endDU);
+  // Banner stop also handles DU
+  if (bannerStop) bannerStop.addEventListener('click', () => { if (_duInterval) _endDU(); });
 }
 
 // ---- Punkt-Zählung (5-min BirdLife-Standard) ----
@@ -170,7 +198,7 @@ function _initPunktZaehlung() {
     _pkWasDetecting = window.__waldohr ? window.__waldohr.isDetecting() : false;
 
     if (window.__waldohr) {
-      await window.__waldohr.startDetection();
+      try { await window.__waldohr.startDetection(); } catch (e) { console.warn('pk start', e); }
       window.__waldohr.switchTab('v-listen');
     }
     _showStartPopup('Punkt-Zählung');
@@ -360,7 +388,7 @@ async function _renderExportSection() {
       <label style="display:flex;align-items:center;gap:10px;padding:7px 0;font-size:13px;cursor:pointer;border-bottom:1px solid var(--stroke)">
         <input type="checkbox" id="duExportAll" checked style="width:16px;height:16px;accent-color:var(--lime)">
         <span style="color:var(--ink);font-weight:600">Alle Aufnahmen</span>
-        <span style="color:var(--lime);font-weight:700;margin-left:auto">${allDets.length}</span>
+        <span style="color:var(--lime);font-weight:700;margin-left:auto">${sessions.length} Sitzung${sessions.length !== 1 ? 'en' : ''}</span>
       </label>
       ${sessions.map((s, i) => {
         const d = new Date(s.ts);

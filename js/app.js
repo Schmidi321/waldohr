@@ -416,7 +416,10 @@ function _makeScissorsBtn(row) {
 
 async function _toggleTrimPanel(row) {
   const existing = row.querySelector('.rec-trim-panel');
-  if (existing) { existing.remove(); return; }
+  if (existing) {
+    const a = row.querySelector('audio'); if (a) a.pause();
+    existing.remove(); return;
+  }
   const audioEl = row.querySelector('audio');
   if (!audioEl?.src) return;
   const panel = document.createElement('div'); panel.className = 'rec-trim-panel';
@@ -431,13 +434,17 @@ async function _toggleTrimPanel(row) {
   } catch { panel.innerHTML = '<span class="tr-lbl" style="color:var(--rose)">Fehler</span>'; return; }
   const dur = decoded.duration;
   let startFrac = 0, endFrac = 1;
-  panel.innerHTML = `<div class="tr-tl-wrap"><div class="tr-tl"><div class="tr-kept"></div><div class="tr-handle tr-hs"></div><div class="tr-handle tr-he"></div></div></div><div class="tr-times"><span class="tr-val tr-sv">0.0s</span><span class="tr-val tr-ev">${dur.toFixed(1)}s</span></div><button class="tr-go">&#9986; Zuschneiden</button>`;
+  panel.innerHTML = `<div class="tr-tl-wrap"><div class="tr-tl"><div class="tr-kept"></div><div class="tr-pos"></div><div class="tr-handle tr-hs"></div><div class="tr-handle tr-he"></div></div></div><div class="tr-times"><span class="tr-val tr-sv">0.0s</span><span class="tr-curtime"></span><span class="tr-val tr-ev">${dur.toFixed(1)}s</span></div><div style="display:flex;gap:6px;flex:0 0 100%;margin-top:4px"><button class="tr-play">&#9654;</button><button class="tr-go" style="flex:1">&#9986; Zuschneiden</button></div>`;
   const tl = panel.querySelector('.tr-tl');
   const kept = panel.querySelector('.tr-kept');
+  const posEl = panel.querySelector('.tr-pos');
   const hs = panel.querySelector('.tr-hs');
   const he = panel.querySelector('.tr-he');
   const sv = panel.querySelector('.tr-sv');
   const ev = panel.querySelector('.tr-ev');
+  const curTime = panel.querySelector('.tr-curtime');
+  const playBtn = panel.querySelector('.tr-play');
+  let _playRaf = null;
   function updateUI() {
     hs.style.left = (startFrac * 100) + '%';
     he.style.left = (endFrac * 100) + '%';
@@ -447,6 +454,31 @@ async function _toggleTrimPanel(row) {
     ev.textContent = (endFrac * dur).toFixed(1) + 's';
   }
   updateUI();
+  function _stopPreview() {
+    if (_playRaf) { cancelAnimationFrame(_playRaf); _playRaf = null; }
+    posEl.style.display = 'none';
+    playBtn.innerHTML = '&#9654;';
+  }
+  function _tickPreview() {
+    const ct = audioEl.currentTime;
+    posEl.style.left = (dur > 0 ? ct / dur * 100 : 0) + '%';
+    posEl.style.display = 'block';
+    if (curTime) curTime.textContent = ct.toFixed(1) + 's';
+    if (!audioEl.paused && ct < endFrac * dur - 0.05) {
+      _playRaf = requestAnimationFrame(_tickPreview);
+    } else {
+      if (ct >= endFrac * dur - 0.05) { audioEl.pause(); audioEl.currentTime = startFrac * dur; }
+      _stopPreview();
+    }
+  }
+  playBtn.addEventListener('click', () => {
+    if (!audioEl.paused) { audioEl.pause(); _stopPreview(); return; }
+    audioEl.currentTime = startFrac * dur;
+    audioEl.play().catch(() => {});
+    playBtn.innerHTML = '&#9646;&#9646;';
+    _playRaf = requestAnimationFrame(_tickPreview);
+  });
+  audioEl.addEventListener('ended', _stopPreview);
   function makeDrag(handle, isStart) {
     handle.addEventListener('pointerdown', e => {
       e.preventDefault();
@@ -465,6 +497,7 @@ async function _toggleTrimPanel(row) {
   makeDrag(hs, true);
   makeDrag(he, false);
   panel.querySelector('.tr-go').onclick = async () => {
+    audioEl.pause(); _stopPreview();
     const start = startFrac * dur;
     const end = endFrac * dur;
     if (start >= end) return;
@@ -1052,8 +1085,8 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
   const mc = moonCalendar();
   html += '<div class="pw-section">Mond</div>';
   html += `<div class="pw-row"><span class="pw-icon">${moonPhaseLabel(mc.phase).split(' ')[1] || '🌙'}</span><span class="pw-lbl">Phase</span><span class="pw-val">${moonPhaseLabel(mc.phase).replace(/\s[\S]+$/, '')} · ${mc.ageInDays} Tage</span></div>`;
-  if (moonTimes?.moonrise) html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Mondaufgang</span><span class="pw-val">${fmt(moonTimes.moonrise)}</span></div>`;
-  if (moonTimes?.moonset) html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Monduntergang</span><span class="pw-val">${fmt(moonTimes.moonset)}</span></div>`;
+  html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Mondaufgang</span><span class="pw-val">${moonTimes?.moonrise ? fmt(moonTimes.moonrise) : '–'}</span></div>`;
+  html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Monduntergang</span><span class="pw-val">${moonTimes?.moonset ? fmt(moonTimes.moonset) : '–'}</span></div>`;
   html += `<div class="pw-row"><span class="pw-icon">🌕</span><span class="pw-lbl">Nächster Vollmond</span><span class="pw-val">${fmtDate(mc.nextFull)} (in ${mc.daysToFull} d)</span></div>`;
   html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Nächster Neumond</span><span class="pw-val">${fmtDate(mc.nextNew)} (in ${mc.daysToNew} d)</span></div>`;
 

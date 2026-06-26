@@ -153,7 +153,7 @@ canvas{display:block;width:100%;height:84px}
 .rec-pill.rec-on{color:#fff;background:linear-gradient(140deg,#fb7185,#f43f5e);box-shadow:0 6px 16px -6px #fb7185aa;animation:recpulse 1.4s infinite}
 .rec-pill .rec-time{font-variant-numeric:tabular-nums}
 @keyframes recpulse{50%{opacity:.5}}
-.rec-label{font-size:11px;color:var(--muted);background:var(--glass-strong);border:1px solid var(--stroke);padding:3px 8px;border-radius:20px;white-space:nowrap}
+.rec-label{font-size:11px;color:var(--muted);background:var(--glass-strong);border:1px solid var(--stroke);padding:3px 8px;border-radius:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:42vw;flex-shrink:1}
 .rec-label.auto{color:var(--lime);border-color:#a3e63555;background:rgba(163,230,53,.1)}
 .orb-stage{flex-shrink:0}
 .spectro{flex-shrink:0;margin-top:8px;border-radius:16px;overflow:hidden;border:1px solid var(--stroke);background:#04120c}
@@ -176,13 +176,16 @@ body.mic-ready .orb{opacity:.72}
 .photo-thumb{flex:0 0 56px;width:56px;height:56px;border-radius:11px;object-fit:cover;cursor:pointer;background:#04130d}
 .rec-trim-panel{flex:0 0 100%;order:11;display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:10px 2px 4px;border-top:1px solid var(--stroke);margin-top:4px}
 .tr-lbl{font-size:11px;color:var(--muted);flex:0 0 auto}
-.tr-go{flex:0 0 100%;padding:7px 10px;border-radius:10px;background:rgba(163,230,53,.1);border:1px solid rgba(163,230,53,.28);color:var(--lime);font-size:13px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent;margin-top:2px}
+.tr-go{padding:6px 10px;border-radius:10px;background:rgba(163,230,53,.1);border:1px solid rgba(163,230,53,.28);color:var(--lime);font-size:13px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}
 .tr-val{font-size:11px;color:var(--lime);font-weight:700}
 .tr-tl-wrap{flex:0 0 100%;padding:4px 0}
 .tr-tl{position:relative;height:22px;background:rgba(163,230,53,.12);border-radius:11px;margin:0 11px;touch-action:none}
 .tr-kept{position:absolute;top:0;bottom:0;background:rgba(163,230,53,.38);border-radius:11px;pointer-events:none}
+.tr-pos{position:absolute;top:-2px;bottom:-2px;width:2px;background:#fff;opacity:.7;pointer-events:none;transform:translateX(-50%);display:none;border-radius:2px}
 .tr-handle{position:absolute;top:50%;transform:translate(-50%,-50%);width:24px;height:24px;border-radius:50%;background:var(--lime);box-shadow:0 1px 5px rgba(0,0,0,.55);cursor:ew-resize;touch-action:none;z-index:1}
-.tr-times{display:flex;justify-content:space-between;flex:0 0 100%;padding:0 2px}
+.tr-times{display:flex;justify-content:space-between;align-items:center;flex:0 0 100%;padding:0 2px}
+.tr-curtime{font-size:11px;color:var(--ink);font-weight:600;opacity:.65}
+.tr-play{flex:0 0 auto;padding:6px 18px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid var(--stroke);color:var(--ink);font-size:14px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}
 .rec-popup-mic{animation:recMicPulse 1.1s ease-in-out infinite}
 @keyframes recMicPulse{0%,100%{transform:scale(1);filter:drop-shadow(0 0 0px #ef4444)}50%{transform:scale(1.18);filter:drop-shadow(0 0 10px rgba(239,68,68,.7))}}
 
