@@ -3,7 +3,7 @@ import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal } from './ui.js';
-import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel } from './weather.js';
+import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
 import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
 import { openCamera } from './camera.js';
@@ -835,14 +835,23 @@ if (photoWeatherScrim) photoWeatherScrim.onclick = () => photoWeatherModal?.clas
 if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
   photoWeatherModal?.classList.add('open');
   const content = document.getElementById('photoWeatherContent');
+  const locEl = document.getElementById('pwLocation');
   if (!content) return;
   content.innerHTML = '<div class="pw-loading">Lade Wetterdaten…</div>';
+  if (locEl) locEl.textContent = '';
   const lat = geo.pos?.lat, lng = geo.pos?.lng;
+
+  // Location name (async, fills in when ready)
+  if (lat != null && locEl) {
+    reverseGeocode(lat, lng).then(name => { if (name && locEl) locEl.textContent = '📍 ' + name; });
+  }
+
   const [pw, sun] = await Promise.all([
     fetchPhotoWeather(lat, lng),
     lat != null ? getSunriseFull(lat, lng) : Promise.resolve(null)
   ]);
   const fmt = d => d instanceof Date ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '–';
+  const fmtDate = d => d instanceof Date ? d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) : '–';
   let html = '';
   if (sun) {
     const sr = sun.sunrise;
@@ -853,6 +862,7 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
     if (sr) html += `<div class="pw-row"><span class="pw-icon">🌅</span><span class="pw-lbl">Goldene Stunde</span><span class="pw-val">${fmt(sr)} – ${goldenEnd ? fmt(goldenEnd) : '–'}</span></div>`;
   }
   if (pw) {
+    const fogRisk = pw.visKm < 1 ? 'Nebel' : pw.visKm < 5 && pw.humidity > 85 ? 'Dunst' : pw.humidity > 92 ? 'Nebelgefahr' : null;
     const tip = pw.cloudcover < 20 && pw.windKmh < 10 ? 'Optimale Bedingungen für Langzeitbelichtung!'
       : pw.cloudcover > 70 ? 'Weiches Diffuslicht durch Bewölkung — ideal für Porträtfotos.'
       : pw.windKmh > 25 ? 'Starker Wind — kurze Belichtungszeit wählen.'
@@ -861,16 +871,22 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
     html += `<div class="pw-row"><span class="pw-icon">${weatherEmoji(pw.wmo)}</span><span class="pw-lbl">${weatherLabel(pw.wmo)}</span><span class="pw-val">${pw.temp}°C</span></div>`;
     html += `<div class="pw-row"><span class="pw-icon">💨</span><span class="pw-lbl">Wind</span><span class="pw-val">${pw.windKmh} km/h ${windDirLabel(pw.windDir)}</span></div>`;
     html += `<div class="pw-row"><span class="pw-icon">💧</span><span class="pw-lbl">Luftfeuchte</span><span class="pw-val">${pw.humidity}%${pw.humidity > 85 ? ' ⚠' : ''}</span></div>`;
-    html += `<div class="pw-row"><span class="pw-icon">👁</span><span class="pw-lbl">Sichtweite</span><span class="pw-val">${pw.visKm} km</span></div>`;
+    if (fogRisk) html += `<div class="pw-row"><span class="pw-icon">🌫️</span><span class="pw-lbl">Nebel</span><span class="pw-val" style="color:var(--amber)">${fogRisk} · ${pw.visKm} km</span></div>`;
+    else         html += `<div class="pw-row"><span class="pw-icon">👁</span><span class="pw-lbl">Sichtweite</span><span class="pw-val">${pw.visKm} km</span></div>`;
     html += `<div class="pw-row"><span class="pw-icon">☁️</span><span class="pw-lbl">Bewölkung</span><span class="pw-val">${pw.cloudcover}%</span></div>`;
     html += `<div class="pw-row"><span class="pw-icon">☀️</span><span class="pw-lbl">UV-Index</span><span class="pw-val">${pw.uvIndex} – ${uvLabel(pw.uvIndex)}</span></div>`;
     html += `<div class="pw-tip">💡 ${tip}</div>`;
   }
-  const mp = moonPhase();
-  html += '<div class="pw-section">Astronomie</div>';
-  html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Mondphase</span><span class="pw-val">${moonPhaseLabel(mp)}</span></div>`;
+  // Mond-Kalender
+  const mc = moonCalendar();
+  html += '<div class="pw-section">Mond</div>';
+  html += `<div class="pw-row"><span class="pw-icon">${moonPhaseLabel(mc.phase).split(' ')[1] || '🌙'}</span><span class="pw-lbl">Phase</span><span class="pw-val">${moonPhaseLabel(mc.phase).replace(/\s[\S]+$/, '')} · ${mc.ageInDays} Tage</span></div>`;
+  html += `<div class="pw-row"><span class="pw-icon">🌕</span><span class="pw-lbl">Nächster Vollmond</span><span class="pw-val">${fmtDate(mc.nextFull)} (in ${mc.daysToFull} d)</span></div>`;
+  html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Nächster Neumond</span><span class="pw-val">${fmtDate(mc.nextNew)} (in ${mc.daysToNew} d)</span></div>`;
+
   if (!pw && !sun) html = '<div class="pw-loading">GPS benötigt – Standort erlauben, dann erneut öffnen.</div>';
   content.innerHTML = html;
+
   // Morgen-Früh-Prognose nachreichen
   if (lat != null) {
     const tmwEl = document.createElement('div');
@@ -880,8 +896,8 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
       if (!slots || !slots.length) { tmwEl.innerHTML = '<div class="pw-section" style="margin-top:10px">Morgen früh</div><div class="pw-loading">Keine Prognose verfügbar.</div>'; return; }
       tmwEl.innerHTML = '<div class="pw-section" style="margin-top:10px">Morgen früh</div><div class="tmw-slots">'
         + slots.map(s => {
-            const fogRisk = s.visKm < 2 ? ' 🌫️' : s.visKm < 5 ? ' 🌁' : '';
-            return `<div class="tmw-slot"><div class="tmw-h">${s.hour}:00</div><div class="tmw-ico">${weatherEmoji(s.wmo)}${fogRisk}</div><div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}°</div><div class="tmw-cc">${s.cloudcover}%☁️</div><div class="tmw-rain">${s.precipProb > 0 ? '💧' + s.precipProb + '%' : ''}</div></div>`;
+            const fog = s.visKm < 2 ? ' 🌫️' : s.visKm < 5 ? ' 🌁' : '';
+            return `<div class="tmw-slot"><div class="tmw-h">${s.hour}:00</div><div class="tmw-ico">${weatherEmoji(s.wmo)}${fog}</div><div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}°</div><div class="tmw-cc">${s.cloudcover}%☁️</div><div class="tmw-rain">${s.precipProb > 0 ? '💧' + s.precipProb + '%' : ''}</div></div>`;
           }).join('') + '</div>';
     }).catch(() => { tmwEl.remove(); });
   }
@@ -890,6 +906,26 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
 // Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen und
 // verknüpft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
 window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);
+
+// API for Punkt-Zählung cross-tab flow (ornithologie.js)
+window.__waldohr = {
+  startDetection: async () => {
+    if (!audio.running) {
+      await audio.start();
+      geo.start();
+    }
+    detectionActive = true;
+    setUI('mic');
+    if (recBtn) recBtn.classList.add('rec-on');
+  },
+  stopDetection: () => {
+    detectionActive = false;
+    setUI(audio.running ? 'mic-ready' : 'off');
+    if (recBtn) recBtn.classList.remove('rec-on');
+  },
+  isDetecting: () => audio.running && detectionActive,
+  switchTab: v => { document.querySelector(`.nav button[data-v="${v}"]`)?.click(); },
+};
 
 // ---- Kamera-Aufnahme: Foto oder Video, über eigene Kamera-UI ----
 // Natives <input capture> bleibt als Fallback erhalten (camera.js greift darauf zurück falls getUserMedia verweigert).

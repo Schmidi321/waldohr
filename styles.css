@@ -479,6 +479,15 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .mixer-prog-fill{height:100%;border-radius:4px;background:var(--lime);width:0%;transition:width .3s ease}
 .mixer-prog-label{font-size:12px;color:var(--muted);text-align:center}
 
+/* ---- Punkt-Zählung Banner (Lauschen-View) ---- */
+.pk-banner{display:flex;align-items:center;gap:10px;padding:10px 16px;background:rgba(163,230,53,.1);border-bottom:1px solid rgba(163,230,53,.22);animation:pk-slide-in .25s ease}
+.pk-banner[hidden]{display:none}
+@keyframes pk-slide-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.pk-label{font-size:12px;font-weight:700;color:var(--lime);text-transform:uppercase;letter-spacing:.06em;flex:1}
+.pk-time{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink);flex:0 0 auto;min-width:36px;text-align:right}
+.pk-stop{flex:0 0 auto;width:26px;height:26px;border-radius:50%;background:rgba(163,230,53,.14);border:1px solid rgba(163,230,53,.28);color:var(--lime);font-size:13px;cursor:pointer;display:grid;place-items:center;line-height:1;-webkit-tap-highlight-color:transparent}
+.pk-stop:active{transform:scale(.9)}
+
 /* ---- Dauerüberwachung Presets ---- */
 .du-presets{display:flex;gap:6px;flex-wrap:wrap}
 .du-preset{padding:7px 14px;border-radius:20px;background:var(--glass);border:1px solid var(--stroke);color:var(--muted);cursor:pointer;font-size:13px;font-weight:500;transition:.2s;font-family:inherit}

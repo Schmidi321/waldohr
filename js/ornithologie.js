@@ -101,7 +101,7 @@ function _initDU() {
 }
 
 // ---- Punkt-Zählung (5-min BirdLife-Standard) ----
-let _pkInterval = null, _pkStartTs = 0;
+let _pkInterval = null, _pkStartTs = 0, _pkWasDetecting = false;
 const PK_SECS = 5 * 60;
 
 function _initPunktZaehlung() {
@@ -110,35 +110,54 @@ function _initPunktZaehlung() {
   const speciesEl = $('pkSpecies');
   if (!startBtn || !timerEl) return;
 
+  const banner = document.getElementById('pkBanner');
+  const bannerTimer = document.getElementById('pkBannerTimer');
+  const bannerStop = document.getElementById('pkBannerStop');
+
+  function _endPk() {
+    clearInterval(_pkInterval);
+    _pkInterval = null;
+    startBtn.textContent = 'Zählung starten';
+    startBtn.classList.remove('primary');
+    timerEl.textContent = '5:00';
+    if (banner) banner.hidden = true;
+    if (!_pkWasDetecting && window.__waldohr) window.__waldohr.stopDetection();
+    if (window.__waldohr) window.__waldohr.switchTab('v-orni');
+  }
+
   startBtn.onclick = async () => {
-    if (_pkInterval) {
-      clearInterval(_pkInterval);
-      _pkInterval = null;
-      startBtn.textContent = 'Zählung starten';
-      startBtn.classList.remove('primary');
-      timerEl.textContent = '5:00';
-      if (speciesEl) speciesEl.hidden = true;
-      return;
-    }
+    if (_pkInterval) { _endPk(); return; }
+
     _pkStartTs = Date.now();
+    _pkWasDetecting = window.__waldohr ? window.__waldohr.isDetecting() : false;
+
+    if (window.__waldohr) {
+      await window.__waldohr.startDetection();
+      window.__waldohr.switchTab('v-listen');
+    }
+
     startBtn.textContent = 'Stoppen';
     startBtn.classList.add('primary');
     if (speciesEl) { speciesEl.hidden = true; speciesEl.innerHTML = ''; }
+    if (banner) { banner.hidden = false; if (bannerTimer) bannerTimer.textContent = '5:00'; }
+
     let remaining = PK_SECS;
     _pkInterval = setInterval(async () => {
       remaining--;
       const m = Math.floor(remaining / 60);
       const s = remaining % 60;
-      timerEl.textContent = m + ':' + String(s).padStart(2, '0');
+      const ts = m + ':' + String(s).padStart(2, '0');
+      timerEl.textContent = ts;
+      if (bannerTimer) bannerTimer.textContent = ts;
       if (remaining <= 0) {
-        clearInterval(_pkInterval);
-        _pkInterval = null;
-        startBtn.textContent = 'Zählung starten';
-        startBtn.classList.remove('primary');
-        await _showPkResults(speciesEl, _pkStartTs);
+        const startTs = _pkStartTs;
+        _endPk();
+        await _showPkResults(speciesEl, startTs);
       }
     }, 1000);
   };
+
+  if (bannerStop) bannerStop.onclick = () => { if (_pkInterval) _endPk(); };
 }
 
 async function _showPkResults(el, startTs) {
@@ -153,10 +172,12 @@ async function _showPkResults(el, startTs) {
     byKey[d.key].count++;
   }
   const list = Object.values(byKey).sort((a, b) => b.count - a.count);
+  const nameInput = `<input id="pkSessionName" type="text" placeholder="Sitzungsname (optional)" style="width:100%;box-sizing:border-box;background:var(--glass);border:1px solid var(--stroke);border-radius:12px;padding:10px 14px;color:var(--ink);font-size:13px;font-family:inherit;outline:none;margin-bottom:10px">`;
   if (!list.length) {
-    el.innerHTML = '<div style="color:var(--faint);font-size:13px;text-align:center;padding:12px 0">Keine Rufe im Zeitfenster erkannt</div>';
+    el.innerHTML = nameInput + '<div style="color:var(--faint);font-size:13px;text-align:center;padding:12px 0">Keine Rufe im Zeitfenster erkannt</div>';
   } else {
-    el.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Ergebnis</div>'
+    el.innerHTML = nameInput
+      + '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Ergebnis</div>'
       + list.map(s => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--stroke);font-size:14px"><span>${s.name}</span><span style="color:var(--lime);font-weight:700;font-size:15px">${s.count}×</span></div>`).join('');
   }
   el.hidden = false;

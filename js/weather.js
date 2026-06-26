@@ -105,6 +105,43 @@ export function moonPhaseLabel(p) {
   return 'Abnehmende Sichel 🌘';
 }
 
+// Mond-Kalender: Alter, nächster Vollmond/Neumond.
+export function moonCalendar() {
+  const now = Date.now();
+  const REF = new Date(2000, 0, 6, 18, 14, 0).getTime();
+  const CYCLE = 29.530588853 * 86400000;
+  const elapsed = ((now - REF) % CYCLE + CYCLE) % CYCLE;
+  const p = elapsed / CYCLE; // 0=Neu, 0.5=Voll
+  const ageD = elapsed / 86400000;
+  const daysToFull = p < 0.5 ? (0.5 - p) * 29.530588853 : (1.5 - p) * 29.530588853;
+  const daysToNew  = (1 - p) * 29.530588853;
+  return {
+    phase: p,
+    ageInDays: Math.round(ageD * 10) / 10,
+    daysToFull: Math.ceil(daysToFull),
+    nextFull: new Date(now + daysToFull * 86400000),
+    daysToNew: Math.ceil(daysToNew),
+    nextNew: new Date(now + daysToNew * 86400000),
+  };
+}
+
+// Reverse-Geocoding (Nominatim, kostenlos).
+let _geoNameCache = null;
+export async function reverseGeocode(lat, lng) {
+  if (lat == null || lng == null) return null;
+  if (_geoNameCache && Math.abs(_geoNameCache.lat - lat) < 0.02 && Math.abs(_geoNameCache.lng - lng) < 0.02)
+    return _geoNameCache.name;
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat.toFixed(4)}&lon=${lng.toFixed(4)}&format=json&zoom=12`;
+    const res = await fetch(url, { headers: { 'Accept-Language': 'de' }, signal: AbortSignal.timeout(6000) });
+    const j = await res.json();
+    const a = j.address || {};
+    const name = a.city || a.town || a.village || a.hamlet || a.suburb || a.municipality || a.county || '';
+    _geoNameCache = { lat, lng, name };
+    return name || null;
+  } catch { return null; }
+}
+
 export function uvLabel(idx) {
   if (idx <= 2) return 'niedrig';
   if (idx <= 5) return 'moderat';
