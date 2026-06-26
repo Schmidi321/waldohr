@@ -179,6 +179,10 @@ body.mic-ready .orb{opacity:.72}
 .tr-inp{width:54px;padding:4px 6px;border-radius:8px;background:var(--glass);border:1px solid var(--stroke);color:var(--ink);font-size:12px;font-family:inherit;text-align:center;-moz-appearance:textfield}
 .tr-inp::-webkit-outer-spin-button,.tr-inp::-webkit-inner-spin-button{-webkit-appearance:none}
 .tr-go{flex:1;padding:5px 10px;border-radius:10px;background:rgba(163,230,53,.1);border:1px solid rgba(163,230,53,.28);color:var(--lime);font-size:12px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}
+.tr-range{flex:0 0 100%;height:4px;border-radius:4px;background:rgba(163,230,53,.2);outline:none;cursor:pointer;-webkit-appearance:none;appearance:none}
+.tr-range::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:var(--lime);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.45)}
+.tr-range::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:var(--lime);cursor:pointer;border:none;box-shadow:0 1px 4px rgba(0,0,0,.45)}
+.tr-val{font-size:11px;color:var(--lime);font-weight:700}
 
 .detect{margin-top:14px;background:var(--glass-strong);border:1px solid var(--stroke);border-radius:var(--r);padding:14px;display:flex;align-items:center;gap:13px;backdrop-filter:blur(14px);box-shadow:0 10px 30px -16px #000;transition:.45s;cursor:pointer}
 .detect:active{transform:scale(.98)}

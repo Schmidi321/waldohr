@@ -403,7 +403,7 @@ function makeDeleteBtn(row, url, key, attId) {
 function _makeScissorsBtn(row) {
   const btn = document.createElement('button');
   btn.className = 'rec-dl'; btn.title = 'Zuschneiden';
-  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 6 9M20 20 6 15"/></svg>';
+  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/></svg>';
   btn.onclick = () => _toggleTrimPanel(row);
   return btn;
 }
@@ -423,11 +423,14 @@ async function _toggleTrimPanel(row) {
     decoded = await new Promise((res, rej) => tmp.decodeAudioData(ab, res, rej));
     tmp.close().catch(() => {});
   } catch { panel.innerHTML = '<span class="tr-lbl" style="color:var(--rose)">Fehler</span>'; return; }
-  const dur = decoded.duration.toFixed(1);
-  panel.innerHTML = `<span class="tr-lbl">Von</span><input type="number" class="tr-inp tr-s" min="0" max="${dur}" step="0.1" value="0"><span class="tr-lbl">bis</span><input type="number" class="tr-inp tr-e" min="0" max="${dur}" step="0.1" value="${dur}"><span class="tr-lbl">Sek</span><button class="tr-go">✂ Zuschneiden</button>`;
+  const dur = decoded.duration;
+  const durF = dur.toFixed(1);
+  panel.innerHTML = `<span class="tr-lbl" style="flex:0 0 100%">Start <span class="tr-val tr-sv">0.0s</span></span><input type="range" class="tr-range tr-s" min="0" max="${durF}" step="0.1" value="0"><span class="tr-lbl" style="flex:0 0 100%;margin-top:4px">Ende <span class="tr-val tr-ev">${durF}s</span></span><input type="range" class="tr-range tr-e" min="0" max="${durF}" step="0.1" value="${durF}"><button class="tr-go" style="flex:0 0 100%;margin-top:6px">✂ Zuschneiden</button>`;
+  panel.querySelector('.tr-s').oninput = function() { panel.querySelector('.tr-sv').textContent = parseFloat(this.value).toFixed(1) + 's'; };
+  panel.querySelector('.tr-e').oninput = function() { panel.querySelector('.tr-ev').textContent = parseFloat(this.value).toFixed(1) + 's'; };
   panel.querySelector('.tr-go').onclick = async () => {
     const start = Math.max(0, parseFloat(panel.querySelector('.tr-s').value) || 0);
-    const end = Math.min(decoded.duration, parseFloat(panel.querySelector('.tr-e').value) || decoded.duration);
+    const end = Math.min(dur, parseFloat(panel.querySelector('.tr-e').value) || dur);
     if (start >= end) return;
     const sr = decoded.sampleRate;
     const trimmed = decoded.getChannelData(0).slice(Math.floor(start * sr), Math.floor(end * sr));
@@ -828,7 +831,12 @@ const recorder = {
       if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { type = t; break; }
     }
     try { this.mr = type ? new MediaRecorder(audio.stream, { mimeType: type }) : new MediaRecorder(audio.stream); }
-    catch (e) { console.warn('rec', e); return; }
+    catch (e) {
+      console.warn('rec', e);
+      if (statusTxt) statusTxt.textContent = 'Aufnahme nicht möglich';
+      setTimeout(() => { if (statusTxt && statusTxt.textContent === 'Aufnahme nicht möglich') statusTxt.textContent = ''; }, 3000);
+      return;
+    }
     this.chunks = []; this.label = label || null; this.key = key || null;
     this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
     this.mr.onstop = () => { this.setBtn(false); this.save(); };
@@ -949,10 +957,11 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
     if (sr) html += `<div class="pw-row"><span class="pw-icon">🌄</span><span class="pw-lbl">Sonnenaufgang</span><span class="pw-val">${fmt(sr)}</span></div>`;
     if (sr) html += `<div class="pw-row"><span class="pw-icon">🌅</span><span class="pw-lbl">Goldene Stunde</span><span class="pw-val">${fmt(sr)} – ${goldenEnd ? fmt(goldenEnd) : '–'}</span></div>`;
     if (sun.sunset) {
+      html += '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;padding:6px 0 2px;opacity:.7">Abends</div>';
       const goldenBegin = new Date(sun.sunset.getTime() - 45 * 60000);
-      html += `<div class="pw-row"><span class="pw-icon">🌇</span><span class="pw-lbl">Goldene Stunde ↓</span><span class="pw-val">${fmt(goldenBegin)} – ${fmt(sun.sunset)}</span></div>`;
+      html += `<div class="pw-row"><span class="pw-icon">🌇</span><span class="pw-lbl">Goldene Stunde</span><span class="pw-val">${fmt(goldenBegin)} – ${fmt(sun.sunset)}</span></div>`;
       html += `<div class="pw-row"><span class="pw-icon">🌆</span><span class="pw-lbl">Sonnenuntergang</span><span class="pw-val">${fmt(sun.sunset)}</span></div>`;
-      if (sun.civilEnd) html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Blaue Stunde ↓</span><span class="pw-val">${fmt(sun.sunset)} – ${fmt(sun.civilEnd)}</span></div>`;
+      if (sun.civilEnd) html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Blaue Stunde</span><span class="pw-val">${fmt(sun.sunset)} – ${fmt(sun.civilEnd)}</span></div>`;
     }
   }
   if (pw) {
@@ -1028,6 +1037,7 @@ window.__waldohr = {
   },
   isDetecting: () => audio.running && detectionActive,
   switchTab: v => { document.querySelector(`.nav button[data-v="${v}"]`)?.click(); },
+  openDownload: (url, filename, label) => openDownloadSheet(url, filename, label),
 };
 
 // ---- Kamera-Aufnahme: Foto oder Video, über eigene Kamera-UI ----

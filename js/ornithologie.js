@@ -11,8 +11,20 @@ function _csvBlob(rows) {
 }
 function _dlBlob(blob, name) {
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = name; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 8000);
+  if (window.__waldohr?.openDownload) {
+    window.__waldohr.openDownload(url, name, null);
+  } else {
+    const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 8000);
+  }
+}
+
+function _showStartPopup(label) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;pointer-events:none';
+  ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:22px 28px;text-align:center;max-width:240px;width:84%;box-shadow:0 20px 60px rgba(0,0,0,.6)"><div style="font-size:36px;margin-bottom:8px">🎙</div><div style="font-size:16px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif">${label}</div><div style="font-size:12px;color:var(--muted);margin-top:4px">Überwachung aktiv</div></div>`;
+  document.body.appendChild(ov);
+  setTimeout(() => ov.remove(), 3000);
 }
 function _groupByDateSpecies(dets) {
   const map = new Map();
@@ -79,32 +91,51 @@ function _exportNabu(dets) {
 }
 
 // ---- Dauerüberwachung ----
+let _duInterval = null;
+
 function _initDU() {
   const du = getDauerUeberwachung();
   const enabled = $('orniDuEnabled');
   const presetsEl = $('orniDuPresets');
+  const countdown = $('duCountdown');
+  const timerEl = $('duTimer');
+  const stopBtn = $('duStop');
   if (!enabled || !presetsEl) return;
   enabled.checked = du.enabled;
   presetsEl.querySelectorAll('.du-preset').forEach(b =>
     b.classList.toggle('on', parseInt(b.dataset.min) === du.durationMin)
   );
+  const fmtTime = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  function _endDU() {
+    clearInterval(_duInterval); _duInterval = null;
+    if (countdown) countdown.hidden = true;
+    if (window.__waldohr) window.__waldohr.stopDetection();
+  }
   const save = () => {
     const preset = presetsEl.querySelector('.du-preset.on');
     setDauerUeberwachung({ enabled: enabled.checked, durationMin: parseInt(preset?.dataset.min ?? '30') });
   };
   enabled.addEventListener('change', save);
-  presetsEl.querySelectorAll('.du-preset').forEach(b => b.addEventListener('click', () => {
+  presetsEl.querySelectorAll('.du-preset').forEach(b => b.addEventListener('click', async () => {
     presetsEl.querySelectorAll('.du-preset').forEach(x => x.classList.remove('on'));
     b.classList.add('on');
     save();
-  }));
-  const startBtn = $('duStartBtn');
-  if (startBtn) startBtn.addEventListener('click', async () => {
+    if (_duInterval) { _endDU(); return; }
     if (window.__waldohr) {
       await window.__waldohr.startDetection();
       window.__waldohr.switchTab('v-listen');
     }
-  });
+    _showStartPopup('Dauerüberwachung');
+    let remaining = parseInt(b.dataset.min) * 60;
+    if (timerEl) timerEl.textContent = fmtTime(remaining);
+    if (countdown) countdown.hidden = false;
+    _duInterval = setInterval(() => {
+      remaining--;
+      if (timerEl) timerEl.textContent = fmtTime(remaining);
+      if (remaining <= 0) _endDU();
+    }, 1000);
+  }));
+  if (stopBtn) stopBtn.addEventListener('click', _endDU);
 }
 
 // ---- Punkt-Zählung (5-min BirdLife-Standard) ----
@@ -142,7 +173,7 @@ function _initPunktZaehlung() {
       await window.__waldohr.startDetection();
       window.__waldohr.switchTab('v-listen');
     }
-
+    _showStartPopup('Punkt-Zählung');
     startBtn.textContent = 'Stoppen';
     startBtn.classList.add('primary');
     if (speciesEl) { speciesEl.hidden = true; speciesEl.innerHTML = ''; }
@@ -256,8 +287,55 @@ function _renderProtokolle() {
 
 // ---- Export-Tab ----
 async function _renderExportSection() {
-  const dets = qualifyingDetections(await allDetections());
-  const wire = (id, fn) => { const el = $(id); if (el) el.onclick = () => fn(dets); };
+  const allDets = qualifyingDetections(await allDetections());
+  let sessions = [];
+  try { sessions = JSON.parse(localStorage.getItem('waldohr.pk.sessions') || '[]'); } catch {}
+  const container = $('orniExport');
+  if (!container) return;
+
+  const existingSel = document.getElementById('_sessSelector');
+  if (existingSel) existingSel.remove();
+
+  if (sessions.length) {
+    const selEl = document.createElement('div'); selEl.id = '_sessSelector';
+    selEl.innerHTML = `<div class="infoblock" style="margin-bottom:14px">
+      <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.8px">Sitzungen</div>
+      <label style="display:flex;align-items:center;gap:10px;padding:7px 0;font-size:13px;cursor:pointer;border-bottom:1px solid var(--stroke)">
+        <input type="checkbox" id="duExportAll" checked style="width:16px;height:16px;accent-color:var(--lime)">
+        <span style="color:var(--ink);font-weight:600">Alle Aufnahmen</span>
+        <span style="color:var(--lime);font-weight:700;margin-left:auto">${allDets.length}</span>
+      </label>
+      ${sessions.map((s, i) => {
+        const d = new Date(s.ts);
+        const label = s.name || ('Sitzung ' + d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' }) + ' ' + d.toLocaleTimeString('de-DE', { hour:'2-digit', minute:'2-digit' }));
+        return `<label style="display:flex;align-items:center;gap:10px;padding:7px 0;font-size:12px;cursor:pointer;border-bottom:1px solid var(--stroke)">
+          <input type="checkbox" class="du-sess-chk" data-idx="${i}" style="width:16px;height:16px;accent-color:var(--lime)">
+          <span style="flex:1;color:var(--ink)">${label}</span>
+          <span style="color:var(--lime);font-weight:700">${s.species ? s.species.length : 0} Arten</span>
+        </label>`;
+      }).join('')}
+    </div>`;
+    const exportBtns = container.querySelector('.export-btns');
+    if (exportBtns) container.insertBefore(selEl, exportBtns);
+    else container.insertBefore(selEl, container.firstChild);
+    document.getElementById('duExportAll')?.addEventListener('change', function() {
+      container.querySelectorAll('.du-sess-chk').forEach(c => { c.disabled = this.checked; if (this.checked) c.checked = false; });
+    });
+  }
+
+  function getSelectedDets() {
+    const allChk = document.getElementById('duExportAll');
+    if (!allChk || allChk.checked || !sessions.length) return allDets;
+    const checked = [...container.querySelectorAll('.du-sess-chk:checked')];
+    if (!checked.length) return allDets;
+    const ranges = checked.map(c => {
+      const s = sessions[parseInt(c.dataset.idx)];
+      return { start: s.startTs, end: s.startTs + 5 * 60 * 1000 };
+    });
+    return allDets.filter(d => ranges.some(r => d.ts >= r.start && d.ts <= r.end));
+  }
+
+  const wire = (id, fn) => { const el = $(id); if (el) el.onclick = () => fn(getSelectedDets()); };
   wire('orniEbirdBtn', _exportEbird);
   wire('orniOrnithoBtn', _exportOrnitho);
   wire('orniBirdnetBtn', _exportBirdnetNotebook);

@@ -8,6 +8,7 @@ let _mode = 'photo';
 let _zoomSupported = false, _zoomMin = 1, _zoomMax = 1;
 let _onCapture = null;
 let _zoomDir = 'none', _zoomSpeed = 'slow', _zoomAnimTimer = null;
+let _azDelayTimer = null, _intervalTimer = null, _burstActive = false;
 
 // ---- Geräte aufzählen (Labels erst nach Genehmigung verfügbar) ----
 async function _enumerateDevices() {
@@ -52,7 +53,51 @@ function _applyZoom(v) {
 }
 
 function _stopZoomAnim() {
+  if (_azDelayTimer) { clearTimeout(_azDelayTimer); _azDelayTimer = null; }
   if (_zoomAnimTimer) { cancelAnimationFrame(_zoomAnimTimer); _zoomAnimTimer = null; }
+}
+
+function _smoothStopZoom() {
+  _stopZoomAnim();
+  const vid = document.getElementById('camVideo');
+  if (vid) { vid.style.transition = 'transform 0.4s ease-out'; setTimeout(() => { if (vid) vid.style.transition = ''; }, 420); }
+}
+
+function _captureFrameOnly() {
+  const video = document.getElementById('camVideo');
+  const cv = document.getElementById('camCanvas');
+  if (!video || !cv) return Promise.resolve();
+  return new Promise(resolve => {
+    cv.width = video.videoWidth || 1280; cv.height = video.videoHeight || 720;
+    cv.getContext('2d').drawImage(video, 0, 0, cv.width, cv.height);
+    cv.toBlob(blob => { if (blob && _onCapture) _onCapture({ blob, mime: 'image/jpeg', kind: 'photo' }); resolve(); }, 'image/jpeg', 0.92);
+  });
+}
+
+async function _doBurst() {
+  if (_burstActive) return;
+  _burstActive = true;
+  const cap = document.getElementById('camBurst');
+  if (cap) cap.classList.add('on');
+  const end = Date.now() + 2000;
+  while (Date.now() < end && _burstActive) {
+    await _captureFrameOnly();
+    await new Promise(r => setTimeout(r, 120));
+  }
+  _burstActive = false;
+  if (cap) cap.classList.remove('on');
+}
+
+function _toggleInterval() {
+  const btn = document.getElementById('camInterval');
+  if (_intervalTimer) {
+    clearInterval(_intervalTimer); _intervalTimer = null;
+    if (btn) btn.classList.remove('on');
+  } else {
+    _captureFrameOnly();
+    _intervalTimer = setInterval(_captureFrameOnly, 3000);
+    if (btn) btn.classList.add('on');
+  }
 }
 
 function _startZoomAnim() {
@@ -262,6 +307,8 @@ function _stopMeter() {
 // ---- Aufräumen ----
 function _cleanup() {
   _stopMeter(); _stopZoomAnim();
+  _burstActive = false;
+  if (_intervalTimer) { clearInterval(_intervalTimer); _intervalTimer = null; }
   if (_mr && _mr.state === 'recording') _mr.stop();
   _mr = null; _mrChunks = [];
   if (_stream)  { _stream.getTracks().forEach(t => t.stop());  _stream = null; }
@@ -297,7 +344,11 @@ function _updateModeUI() {
     const azWrap = document.getElementById('camAutoZoomWrap');
     if (azWrap) azWrap.hidden = true;
     if (azToggle) azToggle.classList.remove('active');
+    if (_intervalTimer) { clearInterval(_intervalTimer); _intervalTimer = null; const ib = document.getElementById('camInterval'); if (ib) ib.classList.remove('on'); }
   }
+  // Burst/Interval nur im Fotomodus sichtbar
+  const photoExtras = document.getElementById('camPhotoExtras');
+  if (photoExtras) photoExtras.style.display = _mode === 'photo' ? 'flex' : 'none';
   // Flip-Button bei Dual ausblenden (macht dort keinen Sinn)
   const flip = document.getElementById('camFlip');
   if (flip) flip.style.visibility = isDual ? 'hidden' : '';
@@ -424,6 +475,28 @@ export function openCamera(onCapture) {
         document.getElementById(id)?.classList.add('on');
       });
     });
+    // Verzögerter Zoom-Start (3s countdown)
+    document.getElementById('camAzDelay')?.addEventListener('click', () => {
+      _stopZoomAnim();
+      const btn = document.getElementById('camAzDelay');
+      let n = 3;
+      if (btn) btn.textContent = '⏱ ' + n + 's';
+      _azDelayTimer = setInterval(() => {
+        n--;
+        if (n > 0) { if (btn) btn.textContent = '⏱ ' + n + 's'; }
+        else {
+          clearInterval(_azDelayTimer); _azDelayTimer = null;
+          if (btn) btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> 3s';
+          _startZoomAnim();
+        }
+      }, 1000);
+    });
+    // Sanfter Zoom-Stop
+    document.getElementById('camAzStop')?.addEventListener('click', _smoothStopZoom);
+    // Serienaufnahme
+    document.getElementById('camBurst')?.addEventListener('click', _doBurst);
+    // Intervall-Aufnahme
+    document.getElementById('camInterval')?.addEventListener('click', _toggleInterval);
 
     const camSel = document.getElementById('camCamSelect');
     const micSel = document.getElementById('camMicSelect');

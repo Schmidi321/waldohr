@@ -192,7 +192,10 @@
               <button class="du-preset" data-min="480">8 Std</button>
             </div>
           </div>
-          <button class="btn ghost" id="duStartBtn" style="width:100%;margin-top:14px">Lauschen starten</button>
+          <div id="duCountdown" hidden style="margin-top:12px;text-align:center">
+            <div id="duTimer" style="font-size:42px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;letter-spacing:2px;margin-bottom:8px">30:00</div>
+            <button class="btn ghost" id="duStop" style="width:100%">Stoppen</button>
+          </div>
         </div>
         <div class="infoblock" style="margin-top:14px">
           <h3><span style="font-size:15px">📍</span> Punkt-Zählung</h3>
@@ -687,10 +690,31 @@
               <button class="cam-az-btn on" id="camAzSlow">Langsam</button>
             </div>
           </div>
+          <div class="cam-az-row" style="margin-top:5px">
+            <span class="cam-az-label">Steuerung</span>
+            <div class="cam-az-btns">
+              <button class="cam-az-btn" id="camAzDelay" title="3 Sek Verzögerung dann starten">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> 3s
+              </button>
+              <button class="cam-az-btn" id="camAzStop" title="Zoom sanft stoppen">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="3" y="3" width="18" height="18" rx="2"/></svg> Stop
+              </button>
+            </div>
+          </div>
         </div>
         <div class="cam-bottom">
           <select id="camMicSelect" class="cam-device-select" title="Mikrofon"></select>
-          <button id="camCapture" class="cam-shutter" aria-label="Auslösen"></button>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+            <div id="camPhotoExtras" style="display:flex;gap:10px">
+              <button id="camBurst" class="cam-ctrl-btn" title="Serienaufnahme (2 Sek)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><rect x="2" y="6" width="6" height="12" rx="1"/><rect x="9" y="6" width="6" height="12" rx="1"/><rect x="16" y="6" width="6" height="12" rx="1"/></svg>
+              </button>
+              <button id="camInterval" class="cam-ctrl-btn" title="Intervall (alle 3 Sek)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><line x1="5" y1="19" x2="5" y2="21"/><line x1="9" y1="20" x2="9" y2="22"/><line x1="13" y1="20" x2="13" y2="22"/></svg>
+              </button>
+            </div>
+            <button id="camCapture" class="cam-shutter" aria-label="Auslösen"></button>
+          </div>
           <select id="camCamSelect" class="cam-device-select" title="Kamera"></select>
         </div>
       </div>

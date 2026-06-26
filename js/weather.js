@@ -192,7 +192,7 @@ export async function fetchTodayHours(lat, lng) {
     const times = j.hourly.time;
     const today = new Date().toISOString().slice(0, 10);
     const nowH = new Date().getHours();
-    const slots = [nowH, nowH + 1, nowH + 2].filter(h => h < 24).map(h => {
+    const slots = [nowH, nowH + 1, nowH + 2, nowH + 3, nowH + 4, nowH + 5].filter(h => h < 24).map(h => {
       const t = today + 'T' + String(h).padStart(2, '0') + ':00';
       const i = times.indexOf(t);
       if (i < 0) return null;
