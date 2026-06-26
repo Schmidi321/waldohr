@@ -263,6 +263,18 @@ function initSensitivitySliders() {
     const v = parseInt(as.value, 10); if (av) av.textContent = v + '%';
     try { localStorage.setItem('waldohr.autoRecConf', String(v / 100)); } catch {}
   };
+  const durPresets = $('autoRecDurPresets');
+  if (durPresets) {
+    const curDur = (() => { try { const v = parseInt(localStorage.getItem('waldohr.autoRecDur'), 10); return [3, 5, 10].includes(v) ? v : 3; } catch { return 3; } })();
+    durPresets.querySelectorAll('.du-preset').forEach(btn => {
+      btn.classList.toggle('on', parseInt(btn.dataset.dur, 10) === curDur);
+      btn.onclick = () => {
+        durPresets.querySelectorAll('.du-preset').forEach(b => b.classList.remove('on'));
+        btn.classList.add('on');
+        try { localStorage.setItem('waldohr.autoRecDur', btn.dataset.dur); } catch {}
+      };
+    });
+  }
 }
 
 function serverUrlGet() { try { return localStorage.getItem('waldohr.server') || ''; } catch { return ''; } }

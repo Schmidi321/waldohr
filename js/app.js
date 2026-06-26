@@ -241,6 +241,10 @@ function getAutoRecordConfidence() {
   try { const v = parseFloat(localStorage.getItem('waldohr.autoRecConf')); return isNaN(v) ? 0.85 : v; }
   catch { return 0.85; }
 }
+function getAutoRecordDuration() {
+  try { const v = parseInt(localStorage.getItem('waldohr.autoRecDur'), 10); return [3, 5, 10].includes(v) ? v : 3; }
+  catch { return 3; }
+}
 const todayKey = () => { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); };
 function autoRecordedToday() {
   try { return JSON.parse(localStorage.getItem('waldohr.autorec.' + todayKey()) || '[]'); } catch { return []; }
@@ -251,36 +255,74 @@ function markAutoRecorded(key) {
     if (!list.includes(key)) { list.push(key); localStorage.setItem('waldohr.autorec.' + todayKey(), JSON.stringify(list)); }
   } catch {}
 }
-async function maybeAutoRecord(det, samples, sampleRate) {
-  if (det.confidence < getAutoRecordConfidence()) return;
-  if (autoRecordedToday().includes(det.key)) return;
-  markAutoRecorded(det.key);
-  let enhanced = samples;
-  try { enhanced = await enhanceSamples(samples, sampleRate); } catch (e) { console.warn('enhance', e); }
+
+function _makeAudioIcon() {
+  const el = document.createElement('div'); el.className = 'rec-media-icon';
+  el.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="22" height="22"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
+  return el;
+}
+
+async function _saveAutoRecRow(det, blob, mime) {
   const now = new Date();
   const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const prefix = det.species.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  const gpsStr = geo.pos ? geo.pos.lat.toFixed(5) + ',' + geo.pos.lng.toFixed(5) : '';
-  const blob = encodeWav(enhanced, sampleRate, {
-    name: det.species,
-    date: now.toISOString().slice(0, 10) + ' ' + now.toLocaleTimeString('de-DE'),
-    comment: gpsStr || undefined
-  });
-  const url = URL.createObjectURL(blob);
   const gpsTag = geo.pos ? '_' + geo.pos.lat.toFixed(4) + '_' + geo.pos.lng.toFixed(4) : '';
+  const ext = mime.includes('wav') ? 'wav' : mime.includes('mp4') ? 'm4a' : 'webm';
+  const url = URL.createObjectURL(blob);
   const row = document.createElement('div'); row.className = 'rec-row';
   const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
   wireAudioRouting(a);
   const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
-  const dl = makeDownloadBtn(url, prefix + '_' + stamp + gpsTag + '.wav', det.species);
+  const dl = makeDownloadBtn(url, prefix + '_' + stamp + gpsTag + '.' + ext, det.species);
   let attId = null;
-  try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime: 'audio/wav' }); }
+  try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime }); }
   catch (e) { console.warn('addAttachment', e); }
   const del = makeDeleteBtn(row, url, det.key, attId);
-  row.append(a, lb, _spacer(), dl, del);
+  row.append(_makeAudioIcon(), lb, _spacer(), dl, del, a);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
   registerRecording(det.key, url);
   if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
+}
+
+async function maybeAutoRecord(det, samples, sampleRate) {
+  if (det.confidence < getAutoRecordConfidence()) return;
+  if (autoRecordedToday().includes(det.key)) return;
+  markAutoRecorded(det.key);
+  const dur = getAutoRecordDuration();
+  const gpsStr = geo.pos ? geo.pos.lat.toFixed(5) + ',' + geo.pos.lng.toFixed(5) : '';
+
+  if (dur > 3 && audio.stream) {
+    let mime = '';
+    for (const t of ['audio/webm;codecs=opus', 'audio/webm']) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { mime = t; break; }
+    }
+    const chunks = [];
+    let mr;
+    try { mr = mime ? new MediaRecorder(audio.stream, { mimeType: mime }) : new MediaRecorder(audio.stream); } catch {}
+    if (mr) {
+      mr.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
+      mr.onstop = async () => {
+        const raw = new Blob(chunks, { type: mime || 'audio/webm' });
+        try {
+          const { samples: s2, sampleRate: sr2 } = await enhanceBlob(raw);
+          const wavBlob = encodeWav(s2, sr2, { name: det.species, comment: gpsStr || undefined });
+          await _saveAutoRecRow(det, wavBlob, 'audio/wav');
+        } catch { await _saveAutoRecRow(det, raw, mime || 'audio/webm'); }
+      };
+      mr.start();
+      setTimeout(() => { try { if (mr.state === 'recording') mr.stop(); } catch {} }, dur * 1000);
+      return;
+    }
+  }
+
+  let enhanced = samples;
+  try { enhanced = await enhanceSamples(samples, sampleRate); } catch (e) { console.warn('enhance', e); }
+  const blob = encodeWav(enhanced, sampleRate, {
+    name: det.species,
+    date: new Date().toISOString().slice(0, 10) + ' ' + new Date().toLocaleTimeString('de-DE'),
+    comment: gpsStr || undefined
+  });
+  await _saveAutoRecRow(det, blob, 'audio/wav');
 }
 
 // ---- Herunterladen-Sheet: styled bottom-sheet statt nativer Browser-Dialog ----
@@ -773,7 +815,7 @@ const recorder = {
     const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
     wireAudioRouting(a);
     const dl = makeDownloadBtn(url, name, this.label);
-    row.appendChild(a);
+    row.appendChild(_makeAudioIcon());
     if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
     row.appendChild(_spacer());
     row.appendChild(dl);
@@ -781,6 +823,7 @@ const recorder = {
     try { attId = await addAttachment({ key: this.key, label: this.label, kind: 'audio', blob: saveBlob, mime }); }
     catch (e) { console.warn('addAttachment', e); }
     row.appendChild(makeDeleteBtn(row, url, this.key, attId));
+    row.appendChild(a);
     const list = document.getElementById('recList'); if (list) list.prepend(row);
     if (this.key) registerRecording(this.key, url);
     if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
@@ -859,6 +902,7 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
     const goldenEnd = sr ? new Date(sr.getTime() + 45 * 60000) : null;
     html += '<div class="pw-section">Licht-Zeiten</div>';
     if (sun.civilBegin) html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Blaue Stunde</span><span class="pw-val">${fmt(sun.civilBegin)} – ${blueEnd ? fmt(blueEnd) : '–'}</span></div>`;
+    if (sr) html += `<div class="pw-row"><span class="pw-icon">🌄</span><span class="pw-lbl">Sonnenaufgang</span><span class="pw-val">${fmt(sr)}</span></div>`;
     if (sr) html += `<div class="pw-row"><span class="pw-icon">🌅</span><span class="pw-lbl">Goldene Stunde</span><span class="pw-val">${fmt(sr)} – ${goldenEnd ? fmt(goldenEnd) : '–'}</span></div>`;
   }
   if (pw) {

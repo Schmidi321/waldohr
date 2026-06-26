@@ -13,14 +13,22 @@ let _zoomDir = 'none', _zoomSpeed = 'slow', _zoomAnimTimer = null;
 async function _enumerateDevices() {
   try {
     const all = await navigator.mediaDevices.enumerateDevices();
-    const cams = all.filter(d => d.kind === 'videoinput');
+    const allCams = all.filter(d => d.kind === 'videoinput');
     const mics = all.filter(d => d.kind === 'audioinput');
     const camSel = document.getElementById('camCamSelect');
-    const micSel = document.getElementById('camMicSelect');
-    if (camSel && cams.length) {
-      camSel.innerHTML = cams.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Kamera ' + (i + 1)}</option>`).join('');
-      camSel.style.display = cams.length > 1 ? '' : 'none';
+    if (camSel && allCams.length) {
+      // Nur Rückkameras (kein Frontkamera/Selfie)
+      const back = allCams.filter(d => !d.label.toLowerCase().match(/front|facetime|user|selfie/));
+      // Weitwinkel = Hauptkamera ohne "ultra" oder "tele", Tele = Teleobjektiv
+      const wide = back.find(d => !d.label.toLowerCase().match(/ultra|telephoto|tele|[23]\.?[0-9]?x\b/)) || back[0];
+      const tele = back.find(d => d.label.toLowerCase().match(/telephoto|tele|[23]\.?[0-9]?x\b/) && d !== wide);
+      const chosen = [wide, tele].filter(Boolean);
+      if (!chosen.length) chosen.push(...allCams.slice(0, 2));
+      const labels = ['📷 Weitwinkel', '🔭 Tele'];
+      camSel.innerHTML = chosen.map((d, i) => `<option value="${d.deviceId}">${labels[i]}</option>`).join('');
+      camSel.style.display = chosen.length > 1 ? '' : 'none';
     }
+    const micSel = document.getElementById('camMicSelect');
     if (micSel && mics.length) {
       micSel.innerHTML = mics.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Mikrofon ' + (i + 1)}</option>`).join('');
       micSel.style.display = mics.length > 1 ? '' : 'none';
@@ -53,14 +61,18 @@ function _startZoomAnim() {
   const from = _zoomDir === 'in' ? minZ : maxZ;
   const to   = _zoomDir === 'in' ? maxZ : minZ;
   if (from === to) return;
-  _applyZoom(from);
+  const vid = document.getElementById('camVideo');
   const t0 = performance.now();
   const tick = now => {
     const p = Math.min(1, (now - t0) / dur);
     // Logarithmische Interpolation → wahrgenommene Zoom-Geschwindigkeit konstant
-    _applyZoom(from * Math.pow(to / from, p));
+    const v = from * Math.pow(to / from, p);
+    // CSS scale für flüssige Animation ohne physischen Linsenwechsel-Sprung
+    if (vid) vid.style.transform = `scale(${Math.max(1, v / (minZ || 1))})`;
+    const sl = document.getElementById('camZoom'); if (sl) sl.value = v;
+    const zv = document.getElementById('camZoomVal'); if (zv) zv.textContent = v.toFixed(1) + '×';
     if (p < 1) { _zoomAnimTimer = requestAnimationFrame(tick); }
-    else { _zoomAnimTimer = null; _stopZoomAnim(); }
+    else { _zoomAnimTimer = null; }
   };
   _zoomAnimTimer = requestAnimationFrame(tick);
 }
@@ -369,15 +381,6 @@ export function openCamera(onCapture) {
         if (pip) { pip.srcObject = null; pip.hidden = true; }
       }
     });
-    document.getElementById('camModeDual')?.addEventListener('click', () => {
-      _mode = 'tele-wide'; _updateModeUI();
-      _startDualStream('tele-wide').catch(e => console.warn('tele-wide', e));
-    });
-    document.getElementById('camModeFrontBack')?.addEventListener('click', () => {
-      _mode = 'front-back'; _updateModeUI();
-      _startDualStream('front-back').catch(e => console.warn('front-back', e));
-    });
-
     document.getElementById('camCapture')?.addEventListener('click', () => {
       if (_mode === 'video') _toggleVideo();
       else _takePhoto();

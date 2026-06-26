@@ -160,6 +160,16 @@ function _initPunktZaehlung() {
   if (bannerStop) bannerStop.onclick = () => { if (_pkInterval) _endPk(); };
 }
 
+function _savePkSession(startTs, species) {
+  try {
+    const sessions = JSON.parse(localStorage.getItem('waldohr.pk.sessions') || '[]');
+    sessions.unshift({ name: '', ts: Date.now(), startTs, species });
+    if (sessions.length > 100) sessions.length = 100;
+    localStorage.setItem('waldohr.pk.sessions', JSON.stringify(sessions));
+    return 0; // index of the newly saved session
+  } catch { return -1; }
+}
+
 async function _showPkResults(el, startTs) {
   if (!el) return;
   const endTs = startTs + PK_SECS * 1000;
@@ -172,6 +182,7 @@ async function _showPkResults(el, startTs) {
     byKey[d.key].count++;
   }
   const list = Object.values(byKey).sort((a, b) => b.count - a.count);
+  const sessionIdx = _savePkSession(startTs, list);
   const nameInput = `<input id="pkSessionName" type="text" placeholder="Sitzungsname (optional)" style="width:100%;box-sizing:border-box;background:var(--glass);border:1px solid var(--stroke);border-radius:12px;padding:10px 14px;color:var(--ink);font-size:13px;font-family:inherit;outline:none;margin-bottom:10px">`;
   if (!list.length) {
     el.innerHTML = nameInput + '<div style="color:var(--faint);font-size:13px;text-align:center;padding:12px 0">Keine Rufe im Zeitfenster erkannt</div>';
@@ -181,6 +192,40 @@ async function _showPkResults(el, startTs) {
       + list.map(s => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--stroke);font-size:14px"><span>${s.name}</span><span style="color:var(--lime);font-weight:700;font-size:15px">${s.count}×</span></div>`).join('');
   }
   el.hidden = false;
+  if (sessionIdx >= 0) {
+    const inp = el.querySelector('#pkSessionName');
+    if (inp) inp.oninput = () => {
+      try {
+        const sessions = JSON.parse(localStorage.getItem('waldohr.pk.sessions') || '[]');
+        if (sessions[sessionIdx] != null) { sessions[sessionIdx].name = inp.value; localStorage.setItem('waldohr.pk.sessions', JSON.stringify(sessions)); }
+      } catch {}
+    };
+  }
+}
+
+function _renderProtokolle() {
+  const list = $('orniProtList');
+  if (!list) return;
+  let sessions;
+  try { sessions = JSON.parse(localStorage.getItem('waldohr.pk.sessions') || '[]'); } catch { sessions = []; }
+  if (!sessions.length) {
+    list.innerHTML = '<div class="infoblock" style="margin-top:14px"><p style="color:var(--muted);font-size:13px;text-align:center;padding:8px 0">Noch keine Zählsitzungen gespeichert.<br>Starte eine Punkt-Zählung im Überwachungs-Tab.</p></div>';
+    return;
+  }
+  list.innerHTML = sessions.map((s, i) => {
+    const d = new Date(s.ts);
+    const dateStr = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const timeStr = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    const label = s.name || ('Sitzung vom ' + dateStr);
+    const rows = s.species && s.species.length
+      ? s.species.map(sp => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-top:1px solid var(--stroke);font-size:13px"><span>${sp.name}</span><span style="color:var(--lime);font-weight:700">${sp.count}×</span></div>`).join('')
+      : '<div style="color:var(--faint);font-size:12px;padding-top:6px">Keine Rufe erkannt</div>';
+    return `<div class="infoblock" style="margin-top:${i ? '10' : '14'}px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div><div style="font-weight:700;font-size:14px;color:var(--ink)">${label}</div><div style="font-size:11px;color:var(--muted);margin-top:2px">${dateStr} · ${timeStr}</div></div>
+        <div style="font-size:18px;font-weight:700;color:var(--lime)">${s.species ? s.species.length : 0} Arten</div>
+      </div>${rows}</div>`;
+  }).join('');
 }
 
 // ---- Export-Tab ----
@@ -205,6 +250,7 @@ export function initOrni() {
       const panel = panels[b.dataset.tab];
       if (panel) panel.hidden = false;
       if (b.dataset.tab === 'export') _renderExportSection();
+      if (b.dataset.tab === 'protokolle') _renderProtokolle();
     }));
   }
   _initDU();
