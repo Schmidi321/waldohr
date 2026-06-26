@@ -1417,6 +1417,7 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
 window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);
 
 // API for Punkt-Zählung cross-tab flow (ornithologie.js)
+let _triggerRaf = null, _triggerMr = null;
 window.__waldohr = {
   startDetection: async () => {
     if (!audio.running) {
@@ -1435,6 +1436,72 @@ window.__waldohr = {
   isDetecting: () => audio.running && detectionActive,
   switchTab: v => { document.querySelector(`.nav button[data-v="${v}"]`)?.click(); },
   openDownload: (url, filename, label) => openDownloadSheet(url, filename, label),
+  startTriggerRec: (threshold) => {
+    if (_triggerRaf) return;
+    const tFreq = new Uint8Array(audio.analyser?.frequencyBinCount || 512);
+    let tMr = null, tChunks = [], tSilenceAt = null;
+    const SILENCE_MS = 3000;
+    let tType = '';
+    for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { tType = t; break; }
+    }
+    function tStartRec() {
+      if (tMr && tMr.state === 'recording') return;
+      if (!audio.stream) return;
+      tChunks = [];
+      try { tMr = tType ? new MediaRecorder(audio.stream, { mimeType: tType }) : new MediaRecorder(audio.stream); _triggerMr = tMr; }
+      catch { return; }
+      tMr.ondataavailable = e => { if (e.data?.size) tChunks.push(e.data); };
+      tMr.onstop = async () => {
+        _triggerMr = null;
+        if (!tChunks.length) return;
+        const raw = new Blob(tChunks, { type: tChunks[0].type || 'audio/webm' });
+        let saveBlob, mime, url, ext;
+        try {
+          const { samples, sampleRate } = await enhanceBlob(raw);
+          saveBlob = encodeWav(samples, sampleRate); mime = 'audio/wav';
+          url = URL.createObjectURL(saveBlob); ext = 'wav';
+        } catch { saveBlob = raw; mime = raw.type; url = URL.createObjectURL(raw); ext = 'webm'; }
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        const name = 'trigger_' + stamp + '.' + ext;
+        const row = document.createElement('div'); row.className = 'rec-row';
+        const a = document.createElement('audio'); a.src = url; a.preload = 'metadata'; a.hidden = true;
+        wireAudioRouting(a);
+        const dl = makeDownloadBtn(url, name, 'Trigger');
+        row.appendChild(_makeAudioIcon());
+        const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = 'Trigger'; row.appendChild(lb);
+        const durLb = document.createElement('span'); durLb.className = 'rec-dur';
+        a.addEventListener('loadedmetadata', () => { const s = Math.floor(a.duration); if (isFinite(s) && s > 0) durLb.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }, { once: true });
+        row.appendChild(durLb); row.appendChild(_spacer()); row.appendChild(dl); row.appendChild(_makeScissorsBtn(row));
+        let attId = null;
+        try { attId = await addAttachment({ key: null, label: 'Trigger', kind: 'audio', blob: saveBlob, mime }); } catch {}
+        row.appendChild(makeDeleteBtn(row, url, null, attId)); row.appendChild(a);
+        const list = document.getElementById('recList'); if (list) list.prepend(row);
+        if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
+      };
+      tMr.start();
+    }
+    function tTick() {
+      _triggerRaf = requestAnimationFrame(tTick);
+      if (!audio.analyser) return;
+      audio.analyser.getByteFrequencyData(tFreq);
+      let sum = 0; for (let i = 0; i < tFreq.length; i++) sum += tFreq[i];
+      const avg = sum / tFreq.length;
+      if (avg > threshold) {
+        tSilenceAt = null;
+        if (!tMr || tMr.state !== 'recording') tStartRec();
+      } else if (tMr && tMr.state === 'recording') {
+        if (!tSilenceAt) tSilenceAt = Date.now();
+        if (Date.now() - tSilenceAt >= SILENCE_MS) { tMr.stop(); tMr = null; tSilenceAt = null; }
+      }
+    }
+    tTick();
+  },
+  stopTriggerRec: () => {
+    if (_triggerRaf) { cancelAnimationFrame(_triggerRaf); _triggerRaf = null; }
+    if (_triggerMr && _triggerMr.state === 'recording') _triggerMr.stop();
+    _triggerMr = null;
+  },
 };
 
 // ---- Kamera-Aufnahme: Foto oder Video, über eigene Kamera-UI ----

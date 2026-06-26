@@ -129,7 +129,7 @@
           <div class="hb" id="topSpecies"></div>
         </div>
         <div class="card">
-          <div class="ch">Diese Woche <em>Rufe pro Tag</em></div>
+          <div class="ch">Letzte 14 Tage <em>Erkennungen pro Tag</em></div>
           <div class="vb" id="weekBars"></div>
         </div>
         <div class="card">
@@ -195,6 +195,17 @@
           <div id="duCountdown" hidden style="margin-top:12px;text-align:center">
             <div id="duTimer" style="font-size:42px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;letter-spacing:2px;margin-bottom:8px">30:00</div>
             <button class="btn ghost" id="duStop" style="width:100%">Stoppen</button>
+          </div>
+          <div style="margin-top:14px;border-top:1px solid var(--stroke);padding-top:12px">
+            <label class="switch-row">
+              <span>Trigger-Aufnahme <em style="font-size:11px;color:var(--muted);font-style:normal">startet bei Geräusch</em></span>
+              <span class="switch"><input type="checkbox" id="duTriggerEnabled"/><span class="switch-track"></span></span>
+            </label>
+            <div id="duTriggerConfig" hidden style="margin-top:10px">
+              <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Empfindlichkeit: <span id="duTriggerVal">Mittel</span></div>
+              <input type="range" id="duTriggerLevel" min="5" max="50" value="20" step="5" style="width:100%;accent-color:var(--lime)">
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin-top:2px"><span>hoch</span><span>niedrig</span></div>
+            </div>
           </div>
         </div>
         <div class="infoblock" style="margin-top:14px">

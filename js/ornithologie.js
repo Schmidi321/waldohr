@@ -92,6 +92,9 @@ function _exportNabu(dets) {
 
 // ---- Dauerüberwachung ----
 let _duInterval = null;
+const LS_TRIGGER = 'waldohr.trigger';
+function _getTrigger() { try { return JSON.parse(localStorage.getItem(LS_TRIGGER)) || { enabled: false, level: 20 }; } catch { return { enabled: false, level: 20 }; } }
+function _setTrigger(v) { try { localStorage.setItem(LS_TRIGGER, JSON.stringify(v)); } catch {} }
 
 function _initDU() {
   const du = getDauerUeberwachung();
@@ -111,12 +114,34 @@ function _initDU() {
   const bannerLabel = document.querySelector('#pkBanner .pk-label');
   const bannerStop = document.getElementById('pkBannerStop');
 
+  // Trigger settings
+  const trigToggle = $('duTriggerEnabled');
+  const trigConfig = $('duTriggerConfig');
+  const trigSlider = $('duTriggerLevel');
+  const trigVal = $('duTriggerVal');
+  const tr = _getTrigger();
+  if (trigToggle) trigToggle.checked = tr.enabled;
+  if (trigConfig) trigConfig.hidden = !tr.enabled;
+  if (trigSlider) trigSlider.value = tr.level;
+  const levelLabel = v => v <= 10 ? 'Sehr hoch' : v <= 20 ? 'Hoch' : v <= 30 ? 'Mittel' : v <= 40 ? 'Niedrig' : 'Sehr niedrig';
+  if (trigVal) trigVal.textContent = levelLabel(tr.level);
+  if (trigToggle) trigToggle.addEventListener('change', e => {
+    const cur = _getTrigger();
+    _setTrigger({ ...cur, enabled: e.target.checked });
+    if (trigConfig) trigConfig.hidden = !e.target.checked;
+  });
+  if (trigSlider) trigSlider.addEventListener('input', () => {
+    const v = parseInt(trigSlider.value);
+    if (trigVal) trigVal.textContent = levelLabel(v);
+    const cur = _getTrigger(); _setTrigger({ ...cur, level: v });
+  });
+
   function _endDU() {
     clearInterval(_duInterval); _duInterval = null;
     if (countdown) countdown.hidden = true;
     if (banner) banner.hidden = true;
     if (bannerLabel) bannerLabel.textContent = 'Punkt-Zählung';
-    if (window.__waldohr) window.__waldohr.stopDetection();
+    if (window.__waldohr) { window.__waldohr.stopDetection(); window.__waldohr.stopTriggerRec?.(); }
     enabled.checked = false;
     setDauerUeberwachung({ enabled: false, durationMin: parseInt(presetsEl.querySelector('.du-preset.on')?.dataset.min ?? '30') });
   }
@@ -131,6 +156,8 @@ function _initDU() {
     if (window.__waldohr) {
       window.__waldohr.startDetection().catch(e => console.warn('du start', e));
       window.__waldohr.switchTab('v-listen');
+      const trig = _getTrigger();
+      if (trig.enabled) setTimeout(() => window.__waldohr.startTriggerRec?.(trig.level), 1200);
     }
     _showStartPopup('Dauerüberwachung');
     const preset = presetsEl.querySelector('.du-preset.on');

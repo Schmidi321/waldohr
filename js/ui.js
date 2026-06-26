@@ -597,7 +597,7 @@ function renderStats(stats) {
     kpi(stats.streak, 'Tage in Serie', ico.fire, false) +
     kpi('+' + stats.newThisWeek, 'neu diese Woche', ico.plus, true);
 
-  const top = stats.perSpecies.slice(0, 5);
+  const top = stats.perSpecies.slice(0, 10);
   const tmax = Math.max(1, ...top.map(s => s.count));
   $('topSpecies').innerHTML = top.map((s, i) =>
     `<div class="row"><span class="nm">${s.name}</span>
@@ -605,12 +605,14 @@ function renderStats(stats) {
       <span class="vv">${s.count}</span></div>`
   ).join('') || '<div class="lt" style="color:var(--faint)">Noch keine Daten</div>';
 
-  const wmax = Math.max(1, ...stats.week.map(d => d.count));
-  $('weekBars').innerHTML = stats.week.map((d, i) => {
+  const days14 = stats.last14 || stats.week;
+  const wmax = Math.max(1, ...days14.map(d => d.count));
+  $('weekBars').innerHTML = days14.map((d, i) => {
     const hi = d.count === wmax && d.count > 0 ? ' hi' : '';
-    return `<div class="col"><span class="vv">${d.count}</span>
-      <i class="bar${hi}" style="height:${Math.round(d.count / wmax * 100)}%;animation-delay:${(0.05 + i * 0.06).toFixed(2)}s"></i>
-      <span class="d">${d.label}</span></div>`;
+    const lbl = d.weekday === 'Mo' || i === 0 || i === days14.length - 1 ? d.label : (d.weekday === 'So' ? '<span style="color:var(--lime)">' + d.label + '</span>' : d.label);
+    return `<div class="col"><span class="vv">${d.count || ''}</span>
+      <i class="bar${hi}" style="height:${Math.round(d.count / wmax * 100)}%;animation-delay:${(0.02 + i * 0.03).toFixed(2)}s"></i>
+      <span class="d">${lbl}</span></div>`;
   }).join('');
 }
 

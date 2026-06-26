@@ -227,6 +227,11 @@ export function computeStats(dets) {
     const d = new Date(ws); d.setDate(ws.getDate() + i);
     return { label, count: perDay[dayKey(d)] || 0 };
   });
+  const last14 = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i); d.setHours(0, 0, 0, 0);
+    last14.push({ label: d.getDate() + '.', weekday: ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getDay()], count: perDay[dayKey(d)] || 0 });
+  }
 
   // Serie: aufeinanderfolgende Tage mit mindestens einem Fund (heute oder gestern als Start)
   const present = new Set(Object.keys(perDay));
@@ -238,7 +243,7 @@ export function computeStats(dets) {
     total: dets.length,
     speciesCount: perSpecies.length,
     rareCount: perSpecies.filter(x => x.rarity !== 'common').length,
-    newThisWeek, streak, perSpecies, week, hourly
+    newThisWeek, streak, perSpecies, week, last14, hourly
   };
 }
 
