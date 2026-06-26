@@ -157,6 +157,81 @@
       </div>
     </section>
 
+    <!-- ============ ORNITHOLOGIE ============ -->
+    <section class="view" id="v-orni">
+      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="15" r="4"/><circle cx="18" cy="15" r="4"/><path d="M10 15h4M6 9v2M18 9v2M9 9h6"/></svg></span>Ornithologie</div></div>
+      <div class="segmented" id="orniToggle">
+        <button class="on" data-tab="monitoring">Überwachung</button>
+        <button data-tab="protokolle">Protokolle</button>
+        <button data-tab="export">Export</button>
+      </div>
+
+      <!-- Überwachung -->
+      <div id="orniMonitoring">
+        <div class="infoblock">
+          <h3><span style="font-size:15px">⏱</span> Dauerüberwachung</h3>
+          <p style="margin-bottom:12px">Stoppt das Lauschen nach einer einstellbaren Zeit — ideal für unbeaufsichtigte Langzeit-Aufnahmen.</p>
+          <label class="switch-row">
+            <span>Zeitlimit aktivieren</span>
+            <span class="switch"><input type="checkbox" id="orniDuEnabled" /><span class="switch-track"></span></span>
+          </label>
+          <div style="margin-top:14px">
+            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Dauer</div>
+            <div class="du-presets" id="orniDuPresets">
+              <button class="du-preset" data-min="15">15 Min</button>
+              <button class="du-preset on" data-min="30">30 Min</button>
+              <button class="du-preset" data-min="60">1 Std</button>
+              <button class="du-preset" data-min="120">2 Std</button>
+              <button class="du-preset" data-min="240">4 Std</button>
+              <button class="du-preset" data-min="480">8 Std</button>
+            </div>
+          </div>
+        </div>
+        <div class="infoblock" style="margin-top:14px">
+          <h3><span style="font-size:15px">📍</span> Punkt-Zählung</h3>
+          <p style="margin-bottom:12px">5-Minuten-Punkt-Zählung nach BirdLife-Standard — alle erkannten Rufe werden automatisch erfasst.</p>
+          <div id="pkTimer" style="font-size:52px;font-weight:700;font-family:'Outfit',sans-serif;color:var(--lime);text-align:center;letter-spacing:3px;margin:18px 0">5:00</div>
+          <button class="btn ghost" id="pkStart" style="width:100%">Zählung starten</button>
+          <div id="pkSpecies" style="margin-top:14px" hidden></div>
+        </div>
+        <div class="infoblock" style="margin-top:14px">
+          <h3><span style="font-size:15px">🗺️</span> Transekt-Zählung</h3>
+          <p>GPS-Route mit Artenliste — kommt bald.</p>
+        </div>
+      </div>
+
+      <!-- Protokolle -->
+      <div id="orniProtokolle" hidden>
+        <div class="infoblock" style="margin-top:14px">
+          <h3><span style="font-size:15px">📋</span> Protokolle</h3>
+          <p>Gespeicherte Zählsitzungen erscheinen hier — kommt bald.</p>
+        </div>
+      </div>
+
+      <!-- Export -->
+      <div id="orniExport" hidden>
+        <div class="export-btns" style="margin-top:4px">
+          <button class="export-btn" id="orniEbirdBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+            <div><strong>eBird CSV</strong><span>Checklisten-Format für Cornell Lab eBird</span></div>
+          </button>
+          <button class="export-btn" id="orniOrnithoBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+            <div><strong>Ornitho.de CSV</strong><span>Beobachtungs-Format für Ornitho.de / DDA</span></div>
+          </button>
+          <button class="export-btn" id="orniBirdnetBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            <div><strong>BirdNET Notebook CSV</strong><span>Einzelfunde mit Konfidenz für BirdNET-Analyzer</span></div>
+          </button>
+          <button class="export-btn" id="orniNabuBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+            <div><strong>NABU / Naturgucker JSON</strong><span>Strukturierter Export für NABU-Portale</span></div>
+          </button>
+        </div>
+        <p class="export-note" style="margin-top:12px">Alle Funde ≥ 70 % Konfidenz · inkl. GPS-Koordinaten &amp; Zeitstempel</p>
+      </div>
+    </section>
+
     <!-- Fotografen-Funktion: Direktbeleg-Foto zu einem Fund, öffnet die Gerätekamera -->
     <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" />
 
@@ -380,26 +455,6 @@
           </label>
         </div>
 
-        <div class="infoblock">
-          <h3><span style="font-size:15px">⏱</span> Dauerüberwachung</h3>
-          <p style="margin-bottom:12px">Stoppt das Lauschen nach einer einstellbaren Zeit — ideal für unbeaufsichtigte Langzeit-Aufnahmen.</p>
-          <label class="switch-row">
-            <span>Zeitlimit aktivieren</span>
-            <span class="switch"><input type="checkbox" id="duEnabled" /><span class="switch-track"></span></span>
-          </label>
-          <div style="margin-top:14px">
-            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Dauer</div>
-            <div class="du-presets" id="duPresets">
-              <button class="du-preset" data-min="15">15 Min</button>
-              <button class="du-preset on" data-min="30">30 Min</button>
-              <button class="du-preset" data-min="60">1 Std</button>
-              <button class="du-preset" data-min="120">2 Std</button>
-              <button class="du-preset" data-min="240">4 Std</button>
-              <button class="du-preset" data-min="480">8 Std</button>
-            </div>
-          </div>
-        </div>
-
         <div class="infoblock" id="tmwWeatherBlock">
           <h3><span style="font-size:15px">🌤️</span> Wetter morgen früh</h3>
           <p style="margin-bottom:12px">Wolken, Nebel und Regenwahrscheinlichkeit für morgen früh — ideal zum Planen des nächsten Aufnahme-Morgens.</p>
@@ -420,6 +475,7 @@
       <button data-v="map"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></svg>Karte</button>
       <button data-v="coll"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 3h14v18l-7-4-7 4z"/></svg>Sammlung</button>
       <button data-v="stat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 19v-6M13 19V9M18 19v-9"/></svg>Statistik</button>
+      <button data-v="orni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="15" r="4"/><circle cx="18" cy="15" r="4"/><path d="M10 15h4M6 9v2M18 9v2M9 9h6"/></svg>Ornithologie</button>
     </nav>
 
     <!-- ============ MODAL ============ -->

@@ -7,6 +7,7 @@ import { fetchWeather, fetchPhotoWeather, weatherEmoji, weatherLabel, windDirLab
 import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
 import { openCamera } from './camera.js';
+import { initOrni } from './ornithologie.js';
 
 // ---- In-App Lightbox für Fotos ----
 function openPhotoLightbox(url) {
@@ -133,6 +134,7 @@ function wireSplash() {
 
 async function boot() {
   initUI();
+  initOrni();
   routeTracker.init(geo);
   routeTracker.onUpdate = pts => updateRouteMap(pts);
   try { await seedIfEmpty(); } catch (e) { console.warn('seed', e); }
