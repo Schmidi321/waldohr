@@ -153,6 +153,13 @@ async function _takeDualPhoto() {
 // ---- Stream starten / wechseln ----
 async function _startStream(camId, micId) {
   _stopMeter(); _stopZoomAnim();
+  // Reset zoom display immediately to avoid visual jump on camera switch
+  const _vid0 = document.getElementById('camVideo');
+  if (_vid0) _vid0.style.transform = '';
+  const _zsl0 = document.getElementById('camZoom');
+  if (_zsl0) _zsl0.value = parseFloat(_zsl0.min) || 1;
+  const _zvl0 = document.getElementById('camZoomVal');
+  if (_zvl0) _zvl0.textContent = '1.0×';
   if (_stream)  { _stream.getTracks().forEach(t => t.stop());  _stream = null; }
   if (_stream2) { _stream2.getTracks().forEach(t => t.stop()); _stream2 = null; }
   const pip = document.getElementById('camVideo2');
@@ -268,9 +275,14 @@ function _updateModeUI() {
   document.getElementById('camModeFrontBack')?.classList.toggle('on', _mode === 'front-back');
   const cap = document.getElementById('camCapture');
   if (cap) cap.className = 'cam-shutter' + (_mode === 'video' ? ' video' : '');
-  // Auto-Zoom nur im Video-Modus
-  const azWrap = document.getElementById('camAutoZoomWrap');
-  if (azWrap) azWrap.hidden = _mode !== 'video';
+  // Auto-Zoom: Toggle-Button nur im Video-Modus sichtbar; Panel bleibt collapsed beim Moduswechsel
+  const azToggle = document.getElementById('camAzToggle');
+  if (azToggle) azToggle.hidden = _mode !== 'video';
+  if (_mode !== 'video') {
+    const azWrap = document.getElementById('camAutoZoomWrap');
+    if (azWrap) azWrap.hidden = true;
+    if (azToggle) azToggle.classList.remove('active');
+  }
   // Flip-Button bei Dual ausblenden (macht dort keinen Sinn)
   const flip = document.getElementById('camFlip');
   if (flip) flip.style.visibility = isDual ? 'hidden' : '';
@@ -331,6 +343,14 @@ export function openCamera(onCapture) {
     modal._camWired = true;
 
     document.getElementById('camClose')?.addEventListener('click', _close);
+
+    document.getElementById('camAzToggle')?.addEventListener('click', () => {
+      const wrap = document.getElementById('camAutoZoomWrap');
+      const btn  = document.getElementById('camAzToggle');
+      if (!wrap) return;
+      wrap.hidden = !wrap.hidden;
+      if (btn) btn.classList.toggle('active', !wrap.hidden);
+    });
 
     document.getElementById('camModePhoto')?.addEventListener('click', () => {
       _mode = 'photo'; _updateModeUI();

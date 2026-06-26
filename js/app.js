@@ -3,7 +3,7 @@ import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal } from './ui.js';
-import { fetchWeather, fetchPhotoWeather, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel } from './weather.js';
+import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel } from './weather.js';
 import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
 import { openCamera } from './camera.js';
@@ -871,6 +871,20 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
   html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Mondphase</span><span class="pw-val">${moonPhaseLabel(mp)}</span></div>`;
   if (!pw && !sun) html = '<div class="pw-loading">GPS benötigt – Standort erlauben, dann erneut öffnen.</div>';
   content.innerHTML = html;
+  // Morgen-Früh-Prognose nachreichen
+  if (lat != null) {
+    const tmwEl = document.createElement('div');
+    tmwEl.innerHTML = '<div class="pw-section" style="margin-top:10px">Morgen früh</div><div class="pw-loading">Prognose wird geladen …</div>';
+    content.appendChild(tmwEl);
+    fetchTomorrowMorning(lat, lng).then(slots => {
+      if (!slots || !slots.length) { tmwEl.innerHTML = '<div class="pw-section" style="margin-top:10px">Morgen früh</div><div class="pw-loading">Keine Prognose verfügbar.</div>'; return; }
+      tmwEl.innerHTML = '<div class="pw-section" style="margin-top:10px">Morgen früh</div><div class="tmw-slots">'
+        + slots.map(s => {
+            const fogRisk = s.visKm < 2 ? ' 🌫️' : s.visKm < 5 ? ' 🌁' : '';
+            return `<div class="tmw-slot"><div class="tmw-h">${s.hour}:00</div><div class="tmw-ico">${weatherEmoji(s.wmo)}${fogRisk}</div><div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}°</div><div class="tmw-cc">${s.cloudcover}%☁️</div><div class="tmw-rain">${s.precipProb > 0 ? '💧' + s.precipProb + '%' : ''}</div></div>`;
+          }).join('') + '</div>';
+    }).catch(() => { tmwEl.remove(); });
+  }
 };
 
 // Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen und

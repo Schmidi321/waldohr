@@ -3,7 +3,7 @@ import { SPECIES, SPECIES_LIST, ensureSpecies } from './species.js';
 import { gemini } from './gemini.js';
 import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats, getQualifyConfidence, setQualifyConfidence } from './db.js';
 import { getMorgenchor, setMorgenchor, getNachtModus, setNachtModus, getFotoWecker, setFotoWecker, getSunriseFull } from './alarm.js';
-import { weatherEmoji, weatherLabel, fetchTomorrowMorning } from './weather.js';
+import { weatherEmoji, weatherLabel } from './weather.js';
 
 const $ = id => document.getElementById(id);
 const DEFAULT_GRAD = ['#0e5840', '#0a4733'];
@@ -1196,27 +1196,8 @@ export async function openTimingModal(pos) {
         if (el('fwPhaseGolden')) el('fwPhaseGolden').textContent = fmt(full.sunrise) + '–' + fmt(golden);
       }
     }).catch(() => { if (srEl) srEl.textContent = '– : –'; });
-    // Morgen-Wetter laden
-    const wtEl = $('tmwWeatherContent');
-    if (wtEl) wtEl.innerHTML = '<div style="color:var(--faint);font-size:12px;text-align:center;padding:8px 0">Prognose wird geladen …</div>';
-    fetchTomorrowMorning(pos.lat, pos.lng).then(slots => {
-      if (!wtEl) return;
-      if (!slots || !slots.length) { wtEl.innerHTML = '<div style="color:var(--faint);font-size:12px;text-align:center">Keine Prognose verfügbar.</div>'; return; }
-      wtEl.innerHTML = '<div class="tmw-slots">' + slots.map(s => {
-        const fogRisk = s.visKm < 2 ? ' 🌫️' : s.visKm < 5 ? ' 🌁' : '';
-        return `<div class="tmw-slot">
-          <div class="tmw-h">${s.hour}:00</div>
-          <div class="tmw-ico">${weatherEmoji(s.wmo)}${fogRisk}</div>
-          <div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}°</div>
-          <div class="tmw-cc">${s.cloudcover}% ☁️</div>
-          <div class="tmw-rain">${s.precipProb > 0 ? '💧' + s.precipProb + '%' : ''}</div>
-        </div>`;
-      }).join('') + '</div>';
-    }).catch(() => { if (wtEl) wtEl.innerHTML = '<div style="color:var(--faint);font-size:12px;text-align:center">Fehler beim Laden.</div>'; });
   } else {
     if (srEl) srEl.textContent = '– : –';
-    const wtEl = $('tmwWeatherContent');
-    if (wtEl) wtEl.innerHTML = '<div style="color:var(--faint);font-size:12px;text-align:center;padding:8px 0">Standort benötigt · GPS aktivieren</div>';
   }
   modal.classList.add('open');
 }

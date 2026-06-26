@@ -455,14 +455,6 @@
           </label>
         </div>
 
-        <div class="infoblock" id="tmwWeatherBlock">
-          <h3><span style="font-size:15px">🌤️</span> Wetter morgen früh</h3>
-          <p style="margin-bottom:12px">Wolken, Nebel und Regenwahrscheinlichkeit für morgen früh — ideal zum Planen des nächsten Aufnahme-Morgens.</p>
-          <div id="tmwWeatherContent">
-            <div style="color:var(--faint);font-size:12px;text-align:center;padding:8px 0">Standort benötigt · GPS aktivieren</div>
-          </div>
-        </div>
-
         <div class="actions">
           <button class="btn ghost" id="timingClose" style="flex:1">Schließen</button>
         </div>
@@ -667,6 +659,9 @@
           <span class="cam-zoom-label">1×</span>
           <input type="range" id="camZoom" class="cam-zoom-slider" min="1" max="5" step="0.1" value="1"/>
           <span id="camZoomVal" class="cam-zoom-label">1×</span>
+          <button class="cam-az-toggle-btn" id="camAzToggle" hidden title="Auto-Zoom" aria-label="Auto-Zoom">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M15 10l4.553-2.069A1 1 0 0 1 21 8.82v6.361a1 1 0 0 1-1.447.894L15 14"/><rect x="2" y="7" width="13" height="10" rx="2"/><path d="M8 7V5M12 7V5M8 17v2M12 17v2" stroke-width="1.5" opacity=".6"/></svg>
+          </button>
         </div>
         <div class="cam-autozoom-wrap" id="camAutoZoomWrap" hidden>
           <div class="cam-az-row">
