@@ -155,6 +155,7 @@ canvas{display:block;width:100%;height:84px}
 @keyframes recpulse{50%{opacity:.5}}
 .rec-label{font-size:11px;color:var(--muted);background:var(--glass-strong);border:1px solid var(--stroke);padding:3px 8px;border-radius:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:42vw;flex-shrink:1}
 .rec-label.auto{color:var(--lime);border-color:#a3e63555;background:rgba(163,230,53,.1)}
+.rec-dur{font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;flex-shrink:0;align-self:center;min-width:24px}
 .orb-stage{flex-shrink:0}
 .spectro{flex-shrink:0;margin-top:8px;border-radius:16px;overflow:hidden;border:1px solid var(--stroke);background:#04120c}
 .level{flex-shrink:0}

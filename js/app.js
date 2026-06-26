@@ -263,9 +263,119 @@ function _makeAudioIcon() {
     const row = el.closest('.rec-row');
     const a = row?.querySelector('audio');
     if (!a) return;
-    if (a.paused) a.play().catch(() => {}); else a.pause();
+    _openAudioPlayerModal(a, row);
   };
   return el;
+}
+
+function _openAudioPlayerModal(audioEl, row) {
+  window.__waldohrSuspendMicForPlayback?.();
+  const label = row?.querySelector('.rec-label')?.textContent || 'Aufnahme';
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:250;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;background:rgba(2,8,6,.75);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)';
+  const sheet = document.createElement('div');
+  sheet.style.cssText = 'position:relative;width:100%;max-width:480px;background:linear-gradient(160deg,#0a2518,#061a0f);border-radius:24px 24px 0 0;border-top:1px solid var(--stroke);padding:16px 20px calc(30px + env(safe-area-inset-bottom))';
+  const fmtT = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+  sheet.innerHTML = `
+    <div style="width:36px;height:4px;border-radius:4px;background:var(--stroke-strong);margin:0 auto 14px"></div>
+    <div style="text-align:center;font-size:14px;font-weight:700;color:var(--ink);margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
+    <canvas id="_apWave" style="width:100%;height:64px;border-radius:12px;background:rgba(163,230,53,.04);border:1px solid var(--stroke);display:block;margin-bottom:10px;cursor:pointer"></canvas>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:14px;font-variant-numeric:tabular-nums">
+      <span id="_apCur">0:00</span><span id="_apDur">–:––</span>
+    </div>
+    <div style="display:flex;justify-content:center">
+      <button id="_apPlay" style="width:56px;height:56px;border-radius:50%;background:var(--lime);border:none;color:#04130d;display:flex;align-items:center;justify-content:center;cursor:pointer">
+        <svg viewBox="0 0 24 24" fill="#04130d" width="22" height="22"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+    </div>
+    <button id="_apClose" style="position:absolute;top:14px;right:14px;background:rgba(0,0,0,.3);border:none;color:var(--muted);font-size:22px;line-height:1;width:34px;height:34px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center">&times;</button>`;
+  ov.appendChild(sheet);
+  document.body.appendChild(ov);
+  const wvCv = document.getElementById('_apWave');
+  const curEl = document.getElementById('_apCur');
+  const durEl = document.getElementById('_apDur');
+  const playBtn = document.getElementById('_apPlay');
+  const closeBtn = document.getElementById('_apClose');
+  let peaks = null, _rafId = null;
+  const playIcon = '<svg viewBox="0 0 24 24" fill="#04130d" width="22" height="22"><path d="M8 5v14l11-7z"/></svg>';
+  const pauseIcon = '<svg viewBox="0 0 24 24" fill="#04130d" width="20" height="20"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+  function drawWave(pos) {
+    const dpr = window.devicePixelRatio || 1;
+    const W = wvCv.offsetWidth * dpr, H = 64 * dpr;
+    if (wvCv.width !== W) { wvCv.width = W; wvCv.height = H; }
+    const ctx = wvCv.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    if (!peaks) return;
+    const bars = Math.floor(W / 3);
+    for (let i = 0; i < bars; i++) {
+      const pi = Math.floor(i / bars * peaks.length);
+      const v = peaks[pi] || 0;
+      const bh = Math.max(2, v * H * 0.82);
+      const x = i * (W / bars);
+      ctx.fillStyle = i / bars < pos ? 'rgba(163,230,53,.85)' : 'rgba(163,230,53,.22)';
+      ctx.fillRect(x, (H - bh) / 2, Math.max(1, W / bars - 1), bh);
+    }
+    const cx = pos * W;
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.fillRect(cx - 1, 0, 2, H);
+  }
+  function tick() {
+    if (audioEl.paused) return;
+    const pos = audioEl.currentTime / (audioEl.duration || 1);
+    drawWave(pos);
+    curEl.textContent = fmtT(audioEl.currentTime);
+    _rafId = requestAnimationFrame(tick);
+  }
+  // Decode for waveform
+  fetch(audioEl.src).then(r => r.arrayBuffer()).then(ab => {
+    const tmp = new (window.AudioContext || window.webkitAudioContext)();
+    return tmp.decodeAudioData(ab).then(buf => { tmp.close().catch(() => {}); return buf; });
+  }).then(buf => {
+    durEl.textContent = fmtT(buf.duration);
+    const ch = buf.getChannelData(0), n = 200, bs = Math.floor(ch.length / n);
+    peaks = [];
+    for (let i = 0; i < n; i++) {
+      let mx = 0;
+      for (let j = 0; j < bs; j++) { const v = Math.abs(ch[i * bs + j]); if (v > mx) mx = v; }
+      peaks.push(mx);
+    }
+    const mx = Math.max(...peaks, 0.01);
+    peaks = peaks.map(p => p / mx);
+    drawWave(audioEl.paused ? audioEl.currentTime / (buf.duration || 1) : 0);
+  }).catch(() => {});
+  if (audioEl.readyState >= 1) durEl.textContent = fmtT(audioEl.duration);
+  else audioEl.addEventListener('loadedmetadata', () => { durEl.textContent = fmtT(audioEl.duration); }, { once: true });
+  playBtn.onclick = () => {
+    if (audioEl.paused) {
+      audioEl.play().catch(() => {});
+      playBtn.innerHTML = pauseIcon;
+      _rafId = requestAnimationFrame(tick);
+    } else {
+      audioEl.pause();
+      playBtn.innerHTML = playIcon;
+      cancelAnimationFrame(_rafId); _rafId = null;
+      drawWave(audioEl.currentTime / (audioEl.duration || 1));
+    }
+  };
+  audioEl.addEventListener('ended', () => {
+    playBtn.innerHTML = playIcon;
+    cancelAnimationFrame(_rafId); _rafId = null;
+    drawWave(1);
+    window.__waldohrResumeMicAfterPlayback?.();
+  }, { once: true });
+  wvCv.addEventListener('click', e => {
+    const pos = (e.clientX - wvCv.getBoundingClientRect().left) / wvCv.offsetWidth;
+    audioEl.currentTime = pos * audioEl.duration;
+    drawWave(pos); curEl.textContent = fmtT(audioEl.currentTime);
+  });
+  const dismiss = () => {
+    audioEl.pause();
+    cancelAnimationFrame(_rafId); _rafId = null;
+    ov.remove();
+    window.__waldohrResumeMicAfterPlayback?.();
+  };
+  closeBtn.onclick = dismiss;
+  ov.addEventListener('click', e => { if (e.target === ov) dismiss(); });
 }
 
 async function _saveAutoRecRow(det, blob, mime) {
@@ -279,12 +389,14 @@ async function _saveAutoRecRow(det, blob, mime) {
   const a = document.createElement('audio'); a.src = url; a.preload = 'metadata'; a.hidden = true;
   wireAudioRouting(a);
   const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
+  const durLb = document.createElement('span'); durLb.className = 'rec-dur';
+  a.addEventListener('loadedmetadata', () => { const s = Math.floor(a.duration); if (isFinite(s) && s > 0) durLb.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }, { once: true });
   const dl = makeDownloadBtn(url, prefix + '_' + stamp + gpsTag + '.' + ext, det.species);
   let attId = null;
   try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime }); }
   catch (e) { console.warn('addAttachment', e); }
   const del = makeDeleteBtn(row, url, det.key, attId);
-  row.append(_makeAudioIcon(), lb, _spacer(), dl, _makeScissorsBtn(row), del, a);
+  row.append(_makeAudioIcon(), lb, durLb, _spacer(), dl, _makeScissorsBtn(row), del, a);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
   registerRecording(det.key, url);
   if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
@@ -734,6 +846,154 @@ async function openShareMixer(photoUrl, key, label) {
   modal.hidden = false;
 }
 
+function makeReelBtn(url, mime) {
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.title = 'Reel erstellen'; btn.className = 'rec-dl'; btn.style.color = 'var(--amber)';
+  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><rect x="2" y="2" width="20" height="20" rx="4"/><path d="M7 2v20M17 2v20M2 12h20M2 7h5M17 7h5M2 17h5M17 17h5"/></svg>';
+  btn.onclick = ev => { ev.stopPropagation(); _openVideoReelModal(url, mime); };
+  return btn;
+}
+
+function _openVideoReelModal(url, mime) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:250;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;background:rgba(0,0,0,.88)';
+  const sheet = document.createElement('div');
+  sheet.style.cssText = 'position:relative;width:100%;max-width:480px;background:linear-gradient(160deg,#0a1a12,#060f0a);border-radius:24px 24px 0 0;border-top:1px solid var(--stroke);padding:14px 16px calc(22px + env(safe-area-inset-bottom));max-height:92vh;overflow-y:auto;scrollbar-width:none';
+  const fmtT = s => Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+  sheet.innerHTML = `
+    <div style="width:36px;height:4px;border-radius:4px;background:var(--stroke-strong);margin:0 auto 12px"></div>
+    <h3 style="font-size:16px;font-weight:700;margin:0 0 10px;text-align:center;color:var(--ink)">🎬 Reel erstellen</h3>
+    <video id="_rvVid" src="${url}" style="width:100%;border-radius:12px;max-height:200px;object-fit:contain;background:#000;display:block;margin-bottom:8px"></video>
+    <div id="_rvDurInfo" style="text-align:center;font-size:11px;color:var(--muted);margin-bottom:8px">Lade Video…</div>
+    <div id="_rvTrimWrap" style="position:relative;height:36px;background:rgba(163,230,53,.08);border-radius:10px;border:1px solid rgba(163,230,53,.2);margin-bottom:8px;touch-action:none">
+      <div id="_rvKept" style="position:absolute;top:0;bottom:0;left:0;width:100%;background:rgba(163,230,53,.18);border-radius:10px"></div>
+      <div id="_rvPos" style="position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,.7);display:none"></div>
+      <div id="_rvHs" style="position:absolute;top:-3px;bottom:-3px;width:14px;left:0;margin-left:-7px;background:var(--lime);border-radius:5px;cursor:ew-resize;z-index:2;touch-action:none"></div>
+      <div id="_rvHe" style="position:absolute;top:-3px;bottom:-3px;width:14px;right:0;margin-right:-7px;background:var(--lime);border-radius:5px;cursor:ew-resize;z-index:2;touch-action:none"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:10px;font-variant-numeric:tabular-nums">
+      <span id="_rvSLbl">0:00</span><span id="_rvELbl">0:00</span>
+    </div>
+    <label class="switch-row" style="margin-bottom:12px">
+      <span>Originalton stummschalten</span>
+      <span class="switch"><input type="checkbox" id="_rvMute"><span class="switch-track"></span></span>
+    </label>
+    <button id="_rvExport" style="width:100%;padding:14px;border-radius:16px;background:var(--lime);color:#04130d;font-weight:700;font-size:15px;cursor:pointer;border:none;font-family:inherit;margin-bottom:6px">🎬 Reel exportieren</button>
+    <div id="_rvProgress" style="display:none;margin-bottom:8px">
+      <div class="mixer-prog-track"><div id="_rvProgFill" class="mixer-prog-fill" style="width:0%"></div></div>
+      <div id="_rvProgLabel" class="mixer-prog-label" style="margin-top:5px;text-align:center;font-size:12px;color:var(--muted)">Exportiere…</div>
+    </div>
+    <button id="_rvClose" style="width:100%;padding:11px;background:transparent;color:var(--muted);border:none;font-size:13px;cursor:pointer;font-family:inherit">Abbrechen</button>`;
+  ov.appendChild(sheet);
+  document.body.appendChild(ov);
+  const vid = document.getElementById('_rvVid');
+  const durInfo = document.getElementById('_rvDurInfo');
+  const trimWrap = document.getElementById('_rvTrimWrap');
+  const kept = document.getElementById('_rvKept');
+  const posLine = document.getElementById('_rvPos');
+  const hs = document.getElementById('_rvHs');
+  const he = document.getElementById('_rvHe');
+  const sLbl = document.getElementById('_rvSLbl');
+  const eLbl = document.getElementById('_rvELbl');
+  const exportBtn = document.getElementById('_rvExport');
+  const closeBtn = document.getElementById('_rvClose');
+  const progress = document.getElementById('_rvProgress');
+  const progFill = document.getElementById('_rvProgFill');
+  const progLabel = document.getElementById('_rvProgLabel');
+  let duration = 0, startFrac = 0, endFrac = 1, _vidRaf = null;
+  function updateTrim() {
+    hs.style.left = (startFrac * 100) + '%';
+    he.style.right = ((1 - endFrac) * 100) + '%';
+    kept.style.left = (startFrac * 100) + '%';
+    kept.style.width = ((endFrac - startFrac) * 100) + '%';
+    sLbl.textContent = fmtT(startFrac * duration);
+    eLbl.textContent = fmtT(endFrac * duration);
+  }
+  vid.addEventListener('loadedmetadata', () => {
+    duration = vid.duration; durInfo.textContent = 'Dauer: ' + fmtT(duration); eLbl.textContent = fmtT(duration);
+  }, { once: true });
+  vid.addEventListener('click', () => {
+    if (vid.paused) { vid.currentTime = startFrac * duration; vid.play().catch(() => {}); _vidRaf = requestAnimationFrame(tickVid); }
+    else vid.pause();
+  });
+  function tickVid() {
+    if (vid.paused) { posLine.style.display = 'none'; _vidRaf = null; return; }
+    if (vid.currentTime >= endFrac * duration) { vid.pause(); vid.currentTime = startFrac * duration; posLine.style.display = 'none'; _vidRaf = null; return; }
+    const rel = (vid.currentTime / duration - startFrac) / (endFrac - startFrac);
+    posLine.style.left = (rel * 100) + '%'; posLine.style.display = 'block';
+    _vidRaf = requestAnimationFrame(tickVid);
+  }
+  function makeDrag(handle, isStart) {
+    handle.addEventListener('pointerdown', e => {
+      e.preventDefault(); handle.setPointerCapture(e.pointerId);
+      const mv = e2 => {
+        const rect = trimWrap.getBoundingClientRect();
+        const f = Math.max(0, Math.min(1, (e2.clientX - rect.left) / rect.width));
+        if (isStart) { startFrac = Math.min(f, endFrac - 0.02); vid.currentTime = startFrac * duration; }
+        else { endFrac = Math.max(f, startFrac + 0.02); vid.currentTime = endFrac * duration; }
+        updateTrim();
+      };
+      handle.addEventListener('pointermove', mv);
+      handle.addEventListener('pointerup', () => handle.removeEventListener('pointermove', mv), { once: true });
+    });
+  }
+  makeDrag(hs, true); makeDrag(he, false);
+  document.getElementById('_rvMute')?.addEventListener('change', e => { vid.muted = e.target.checked; });
+  exportBtn.onclick = async () => {
+    const muted = document.getElementById('_rvMute')?.checked;
+    vid.pause(); exportBtn.disabled = true; progress.style.display = 'block';
+    const startTime = startFrac * duration, endTime = endFrac * duration, trimDur = endTime - startTime;
+    try {
+      const srcVid = document.createElement('video');
+      srcVid.src = url; srcVid.muted = !!muted; srcVid.preload = 'auto';
+      await new Promise((res, rej) => { srcVid.addEventListener('canplaythrough', res, { once: true }); srcVid.addEventListener('error', rej, { once: true }); srcVid.load(); });
+      srcVid.currentTime = startTime;
+      await new Promise(res => srcVid.addEventListener('seeked', res, { once: true }));
+      const stream = srcVid.captureStream();
+      let exportMime = '';
+      for (const t of ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']) {
+        if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { exportMime = t; break; }
+      }
+      const mr = exportMime ? new MediaRecorder(stream, { mimeType: exportMime }) : new MediaRecorder(stream);
+      const chunks = [];
+      mr.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
+      const t0 = Date.now();
+      const progInterval = setInterval(() => {
+        const pct = Math.min(95, Math.round((Date.now() - t0) / 1000 / trimDur * 100));
+        if (progFill) progFill.style.width = pct + '%';
+        if (progLabel) progLabel.textContent = 'Exportiere… ' + pct + '%';
+      }, 300);
+      await new Promise((res, rej) => {
+        mr.onstop = () => { clearInterval(progInterval); res(); };
+        mr.onerror = e => { clearInterval(progInterval); rej(e); };
+        mr.start(); srcVid.play().catch(() => {});
+        setTimeout(() => { try { mr.stop(); srcVid.pause(); } catch {} }, trimDur * 1000 + 500);
+      });
+      if (progFill) progFill.style.width = '100%';
+      if (progLabel) progLabel.textContent = 'Fertig!';
+      const blob = new Blob(chunks, { type: exportMime || 'video/webm' });
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const ext = (exportMime || '').includes('mp4') ? 'mp4' : 'webm';
+      const fname = 'waldohr-reel-' + stamp + '.' + ext;
+      const file = new File([blob], fname, { type: exportMime || 'video/webm' });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ title: 'WaldOhr Reel', files: [file] });
+      } else {
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+      }
+      ov.remove();
+    } catch (e) {
+      console.warn('reel export', e);
+      if (progLabel) progLabel.textContent = 'Fehler: ' + (e?.message || 'Export fehlgeschlagen');
+      exportBtn.disabled = false;
+    }
+  };
+  const dismiss = () => { if (_vidRaf) cancelAnimationFrame(_vidRaf); vid.pause(); ov.remove(); };
+  closeBtn.onclick = dismiss;
+  ov.addEventListener('click', e => { if (e.target === ov) dismiss(); });
+}
+
 // Teilen-Button für Foto-Zeilen: öffnet Mixer (Foto-Karte teilen ODER Foto+Audio→Video).
 function makeShareBtn(url, key, label) {
   const btn = document.createElement('button');
@@ -749,9 +1009,12 @@ function attachmentRow(a) {
   const url = URL.createObjectURL(a.blob);
   const row = document.createElement('div'); row.className = 'rec-row';
   let _audioEl = null;
+  let _audioDurLb = null;
   if (a.kind === 'audio') {
     _audioEl = document.createElement('audio'); _audioEl.src = url; _audioEl.preload = 'metadata'; _audioEl.hidden = true;
     wireAudioRouting(_audioEl);
+    _audioDurLb = document.createElement('span'); _audioDurLb.className = 'rec-dur';
+    _audioEl.addEventListener('loadedmetadata', () => { const s = Math.floor(_audioEl.duration); if (isFinite(s) && s > 0 && _audioDurLb) _audioDurLb.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }, { once: true });
     row.appendChild(_makeAudioIcon());
   } else if (a.kind === 'video') {
     const thumb = _makeVideoThumb(url);
@@ -767,6 +1030,7 @@ function attachmentRow(a) {
     lb.textContent = a.label;
     row.appendChild(lb);
   }
+  if (_audioDurLb) row.appendChild(_audioDurLb);
   const mime = a.mime || '';
   const ext = mime.includes('wav') ? 'wav' : mime.includes('mp4') ? 'm4a' : mime.includes('webm') ? 'webm'
     : mime.includes('png') ? 'png' : mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'bin';
@@ -776,6 +1040,7 @@ function attachmentRow(a) {
   const dl = makeDownloadBtn(url, prefix + '_' + stamp + '.' + ext, a.label);
   row.appendChild(dl);
   if (a.kind === 'photo') row.appendChild(makeShareBtn(url, a.key, a.label));
+  if (a.kind === 'video') row.appendChild(makeReelBtn(url, mime));
   if (a.kind === 'audio') row.appendChild(_makeScissorsBtn(row));
   row.appendChild(makeDeleteBtn(row, url, a.key, a.id));
   if (_audioEl) row.appendChild(_audioEl);
@@ -883,27 +1148,58 @@ if (orbBtn) orbBtn.addEventListener('click', async ev => {
 const recBtn = document.getElementById('recBtn');
 if (recBtn && !window.MediaRecorder) recBtn.style.display = 'none';
 
-let _recPopupEl = null, _recPopupTimer = null;
-function _showRecPopup() {
-  if (_recPopupEl) return;
-  _recPopupEl = document.createElement('div');
-  _recPopupEl.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;pointer-events:none';
-  _recPopupEl.innerHTML = `<div style="background:linear-gradient(160deg,#200808,#100404);border:1px solid rgba(239,68,68,.35);border-radius:24px;padding:28px 32px 22px;text-align:center;min-width:180px;box-shadow:0 12px 40px rgba(0,0,0,.6)">
-    <div class="rec-popup-mic" style="color:#ef4444;margin-bottom:12px">
-      <svg viewBox="0 0 24 24" fill="#ef4444" stroke="#ef4444" stroke-width="0.5" width="56" height="56"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="#ef4444" stroke-width="1.8"/><line x1="12" y1="19" x2="12" y2="23" stroke="#ef4444" stroke-width="1.8"/><line x1="8" y1="23" x2="16" y2="23" stroke="#ef4444" stroke-width="1.8"/></svg>
-    </div>
-    <div id="_recPopupTime" style="font-size:30px;font-weight:700;color:#ef4444;font-family:'Outfit',sans-serif;letter-spacing:2px">0:00</div>
-    <div style="font-size:12px;color:rgba(239,68,68,.6);margin-top:6px;letter-spacing:.5px">Aufnahme läuft</div>
-  </div>`;
-  document.body.appendChild(_recPopupEl);
-  _recPopupTimer = setInterval(() => {
-    const el = document.getElementById('_recPopupTime');
-    if (el) el.textContent = recorder.fmt();
-  }, 500);
+let _recPopupEl = null, _recPopupTimer = null, _recLevelRaf = null;
+function _showRecPopup(state) {
+  // state: 'preparing' | 'recording'
+  if (!_recPopupEl) {
+    _recPopupEl = document.createElement('div');
+    _recPopupEl.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;pointer-events:none';
+    _recPopupEl.innerHTML = `<div style="background:linear-gradient(160deg,#200808,#100404);border:1px solid rgba(239,68,68,.35);border-radius:24px;padding:28px 32px 22px;text-align:center;min-width:200px;box-shadow:0 12px 40px rgba(0,0,0,.6)">
+      <div class="rec-popup-mic" style="color:#ef4444;margin-bottom:12px">
+        <svg viewBox="0 0 24 24" fill="#ef4444" stroke="#ef4444" stroke-width="0.5" width="56" height="56"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="#ef4444" stroke-width="1.8"/><line x1="12" y1="19" x2="12" y2="23" stroke="#ef4444" stroke-width="1.8"/><line x1="8" y1="23" x2="16" y2="23" stroke="#ef4444" stroke-width="1.8"/></svg>
+      </div>
+      <div id="_recPopupTime" style="font-size:30px;font-weight:700;color:#ef4444;font-family:'Outfit',sans-serif;letter-spacing:2px">0:00</div>
+      <div id="_recPopupStatus" style="font-size:12px;color:rgba(239,68,68,.6);margin-top:6px;letter-spacing:.5px">Vorbereitung…</div>
+      <canvas id="_recLevelCv" width="140" height="20" style="display:block;margin:10px auto 0;border-radius:6px;background:rgba(239,68,68,.08)"></canvas>
+    </div>`;
+    document.body.appendChild(_recPopupEl);
+  }
+  if (state === 'recording') {
+    const s = document.getElementById('_recPopupStatus');
+    if (s) s.textContent = 'Aufnahme läuft';
+    if (!_recPopupTimer) _recPopupTimer = setInterval(() => {
+      const el = document.getElementById('_recPopupTime');
+      if (el) el.textContent = recorder.fmt();
+    }, 500);
+    if (!_recLevelRaf) {
+      const drawLevel = () => {
+        const cv = document.getElementById('_recLevelCv');
+        if (!cv) { _recLevelRaf = null; return; }
+        const ctx = cv.getContext('2d');
+        const W = cv.width, H = cv.height;
+        ctx.clearRect(0, 0, W, H);
+        if (audio.analyser) {
+          const data = new Uint8Array(audio.analyser.frequencyBinCount);
+          audio.analyser.getByteFrequencyData(data);
+          const bars = 16, bw = (W - bars + 1) / bars;
+          for (let i = 0; i < bars; i++) {
+            const v = data[Math.floor(i / bars * data.length)] / 255;
+            const bh = Math.max(2, v * H);
+            ctx.fillStyle = `hsl(${Math.round(120 - v * 120)},80%,55%)`;
+            ctx.fillRect(i * (bw + 1), H - bh, Math.max(1, bw), bh);
+          }
+        }
+        if (_recPopupEl) _recLevelRaf = requestAnimationFrame(drawLevel);
+        else _recLevelRaf = null;
+      };
+      _recLevelRaf = requestAnimationFrame(drawLevel);
+    }
+  }
 }
 function _hideRecPopup() {
   if (_recPopupEl) { _recPopupEl.remove(); _recPopupEl = null; }
   if (_recPopupTimer) { clearInterval(_recPopupTimer); _recPopupTimer = null; }
+  if (_recLevelRaf) { cancelAnimationFrame(_recLevelRaf); _recLevelRaf = null; }
 }
 
 const recorder = {
@@ -916,10 +1212,11 @@ const recorder = {
     if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
     if (!audio.running) {
       tryFullscreen();
+      _showRecPopup('preparing');
       try { await audio.start(); geo.start(); }
-      catch (e) { console.warn('mic', e); statusTxt.textContent = 'Mikro nicht erlaubt'; return; }
+      catch (e) { console.warn('mic', e); statusTxt.textContent = 'Mikro nicht erlaubt'; _hideRecPopup(); return; }
     }
-    if (!audio.stream) return;
+    if (!audio.stream) { _hideRecPopup(); return; }
     let type = '';
     for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
       if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { type = t; break; }
@@ -928,6 +1225,7 @@ const recorder = {
     catch (e) {
       console.warn('rec', e);
       if (statusTxt) statusTxt.textContent = 'Aufnahme nicht möglich';
+      _hideRecPopup();
       setTimeout(() => { if (statusTxt && statusTxt.textContent === 'Aufnahme nicht möglich') statusTxt.textContent = ''; }, 3000);
       return;
     }
@@ -935,7 +1233,7 @@ const recorder = {
     this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
     this.mr.onstop = () => { this.setBtn(false); _hideRecPopup(); this.save(); };
     this.mr.start();
-    this.t0 = Date.now(); this.setBtn(true); _showRecPopup();
+    this.t0 = Date.now(); this.setBtn(true); _showRecPopup('recording');
   },
   async save() {
     if (!this.chunks.length) return;
@@ -960,6 +1258,9 @@ const recorder = {
     const dl = makeDownloadBtn(url, name, this.label);
     row.appendChild(_makeAudioIcon());
     if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
+    const _durLb = document.createElement('span'); _durLb.className = 'rec-dur';
+    a.addEventListener('loadedmetadata', () => { const s = Math.floor(a.duration); if (isFinite(s) && s > 0) _durLb.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }, { once: true });
+    row.appendChild(_durLb);
     row.appendChild(_spacer());
     row.appendChild(dl);
     row.appendChild(_makeScissorsBtn(row));
@@ -1085,8 +1386,10 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
   const mc = moonCalendar();
   html += '<div class="pw-section">Mond</div>';
   html += `<div class="pw-row"><span class="pw-icon">${moonPhaseLabel(mc.phase).split(' ')[1] || '🌙'}</span><span class="pw-lbl">Phase</span><span class="pw-val">${moonPhaseLabel(mc.phase).replace(/\s[\S]+$/, '')} · ${mc.ageInDays} Tage</span></div>`;
-  html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Mondaufgang</span><span class="pw-val">${moonTimes?.moonrise ? fmt(moonTimes.moonrise) : '–'}</span></div>`;
-  html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Monduntergang</span><span class="pw-val">${moonTimes?.moonset ? fmt(moonTimes.moonset) : '–'}</span></div>`;
+  const mrStr = moonTimes === null ? 'GPS nötig' : (moonTimes.moonrise ? fmt(moonTimes.moonrise) : 'Heute nicht');
+  const msStr = moonTimes === null ? 'GPS nötig' : (moonTimes.moonset ? fmt(moonTimes.moonset) : 'Heute nicht');
+  html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Mondaufgang</span><span class="pw-val">${mrStr}</span></div>`;
+  html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Monduntergang</span><span class="pw-val">${msStr}</span></div>`;
   html += `<div class="pw-row"><span class="pw-icon">🌕</span><span class="pw-lbl">Nächster Vollmond</span><span class="pw-val">${fmtDate(mc.nextFull)} (in ${mc.daysToFull} d)</span></div>`;
   html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Nächster Neumond</span><span class="pw-val">${fmtDate(mc.nextNew)} (in ${mc.daysToNew} d)</span></div>`;
 
@@ -1157,6 +1460,7 @@ async function _saveCapture({ blob, mime, kind, label, key }) {
   const dl = makeDownloadBtn(url, prefix + '_' + stamp + '.' + ext, label);
   row.appendChild(dl);
   if (kind === 'photo') row.appendChild(makeShareBtn(url, key, label));
+  if (kind === 'video') row.appendChild(makeReelBtn(url, mime));
   let attId = null;
   try { attId = await addAttachment({ key: key || null, label: label || null, kind, blob, mime }); }
   catch (e) { console.warn('addAttachment', e); }

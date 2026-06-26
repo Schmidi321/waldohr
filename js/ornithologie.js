@@ -100,7 +100,6 @@ function _initDU() {
   const countdown = $('duCountdown');
   const timerEl = $('duTimer');
   const stopBtn = $('duStop');
-  const startBtn = $('duStartBtn');
   if (!enabled || !presetsEl) return;
   enabled.checked = du.enabled;
   presetsEl.querySelectorAll('.du-preset').forEach(b =>
@@ -115,34 +114,25 @@ function _initDU() {
   function _endDU() {
     clearInterval(_duInterval); _duInterval = null;
     if (countdown) countdown.hidden = true;
-    if (startBtn) startBtn.hidden = false;
     if (banner) banner.hidden = true;
     if (bannerLabel) bannerLabel.textContent = 'Punkt-Zählung';
     if (window.__waldohr) window.__waldohr.stopDetection();
+    enabled.checked = false;
+    setDauerUeberwachung({ enabled: false, durationMin: parseInt(presetsEl.querySelector('.du-preset.on')?.dataset.min ?? '30') });
   }
 
   const save = () => {
     const preset = presetsEl.querySelector('.du-preset.on');
     setDauerUeberwachung({ enabled: enabled.checked, durationMin: parseInt(preset?.dataset.min ?? '30') });
   };
-  enabled.addEventListener('change', save);
 
-  // Preset buttons: only select duration, don't start detection
-  presetsEl.querySelectorAll('.du-preset').forEach(b => b.addEventListener('click', () => {
-    presetsEl.querySelectorAll('.du-preset').forEach(x => x.classList.remove('on'));
-    b.classList.add('on');
-    save();
-  }));
-
-  // Start button triggers detection + countdown
-  if (startBtn) startBtn.addEventListener('click', async () => {
-    if (_duInterval) { _endDU(); return; }
+  function _startDU() {
+    if (_duInterval) return;
     if (window.__waldohr) {
-      try { await window.__waldohr.startDetection(); } catch (e) { console.warn('du start', e); }
+      window.__waldohr.startDetection().catch(e => console.warn('du start', e));
       window.__waldohr.switchTab('v-listen');
     }
     _showStartPopup('Dauerüberwachung');
-    startBtn.hidden = true;
     const preset = presetsEl.querySelector('.du-preset.on');
     let remaining = parseInt(preset?.dataset.min ?? '30') * 60;
     if (timerEl) timerEl.textContent = fmtTime(remaining);
@@ -159,7 +149,19 @@ function _initDU() {
       if (bannerTimer) bannerTimer.textContent = ts;
       if (remaining <= 0) _endDU();
     }, 1000);
+  }
+
+  enabled.addEventListener('change', e => {
+    save();
+    if (e.target.checked) _startDU(); else _endDU();
   });
+
+  // Preset buttons: only select duration, don't start detection
+  presetsEl.querySelectorAll('.du-preset').forEach(b => b.addEventListener('click', () => {
+    presetsEl.querySelectorAll('.du-preset').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    save();
+  }));
 
   if (stopBtn) stopBtn.addEventListener('click', _endDU);
   // Banner stop also handles DU

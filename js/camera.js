@@ -9,6 +9,7 @@ let _zoomSupported = false, _zoomMin = 1, _zoomMax = 1;
 let _onCapture = null;
 let _zoomDir = 'none', _zoomSpeed = 'slow', _zoomAnimTimer = null;
 let _azDelayTimer = null, _intervalTimer = null, _burstActive = false;
+let _intervalCountdown = null, _intervalNext = 0;
 let _facingMode = 'environment';
 
 // ---- Geräte aufzählen (Labels erst nach Genehmigung verfügbar) ----
@@ -28,7 +29,7 @@ async function _enumerateDevices() {
       if (!chosen.length) chosen.push(...allCams.slice(0, 3));
       camSel.innerHTML = chosen.map(d => {
         const lbl = d.label.toLowerCase();
-        const name = lbl.match(/ultra/) ? '🔭 Ultra-Weit' : lbl.match(/telephoto|tele|[23]\.?[0-9]?x\b/) ? '🔭 Tele' : '📷 Weitwinkel';
+        const name = lbl.match(/ultra/) ? '📷 Ultra-Weit (0.5×)' : lbl.match(/telephoto|tele|[23]\.?[0-9]?x\b/) ? '🔭 Tele' : '📷 Normal (1×)';
         return `<option value="${d.deviceId}">${name}</option>`;
       }).join('');
       camSel.style.display = chosen.length > 1 ? '' : 'none';
@@ -94,9 +95,27 @@ function _toggleInterval() {
   if (_intervalTimer) {
     clearInterval(_intervalTimer); _intervalTimer = null;
     if (btn) btn.classList.remove('on');
+    if (_intervalCountdown) { _intervalCountdown.remove(); _intervalCountdown = null; }
+    _intervalNext = 0;
   } else {
     _captureFrameOnly();
-    _intervalTimer = setInterval(_captureFrameOnly, 3000);
+    _intervalNext = 3;
+    const wrap = document.querySelector('#cameraModal .cam-video-wrap');
+    if (wrap) {
+      _intervalCountdown = document.createElement('div');
+      _intervalCountdown.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:10;background:rgba(0,0,0,.52);border-radius:50%;width:72px;height:72px;display:flex;align-items:center;justify-content:center;font-size:36px;font-weight:900;color:#fff;font-family:Outfit,sans-serif;transition:opacity .2s';
+      _intervalCountdown.textContent = _intervalNext;
+      wrap.appendChild(_intervalCountdown);
+    }
+    _intervalTimer = setInterval(() => {
+      _intervalNext--;
+      if (_intervalCountdown) _intervalCountdown.textContent = _intervalNext;
+      if (_intervalNext <= 0) {
+        _captureFrameOnly();
+        _intervalNext = 3;
+        if (_intervalCountdown) _intervalCountdown.textContent = _intervalNext;
+      }
+    }, 1000);
     if (btn) btn.classList.add('on');
   }
 }
@@ -310,6 +329,7 @@ function _cleanup() {
   _stopMeter(); _stopZoomAnim();
   _burstActive = false;
   if (_intervalTimer) { clearInterval(_intervalTimer); _intervalTimer = null; }
+  if (_intervalCountdown) { _intervalCountdown.remove(); _intervalCountdown = null; } _intervalNext = 0;
   if (_mr && _mr.state === 'recording') _mr.stop();
   _mr = null; _mrChunks = [];
   if (_stream)  { _stream.getTracks().forEach(t => t.stop());  _stream = null; }
