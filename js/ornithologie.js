@@ -269,20 +269,77 @@ function _renderProtokolle() {
     list.innerHTML = '<div class="infoblock" style="margin-top:14px"><p style="color:var(--muted);font-size:13px;text-align:center;padding:8px 0">Noch keine Zählsitzungen gespeichert.<br>Starte eine Punkt-Zählung im Überwachungs-Tab.</p></div>';
     return;
   }
-  list.innerHTML = sessions.map((s, i) => {
+  list.innerHTML = '';
+  sessions.forEach((s, i) => {
     const d = new Date(s.ts);
     const dateStr = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const timeStr = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
     const label = s.name || ('Sitzung vom ' + dateStr);
-    const rows = s.species && s.species.length
-      ? s.species.map(sp => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-top:1px solid var(--stroke);font-size:13px"><span>${sp.name}</span><span style="color:var(--lime);font-weight:700">${sp.count}×</span></div>`).join('')
-      : '<div style="color:var(--faint);font-size:12px;padding-top:6px">Keine Rufe erkannt</div>';
-    return `<div class="infoblock" style="margin-top:${i ? '10' : '14'}px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-        <div><div style="font-weight:700;font-size:14px;color:var(--ink)">${label}</div><div style="font-size:11px;color:var(--muted);margin-top:2px">${dateStr} · ${timeStr}</div></div>
-        <div style="font-size:18px;font-weight:700;color:var(--lime)">${s.species ? s.species.length : 0} Arten</div>
-      </div>${rows}</div>`;
-  }).join('');
+
+    const card = document.createElement('div');
+    card.className = 'infoblock';
+    card.style.marginTop = i ? '10px' : '14px';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;cursor:pointer;-webkit-tap-highlight-color:transparent';
+    header.innerHTML = `<div style="flex:1;min-width:0">
+      <div style="font-weight:700;font-size:14px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">${dateStr} · ${timeStr}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+      <div style="font-size:17px;font-weight:700;color:var(--lime)">${s.species ? s.species.length : 0} Arten</div>
+      <button class="prot-del-btn" title="Sitzung löschen" style="background:none;border:none;color:var(--rose,#ef4444);cursor:pointer;padding:4px 2px;display:flex;align-items:center;opacity:.75">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+      </button>
+    </div>`;
+
+    const body = document.createElement('div');
+    body.hidden = true;
+    body.style.marginTop = '8px';
+
+    header.addEventListener('click', async e => {
+      if (e.target.closest('.prot-del-btn')) return;
+      if (body.hidden) {
+        body.hidden = false;
+        body.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:4px 0">Lade…</div>';
+        try {
+          const allDets = qualifyingDetections(await allDetections());
+          const endTs = (s.startTs || s.ts) + PK_SECS * 1000;
+          const inWindow = allDets.filter(det => det.ts >= (s.startTs || s.ts - PK_SECS * 1000) && det.ts <= endTs);
+          if (!inWindow.length) {
+            body.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:4px 0">Keine Erkennungen im Zeitfenster gefunden</div>';
+          } else {
+            const bySpecies = {};
+            for (const det of inWindow) {
+              if (!bySpecies[det.key]) bySpecies[det.key] = { name: det.species, times: [] };
+              bySpecies[det.key].times.push(new Date(det.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            }
+            body.innerHTML = Object.values(bySpecies).map(sp =>
+              `<div style="border-top:1px solid var(--stroke);padding:6px 0">
+                <div style="font-weight:600;font-size:13px;color:var(--ink);margin-bottom:3px">${sp.name}</div>
+                ${sp.times.map(t => `<div style="font-size:11px;color:var(--muted);padding:1px 0">· ${t}</div>`).join('')}
+              </div>`
+            ).join('');
+          }
+        } catch { body.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:4px 0">Fehler beim Laden</div>'; }
+      } else {
+        body.hidden = true;
+      }
+    });
+
+    header.querySelector('.prot-del-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      try {
+        let ss = JSON.parse(localStorage.getItem('waldohr.pk.sessions') || '[]');
+        ss.splice(i, 1);
+        localStorage.setItem('waldohr.pk.sessions', JSON.stringify(ss));
+        _renderProtokolle();
+      } catch {}
+    });
+
+    card.append(header, body);
+    list.appendChild(card);
+  });
 }
 
 // ---- Export-Tab ----

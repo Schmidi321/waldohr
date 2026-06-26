@@ -9,6 +9,7 @@ let _zoomSupported = false, _zoomMin = 1, _zoomMax = 1;
 let _onCapture = null;
 let _zoomDir = 'none', _zoomSpeed = 'slow', _zoomAnimTimer = null;
 let _azDelayTimer = null, _intervalTimer = null, _burstActive = false;
+let _facingMode = 'environment';
 
 // ---- Geräte aufzählen (Labels erst nach Genehmigung verfügbar) ----
 async function _enumerateDevices() {
@@ -225,7 +226,7 @@ async function _startStream(camId, micId) {
   const pip = document.getElementById('camVideo2');
   if (pip) { pip.srcObject = null; pip.hidden = true; }
 
-  const videoC = camId ? { deviceId: { exact: camId } } : { facingMode: { ideal: 'environment' } };
+  const videoC = camId ? { deviceId: { exact: camId } } : { facingMode: { ideal: _facingMode } };
   const audioC = micId ? { deviceId: { exact: micId } } : true;
   try {
     _stream = await navigator.mediaDevices.getUserMedia({
@@ -441,12 +442,9 @@ export function openCamera(onCapture) {
     });
 
     document.getElementById('camFlip')?.addEventListener('click', async () => {
-      const camSel = document.getElementById('camCamSelect');
       const micSel = document.getElementById('camMicSelect');
-      const opts = camSel ? [...camSel.options] : [];
-      const idx = opts.findIndex(o => o.selected);
-      const nextId = opts.length > 1 ? opts[(idx + 1) % opts.length].value : null;
-      await _startStream(nextId, micSel?.value || null).catch(e => console.warn('flip', e));
+      _facingMode = _facingMode === 'environment' ? 'user' : 'environment';
+      await _startStream(null, micSel?.value || null).catch(e => console.warn('flip', e));
     });
 
     document.getElementById('camZoom')?.addEventListener('input', async function () {

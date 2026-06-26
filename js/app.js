@@ -257,8 +257,14 @@ function markAutoRecorded(key) {
 }
 
 function _makeAudioIcon() {
-  const el = document.createElement('div'); el.className = 'rec-media-icon';
-  el.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="22" height="22"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
+  const el = document.createElement('div'); el.className = 'rec-media-icon'; el.style.cursor = 'pointer';
+  el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="22" height="22"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><svg viewBox="0 0 8 6" fill="currentColor" width="8" height="6" style="margin-top:3px;opacity:.55"><path d="M0 0l8 3-8 3z"/></svg></div>';
+  el.onclick = () => {
+    const row = el.closest('.rec-row');
+    const a = row?.querySelector('audio');
+    if (!a) return;
+    if (a.paused) a.play().catch(() => {}); else a.pause();
+  };
   return el;
 }
 
@@ -270,7 +276,7 @@ async function _saveAutoRecRow(det, blob, mime) {
   const ext = mime.includes('wav') ? 'wav' : mime.includes('mp4') ? 'm4a' : 'webm';
   const url = URL.createObjectURL(blob);
   const row = document.createElement('div'); row.className = 'rec-row';
-  const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
+  const a = document.createElement('audio'); a.src = url; a.preload = 'metadata'; a.hidden = true;
   wireAudioRouting(a);
   const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
   const dl = makeDownloadBtn(url, prefix + '_' + stamp + gpsTag + '.' + ext, det.species);
@@ -411,33 +417,63 @@ function _makeScissorsBtn(row) {
 async function _toggleTrimPanel(row) {
   const existing = row.querySelector('.rec-trim-panel');
   if (existing) { existing.remove(); return; }
-  const audio = row.querySelector('audio');
-  if (!audio?.src) return;
+  const audioEl = row.querySelector('audio');
+  if (!audioEl?.src) return;
   const panel = document.createElement('div'); panel.className = 'rec-trim-panel';
   panel.innerHTML = '<span class="tr-lbl">Lade…</span>';
   row.appendChild(panel);
   let decoded;
   try {
-    const ab = await fetch(audio.src).then(r => r.arrayBuffer());
+    const ab = await fetch(audioEl.src).then(r => r.arrayBuffer());
     const tmp = new (window.AudioContext || window.webkitAudioContext)();
     decoded = await new Promise((res, rej) => tmp.decodeAudioData(ab, res, rej));
     tmp.close().catch(() => {});
   } catch { panel.innerHTML = '<span class="tr-lbl" style="color:var(--rose)">Fehler</span>'; return; }
   const dur = decoded.duration;
-  const durF = dur.toFixed(1);
-  panel.innerHTML = `<span class="tr-lbl" style="flex:0 0 100%">Start <span class="tr-val tr-sv">0.0s</span></span><input type="range" class="tr-range tr-s" min="0" max="${durF}" step="0.1" value="0"><span class="tr-lbl" style="flex:0 0 100%;margin-top:4px">Ende <span class="tr-val tr-ev">${durF}s</span></span><input type="range" class="tr-range tr-e" min="0" max="${durF}" step="0.1" value="${durF}"><button class="tr-go" style="flex:0 0 100%;margin-top:6px">✂ Zuschneiden</button>`;
-  panel.querySelector('.tr-s').oninput = function() { panel.querySelector('.tr-sv').textContent = parseFloat(this.value).toFixed(1) + 's'; };
-  panel.querySelector('.tr-e').oninput = function() { panel.querySelector('.tr-ev').textContent = parseFloat(this.value).toFixed(1) + 's'; };
+  let startFrac = 0, endFrac = 1;
+  panel.innerHTML = `<div class="tr-tl-wrap"><div class="tr-tl"><div class="tr-kept"></div><div class="tr-handle tr-hs"></div><div class="tr-handle tr-he"></div></div></div><div class="tr-times"><span class="tr-val tr-sv">0.0s</span><span class="tr-val tr-ev">${dur.toFixed(1)}s</span></div><button class="tr-go">&#9986; Zuschneiden</button>`;
+  const tl = panel.querySelector('.tr-tl');
+  const kept = panel.querySelector('.tr-kept');
+  const hs = panel.querySelector('.tr-hs');
+  const he = panel.querySelector('.tr-he');
+  const sv = panel.querySelector('.tr-sv');
+  const ev = panel.querySelector('.tr-ev');
+  function updateUI() {
+    hs.style.left = (startFrac * 100) + '%';
+    he.style.left = (endFrac * 100) + '%';
+    kept.style.left = (startFrac * 100) + '%';
+    kept.style.width = ((endFrac - startFrac) * 100) + '%';
+    sv.textContent = (startFrac * dur).toFixed(1) + 's';
+    ev.textContent = (endFrac * dur).toFixed(1) + 's';
+  }
+  updateUI();
+  function makeDrag(handle, isStart) {
+    handle.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      const mv = e2 => {
+        const rect = tl.getBoundingClientRect();
+        const frac = Math.max(0, Math.min(1, (e2.clientX - rect.left) / rect.width));
+        if (isStart) startFrac = Math.min(frac, endFrac - 0.02);
+        else endFrac = Math.max(frac, startFrac + 0.02);
+        updateUI();
+      };
+      handle.addEventListener('pointermove', mv);
+      handle.addEventListener('pointerup', () => handle.removeEventListener('pointermove', mv), { once: true });
+    });
+  }
+  makeDrag(hs, true);
+  makeDrag(he, false);
   panel.querySelector('.tr-go').onclick = async () => {
-    const start = Math.max(0, parseFloat(panel.querySelector('.tr-s').value) || 0);
-    const end = Math.min(dur, parseFloat(panel.querySelector('.tr-e').value) || dur);
+    const start = startFrac * dur;
+    const end = endFrac * dur;
     if (start >= end) return;
     const sr = decoded.sampleRate;
     const trimmed = decoded.getChannelData(0).slice(Math.floor(start * sr), Math.floor(end * sr));
     const wav = encodeWav(trimmed, sr);
     const newUrl = URL.createObjectURL(wav);
-    if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
-    audio.src = newUrl; audio.load();
+    if (audioEl.src.startsWith('blob:')) URL.revokeObjectURL(audioEl.src);
+    audioEl.src = newUrl; audioEl.load();
     panel.remove();
   };
 }
@@ -679,11 +715,11 @@ function makeShareBtn(url, key, label) {
 function attachmentRow(a) {
   const url = URL.createObjectURL(a.blob);
   const row = document.createElement('div'); row.className = 'rec-row';
+  let _audioEl = null;
   if (a.kind === 'audio') {
-    const el = document.createElement('audio'); el.controls = true; el.src = url; el.preload = 'metadata';
-    wireAudioRouting(el);
+    _audioEl = document.createElement('audio'); _audioEl.src = url; _audioEl.preload = 'metadata'; _audioEl.hidden = true;
+    wireAudioRouting(_audioEl);
     row.appendChild(_makeAudioIcon());
-    row.appendChild(el);
   } else if (a.kind === 'video') {
     const thumb = _makeVideoThumb(url);
     thumb.onclick = () => openVideoLightbox(url);
@@ -709,6 +745,7 @@ function attachmentRow(a) {
   if (a.kind === 'photo') row.appendChild(makeShareBtn(url, a.key, a.label));
   if (a.kind === 'audio') row.appendChild(_makeScissorsBtn(row));
   row.appendChild(makeDeleteBtn(row, url, a.key, a.id));
+  if (_audioEl) row.appendChild(_audioEl);
   return row;
 }
 
@@ -812,6 +849,30 @@ if (orbBtn) orbBtn.addEventListener('click', async ev => {
 // ---- Tonaufnahme (manuell) ----
 const recBtn = document.getElementById('recBtn');
 if (recBtn && !window.MediaRecorder) recBtn.style.display = 'none';
+
+let _recPopupEl = null, _recPopupTimer = null;
+function _showRecPopup() {
+  if (_recPopupEl) return;
+  _recPopupEl = document.createElement('div');
+  _recPopupEl.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;pointer-events:none';
+  _recPopupEl.innerHTML = `<div style="background:linear-gradient(160deg,#200808,#100404);border:1px solid rgba(239,68,68,.35);border-radius:24px;padding:28px 32px 22px;text-align:center;min-width:180px;box-shadow:0 12px 40px rgba(0,0,0,.6)">
+    <div class="rec-popup-mic" style="color:#ef4444;margin-bottom:12px">
+      <svg viewBox="0 0 24 24" fill="#ef4444" stroke="#ef4444" stroke-width="0.5" width="56" height="56"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="#ef4444" stroke-width="1.8"/><line x1="12" y1="19" x2="12" y2="23" stroke="#ef4444" stroke-width="1.8"/><line x1="8" y1="23" x2="16" y2="23" stroke="#ef4444" stroke-width="1.8"/></svg>
+    </div>
+    <div id="_recPopupTime" style="font-size:30px;font-weight:700;color:#ef4444;font-family:'Outfit',sans-serif;letter-spacing:2px">0:00</div>
+    <div style="font-size:12px;color:rgba(239,68,68,.6);margin-top:6px;letter-spacing:.5px">Aufnahme läuft</div>
+  </div>`;
+  document.body.appendChild(_recPopupEl);
+  _recPopupTimer = setInterval(() => {
+    const el = document.getElementById('_recPopupTime');
+    if (el) el.textContent = recorder.fmt();
+  }, 500);
+}
+function _hideRecPopup() {
+  if (_recPopupEl) { _recPopupEl.remove(); _recPopupEl = null; }
+  if (_recPopupTimer) { clearInterval(_recPopupTimer); _recPopupTimer = null; }
+}
+
 const recorder = {
   mr: null, chunks: [], timer: null, t0: 0,
   fmt() { const s = Math.floor((Date.now() - this.t0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
@@ -839,9 +900,9 @@ const recorder = {
     }
     this.chunks = []; this.label = label || null; this.key = key || null;
     this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
-    this.mr.onstop = () => { this.setBtn(false); this.save(); };
+    this.mr.onstop = () => { this.setBtn(false); _hideRecPopup(); this.save(); };
     this.mr.start();
-    this.t0 = Date.now(); this.setBtn(true);
+    this.t0 = Date.now(); this.setBtn(true); _showRecPopup();
   },
   async save() {
     if (!this.chunks.length) return;
@@ -861,7 +922,7 @@ const recorder = {
     const prefix = this.label ? this.label.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'waldohr';
     const name = prefix + '_' + stamp + '.' + ext;
     const row = document.createElement('div'); row.className = 'rec-row';
-    const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
+    const a = document.createElement('audio'); a.src = url; a.preload = 'metadata'; a.hidden = true;
     wireAudioRouting(a);
     const dl = makeDownloadBtn(url, name, this.label);
     row.appendChild(_makeAudioIcon());
