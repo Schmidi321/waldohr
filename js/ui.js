@@ -250,7 +250,7 @@ function initWakeLockToggle() {
 
 function initShutterToggle() {
   const toggle = $('shutterSoundToggle'); if (!toggle) return;
-  toggle.checked = localStorage.getItem('waldohr.shutterSound') !== 'off';
+  toggle.checked = localStorage.getItem('waldohr.shutterSound') === 'on';
   toggle.onchange = () => {
     try { localStorage.setItem('waldohr.shutterSound', toggle.checked ? 'on' : 'off'); } catch {}
   };

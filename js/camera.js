@@ -66,7 +66,7 @@ function _smoothStopZoom() {
 }
 
 function _playShutter() {
-  if (localStorage.getItem('waldohr.shutterSound') === 'off') return;
+  if (localStorage.getItem('waldohr.shutterSound') !== 'on') return;
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const gain = ctx.createGain();
@@ -79,6 +79,14 @@ function _playShutter() {
     osc.connect(gain); osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.07);
     osc.onended = () => { try { ctx.close(); } catch {} };
   } catch {}
+}
+
+function _flashBtn(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.background = 'var(--rose, #fb7185)';
+  el.style.color = '#fff';
+  setTimeout(() => { el.style.background = ''; el.style.color = ''; }, 160);
 }
 
 function _captureFrameOnly() {
@@ -100,6 +108,7 @@ async function _doBurst() {
   if (cap) cap.classList.add('on');
   const end = Date.now() + 2000;
   while (Date.now() < end && _burstActive) {
+    _flashBtn('camBurst');
     await _captureFrameOnly();
     await new Promise(r => setTimeout(r, 120));
   }
@@ -115,6 +124,7 @@ function _toggleInterval() {
     if (_intervalCountdown) { _intervalCountdown.remove(); _intervalCountdown = null; }
     _intervalNext = 0;
   } else {
+    _flashBtn('camInterval');
     _captureFrameOnly();
     _intervalNext = 3;
     const wrap = document.querySelector('#cameraModal .cam-video-wrap');
@@ -128,6 +138,7 @@ function _toggleInterval() {
       _intervalNext--;
       if (_intervalCountdown) _intervalCountdown.textContent = _intervalNext;
       if (_intervalNext <= 0) {
+        _flashBtn('camInterval');
         _captureFrameOnly();
         _intervalNext = 3;
         if (_intervalCountdown) _intervalCountdown.textContent = _intervalNext;
