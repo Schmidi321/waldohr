@@ -256,9 +256,13 @@ function markAutoRecorded(key) {
   } catch {}
 }
 
-function _makeAudioIcon() {
+function _makeAudioIcon(audioEl) {
   const el = document.createElement('div'); el.className = 'rec-media-icon'; el.style.cursor = 'pointer';
-  el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="22" height="22"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><svg viewBox="0 0 8 6" fill="currentColor" width="8" height="6" style="margin-top:3px;opacity:.55"><path d="M0 0l8 3-8 3z"/></svg></div>';
+  el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="22" height="22"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><svg viewBox="0 0 8 6" fill="currentColor" width="8" height="6" style="margin-top:3px;opacity:.55"><path d="M0 0l8 3-8 3z"/></svg><span class="_aDur" style="font-size:9px;color:var(--faint);font-variant-numeric:tabular-nums;line-height:1.3;margin-top:2px;display:block;text-align:center"></span></div>';
+  if (audioEl) {
+    const ds = el.querySelector('._aDur');
+    audioEl.addEventListener('loadedmetadata', () => { const s = Math.floor(audioEl.duration); if (isFinite(s) && s > 0 && ds) ds.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }, { once: true });
+  }
   el.onclick = () => {
     const row = el.closest('.rec-row');
     const a = row?.querySelector('audio');
@@ -389,14 +393,12 @@ async function _saveAutoRecRow(det, blob, mime) {
   const a = document.createElement('audio'); a.src = url; a.preload = 'metadata'; a.hidden = true;
   wireAudioRouting(a);
   const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
-  const durLb = document.createElement('span'); durLb.className = 'rec-dur';
-  a.addEventListener('loadedmetadata', () => { const s = Math.floor(a.duration); if (isFinite(s) && s > 0) durLb.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }, { once: true });
   const dl = makeDownloadBtn(url, prefix + '_' + stamp + gpsTag + '.' + ext, det.species);
   let attId = null;
   try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime }); }
   catch (e) { console.warn('addAttachment', e); }
   const del = makeDeleteBtn(row, url, det.key, attId);
-  row.append(_makeAudioIcon(), lb, durLb, _spacer(), dl, _makeScissorsBtn(row), del, a);
+  row.append(_makeAudioIcon(a), lb, _spacer(), dl, _makeScissorsBtn(row), del, a);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
   registerRecording(det.key, url);
   if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
@@ -1009,13 +1011,10 @@ function attachmentRow(a) {
   const url = URL.createObjectURL(a.blob);
   const row = document.createElement('div'); row.className = 'rec-row';
   let _audioEl = null;
-  let _audioDurLb = null;
   if (a.kind === 'audio') {
     _audioEl = document.createElement('audio'); _audioEl.src = url; _audioEl.preload = 'metadata'; _audioEl.hidden = true;
     wireAudioRouting(_audioEl);
-    _audioDurLb = document.createElement('span'); _audioDurLb.className = 'rec-dur';
-    _audioEl.addEventListener('loadedmetadata', () => { const s = Math.floor(_audioEl.duration); if (isFinite(s) && s > 0 && _audioDurLb) _audioDurLb.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }, { once: true });
-    row.appendChild(_makeAudioIcon());
+    row.appendChild(_makeAudioIcon(_audioEl));
   } else if (a.kind === 'video') {
     const thumb = _makeVideoThumb(url);
     thumb.onclick = () => openVideoLightbox(url);
@@ -1030,7 +1029,6 @@ function attachmentRow(a) {
     lb.textContent = a.label;
     row.appendChild(lb);
   }
-  if (_audioDurLb) row.appendChild(_audioDurLb);
   const mime = a.mime || '';
   const ext = mime.includes('wav') ? 'wav' : mime.includes('mp4') ? 'm4a' : mime.includes('webm') ? 'webm'
     : mime.includes('png') ? 'png' : mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'bin';
@@ -1256,11 +1254,8 @@ const recorder = {
     const a = document.createElement('audio'); a.src = url; a.preload = 'metadata'; a.hidden = true;
     wireAudioRouting(a);
     const dl = makeDownloadBtn(url, name, this.label);
-    row.appendChild(_makeAudioIcon());
+    row.appendChild(_makeAudioIcon(a));
     if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
-    const _durLb = document.createElement('span'); _durLb.className = 'rec-dur';
-    a.addEventListener('loadedmetadata', () => { const s = Math.floor(a.duration); if (isFinite(s) && s > 0) _durLb.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }, { once: true });
-    row.appendChild(_durLb);
     row.appendChild(_spacer());
     row.appendChild(dl);
     row.appendChild(_makeScissorsBtn(row));
@@ -1420,13 +1415,13 @@ window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);
 let _triggerRaf = null, _triggerMr = null;
 window.__waldohr = {
   startDetection: async () => {
-    if (!audio.running) {
-      await audio.start();
-      geo.start();
-    }
     detectionActive = true;
     setUI('mic');
     if (recBtn) recBtn.classList.add('rec-on');
+    if (!audio.running) {
+      try { await audio.start(); geo.start(); }
+      catch (e) { detectionActive = false; setUI('off'); if (recBtn) recBtn.classList.remove('rec-on'); throw e; }
+    }
   },
   stopDetection: () => {
     detectionActive = false;
@@ -1454,6 +1449,7 @@ window.__waldohr = {
       tMr.ondataavailable = e => { if (e.data?.size) tChunks.push(e.data); };
       tMr.onstop = async () => {
         _triggerMr = null;
+        if (recBtn) recBtn.classList.remove('rec-on');
         if (!tChunks.length) return;
         const raw = new Blob(tChunks, { type: tChunks[0].type || 'audio/webm' });
         let saveBlob, mime, url, ext;
@@ -1468,11 +1464,9 @@ window.__waldohr = {
         const a = document.createElement('audio'); a.src = url; a.preload = 'metadata'; a.hidden = true;
         wireAudioRouting(a);
         const dl = makeDownloadBtn(url, name, 'Trigger');
-        row.appendChild(_makeAudioIcon());
+        row.appendChild(_makeAudioIcon(a));
         const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = 'Trigger'; row.appendChild(lb);
-        const durLb = document.createElement('span'); durLb.className = 'rec-dur';
-        a.addEventListener('loadedmetadata', () => { const s = Math.floor(a.duration); if (isFinite(s) && s > 0) durLb.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }, { once: true });
-        row.appendChild(durLb); row.appendChild(_spacer()); row.appendChild(dl); row.appendChild(_makeScissorsBtn(row));
+        row.appendChild(_spacer()); row.appendChild(dl); row.appendChild(_makeScissorsBtn(row));
         let attId = null;
         try { attId = await addAttachment({ key: null, label: 'Trigger', kind: 'audio', blob: saveBlob, mime }); } catch {}
         row.appendChild(makeDeleteBtn(row, url, null, attId)); row.appendChild(a);
@@ -1480,6 +1474,8 @@ window.__waldohr = {
         if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
       };
       tMr.start();
+      if (recBtn) recBtn.classList.add('rec-on');
+      setTimeout(() => { if (tMr && tMr.state === 'recording') { tMr.stop(); tMr = null; tSilenceAt = null; } }, 60000);
     }
     function tTick() {
       _triggerRaf = requestAnimationFrame(tTick);

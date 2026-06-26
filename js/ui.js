@@ -193,6 +193,7 @@ export function initUI() {
 
   setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
   initWakeLockToggle();
+  initShutterToggle();
   initSensitivitySliders();
 
   // Sammlung: "Heute hier" / "Global nach Ort"
@@ -245,6 +246,14 @@ function initWakeLockToggle() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && wakeLockGet()) applyWakeLock(true);
   });
+}
+
+function initShutterToggle() {
+  const toggle = $('shutterSoundToggle'); if (!toggle) return;
+  toggle.checked = localStorage.getItem('waldohr.shutterSound') !== 'off';
+  toggle.onchange = () => {
+    try { localStorage.setItem('waldohr.shutterSound', toggle.checked ? 'on' : 'off'); } catch {}
+  };
 }
 
 function initSensitivitySliders() {

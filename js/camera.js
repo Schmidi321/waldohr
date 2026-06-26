@@ -65,10 +65,27 @@ function _smoothStopZoom() {
   if (vid) { vid.style.transition = 'transform 0.4s ease-out'; setTimeout(() => { if (vid) vid.style.transition = ''; }, 420); }
 }
 
+function _playShutter() {
+  if (localStorage.getItem('waldohr.shutterSound') === 'off') return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.07);
+    gain.connect(ctx.destination);
+    const osc = ctx.createOscillator();
+    osc.type = 'square'; osc.frequency.setValueAtTime(1400, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(280, ctx.currentTime + 0.06);
+    osc.connect(gain); osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.07);
+    osc.onended = () => { try { ctx.close(); } catch {} };
+  } catch {}
+}
+
 function _captureFrameOnly() {
   const video = document.getElementById('camVideo');
   const cv = document.getElementById('camCanvas');
   if (!video || !cv) return Promise.resolve();
+  _playShutter();
   return new Promise(resolve => {
     cv.width = video.videoWidth || 1280; cv.height = video.videoHeight || 720;
     cv.getContext('2d').drawImage(video, 0, 0, cv.width, cv.height);
