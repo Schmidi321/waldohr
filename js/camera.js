@@ -71,8 +71,8 @@ async function _startDualStream(mode) {
 
   let c1, c2;
   if (mode === 'front-back') {
-    c1 = { video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false };
-    c2 = { video: { facingMode: { exact: 'user' },        width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false };
+    c1 = { video: { facingMode: { exact: 'environment' }, width: { ideal: 4096 }, height: { ideal: 2160 } }, audio: false };
+    c2 = { video: { facingMode: { exact: 'user' },        width: { ideal: 4096 }, height: { ideal: 2160 } }, audio: false };
   } else { // tele-wide
     let cams = [];
     try {
@@ -85,10 +85,10 @@ async function _startDualStream(mode) {
       const cam1 = cams[wI >= 0 ? wI : 0];
       const fallback2 = cams.find(c => c.deviceId !== cam1.deviceId);
       const cam2 = tI >= 0 && cams[tI].deviceId !== cam1.deviceId ? cams[tI] : fallback2;
-      c1 = { video: { deviceId: { exact: cam1.deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false };
-      c2 = cam2 ? { video: { deviceId: { exact: cam2.deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false } : null;
+      c1 = { video: { deviceId: { exact: cam1.deviceId }, width: { ideal: 4096 }, height: { ideal: 2160 } }, audio: false };
+      c2 = cam2 ? { video: { deviceId: { exact: cam2.deviceId }, width: { ideal: 4096 }, height: { ideal: 2160 } }, audio: false } : null;
     } else {
-      c1 = { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false };
+      c1 = { video: { facingMode: { ideal: 'environment' }, width: { ideal: 4096 }, height: { ideal: 2160 } }, audio: false };
       c2 = null;
     }
   }
@@ -143,7 +143,7 @@ async function _takeDualPhoto() {
     if (!blob) return;
     const cb = _onCapture; _close();
     if (cb) cb({ blob, mime: 'image/jpeg', kind: 'photo' });
-  }, 'image/jpeg', 0.93);
+  }, 'image/jpeg', 0.95);
 }
 
 // ---- Stream starten / wechseln ----
@@ -158,12 +158,12 @@ async function _startStream(camId, micId) {
   const audioC = micId ? { deviceId: { exact: micId } } : true;
   try {
     _stream = await navigator.mediaDevices.getUserMedia({
-      video: { ...videoC, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: { ...videoC, width: { ideal: 4096 }, height: { ideal: 2160 } },
       audio: audioC
     });
   } catch (_) {
     _stream = await navigator.mediaDevices.getUserMedia({
-      video: { ...videoC, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: { ...videoC, width: { ideal: 4096 }, height: { ideal: 2160 } },
       audio: false
     });
   }
@@ -285,7 +285,7 @@ async function _takePhoto() {
     if (!blob) return;
     const cb = _onCapture; _close();
     if (cb) cb({ blob, mime: 'image/jpeg', kind: 'photo' });
-  }, 'image/jpeg', 0.93);
+  }, 'image/jpeg', 0.95);
 }
 
 // ---- Video aufnehmen / stoppen ----

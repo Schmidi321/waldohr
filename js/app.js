@@ -3,9 +3,9 @@ import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal } from './ui.js';
-import { fetchWeather } from './weather.js';
+import { fetchWeather, fetchPhotoWeather, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel } from './weather.js';
 import { routeTracker } from './route.js';
-import { checkAlarms, getFotoWecker, getDauerUeberwachung } from './alarm.js';
+import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
 import { openCamera } from './camera.js';
 
 // ---- In-App Lightbox für Fotos ----
@@ -262,13 +262,13 @@ async function maybeAutoRecord(det, samples, sampleRate) {
   const row = document.createElement('div'); row.className = 'rec-row';
   const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
   wireAudioRouting(a);
-  const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto'; lb.style.flex = '1';
+  const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
   const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + gpsTag + '.wav'; dl.textContent = '⬇'; dl.title = 'Herunterladen';
   let attId = null;
   try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime: 'audio/wav' }); }
   catch (e) { console.warn('addAttachment', e); }
   const del = makeDeleteBtn(row, url, det.key, attId);
-  row.append(a, lb, dl, del);
+  row.append(a, lb, _spacer(), dl, del);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
   registerRecording(det.key, url);
   if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
@@ -290,6 +290,43 @@ function makeDeleteBtn(row, url, key, attId) {
   };
   return del;
 }
+
+// ---- Video-Lightbox ----
+function openVideoLightbox(url) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.95);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px';
+  const vid = document.createElement('video');
+  vid.src = url; vid.controls = true; vid.autoplay = true;
+  vid.style.cssText = 'max-width:100%;max-height:calc(100vh - 80px);border-radius:8px';
+  const close = document.createElement('button');
+  close.innerHTML = '&times;';
+  close.style.cssText = 'position:absolute;top:max(16px,env(safe-area-inset-top));right:16px;background:rgba(0,0,0,.6);border:none;color:#fff;font-size:28px;line-height:1;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center';
+  const dismiss = () => { vid.pause(); ov.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Escape') dismiss(); };
+  close.onclick = dismiss;
+  ov.onclick = e => { if (e.target === ov) dismiss(); };
+  document.addEventListener('keydown', onKey);
+  ov.append(vid, close);
+  document.body.appendChild(ov);
+}
+
+// ---- Video-Vorschaubild (56×56 Thumbnail + Play-Icon) ----
+function _makeVideoThumb(url) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'flex:0 0 56px;width:56px;height:56px;border-radius:11px;overflow:hidden;position:relative;background:#04130d;cursor:pointer;flex-shrink:0';
+  const vid = document.createElement('video');
+  vid.src = url; vid.preload = 'metadata'; vid.muted = true;
+  vid.style.cssText = 'width:56px;height:56px;object-fit:cover;display:block';
+  vid.onloadedmetadata = () => { try { vid.currentTime = 0.15; } catch {} };
+  const ply = document.createElement('div');
+  ply.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none';
+  ply.innerHTML = '<div style="width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="white" width="11" height="11"><path d="M8 5v14l11-7z"/></svg></div>';
+  wrap.append(vid, ply);
+  return wrap;
+}
+
+// ---- Spacer: schiebt Icons nach rechts ----
+function _spacer() { const s = document.createElement('span'); s.style.flex = '1'; return s; }
 
 // ---- Foto+Audio Mixer: Photo + Tonaufnahme → Video rendern (client-side, kein Server) ----
 async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
@@ -320,11 +357,11 @@ async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
   ctx.fillStyle = ov; ctx.fillRect(0, H - 220, W, 220);
   ctx.textAlign = 'center';
   ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 24;
-  ctx.fillStyle = 'rgba(163,230,53,.97)'; ctx.font = '700 62px system-ui,sans-serif';
-  ctx.fillText('🌿 WaldOhr', W / 2, H - 90);
+  ctx.fillStyle = 'rgba(163,230,53,.97)'; ctx.font = '700 82px system-ui,sans-serif';
+  ctx.fillText('🌿 WaldOhr', W / 2, H - 98);
   ctx.shadowBlur = 12;
-  ctx.fillStyle = 'rgba(255,255,255,.62)'; ctx.font = '500 32px system-ui,sans-serif';
-  ctx.fillText(new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }), W / 2, H - 38);
+  ctx.fillStyle = 'rgba(255,255,255,.65)'; ctx.font = '500 34px system-ui,sans-serif';
+  ctx.fillText(new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }), W / 2, H - 44);
   ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
 
   // Audio dekodieren
@@ -495,6 +532,10 @@ function attachmentRow(a) {
     const el = document.createElement('audio'); el.controls = true; el.src = url; el.preload = 'metadata';
     wireAudioRouting(el);
     row.appendChild(el);
+  } else if (a.kind === 'video') {
+    const thumb = _makeVideoThumb(url);
+    thumb.onclick = () => openVideoLightbox(url);
+    row.appendChild(thumb);
   } else {
     const img = document.createElement('img'); img.className = 'photo-thumb'; img.src = url; img.alt = a.label || 'Foto';
     img.onclick = () => openPhotoLightbox(url);
@@ -502,7 +543,6 @@ function attachmentRow(a) {
   }
   if (a.label) {
     const lb = document.createElement('span'); lb.className = 'rec-label';
-    lb.style.flex = '1';
     lb.textContent = a.label;
     row.appendChild(lb);
   }
@@ -511,6 +551,7 @@ function attachmentRow(a) {
     : mime.includes('png') ? 'png' : mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'bin';
   const stamp = new Date(a.ts).toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const prefix = (a.label || 'waldohr').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  row.appendChild(_spacer());
   const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.' + ext; dl.textContent = '⬇'; dl.title = 'Herunterladen';
   row.appendChild(dl);
   if (a.kind === 'photo') row.appendChild(makeShareBtn(url, a.key, a.label));
@@ -666,7 +707,8 @@ const recorder = {
     wireAudioRouting(a);
     const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = name; dl.textContent = '⬇'; dl.title = 'Herunterladen';
     row.appendChild(a);
-    if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; lb.style.flex = '1'; row.appendChild(lb); }
+    if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
+    row.appendChild(_spacer());
     row.appendChild(dl);
     let attId = null;
     try { attId = await addAttachment({ key: this.key, label: this.label, kind: 'audio', blob: saveBlob, mime }); }
@@ -717,6 +759,53 @@ const closeGallery = () => galleryModal && galleryModal.classList.remove('open')
 if (galleryBtn) galleryBtn.onclick = openGallery;
 if (galleryClose) galleryClose.onclick = closeGallery;
 if (galleryScrim) galleryScrim.onclick = closeGallery;
+
+// ---- Foto-Wetter Popup ----
+const photoWeatherBtn = document.getElementById('photoWeatherBtn');
+const photoWeatherModal = document.getElementById('photoWeatherModal');
+const photoWeatherScrim = document.getElementById('photoWeatherScrim');
+if (photoWeatherScrim) photoWeatherScrim.onclick = () => photoWeatherModal?.classList.remove('open');
+if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
+  photoWeatherModal?.classList.add('open');
+  const content = document.getElementById('photoWeatherContent');
+  if (!content) return;
+  content.innerHTML = '<div class="pw-loading">Lade Wetterdaten…</div>';
+  const lat = geo.pos?.lat, lng = geo.pos?.lng;
+  const [pw, sun] = await Promise.all([
+    fetchPhotoWeather(lat, lng),
+    lat != null ? getSunriseFull(lat, lng) : Promise.resolve(null)
+  ]);
+  const fmt = d => d instanceof Date ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '–';
+  let html = '';
+  if (sun) {
+    const sr = sun.sunrise;
+    const blueEnd = sr ? new Date(sr.getTime() - 20 * 60000) : null;
+    const goldenEnd = sr ? new Date(sr.getTime() + 45 * 60000) : null;
+    html += '<div class="pw-section">Licht-Zeiten</div>';
+    if (sun.civilBegin) html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Blaue Stunde</span><span class="pw-val">${fmt(sun.civilBegin)} – ${blueEnd ? fmt(blueEnd) : '–'}</span></div>`;
+    if (sr) html += `<div class="pw-row"><span class="pw-icon">🌅</span><span class="pw-lbl">Goldene Stunde</span><span class="pw-val">${fmt(sr)} – ${goldenEnd ? fmt(goldenEnd) : '–'}</span></div>`;
+  }
+  if (pw) {
+    const tip = pw.cloudcover < 20 && pw.windKmh < 10 ? 'Optimale Bedingungen für Langzeitbelichtung!'
+      : pw.cloudcover > 70 ? 'Weiches Diffuslicht durch Bewölkung — ideal für Porträtfotos.'
+      : pw.windKmh > 25 ? 'Starker Wind — kurze Belichtungszeit wählen.'
+      : 'Gute Bedingungen für Naturfotografie.';
+    html += '<div class="pw-section">Aktuell</div>';
+    html += `<div class="pw-row"><span class="pw-icon">${weatherEmoji(pw.wmo)}</span><span class="pw-lbl">${weatherLabel(pw.wmo)}</span><span class="pw-val">${pw.temp}°C</span></div>`;
+    html += `<div class="pw-row"><span class="pw-icon">💨</span><span class="pw-lbl">Wind</span><span class="pw-val">${pw.windKmh} km/h ${windDirLabel(pw.windDir)}</span></div>`;
+    html += `<div class="pw-row"><span class="pw-icon">💧</span><span class="pw-lbl">Luftfeuchte</span><span class="pw-val">${pw.humidity}%${pw.humidity > 85 ? ' ⚠' : ''}</span></div>`;
+    html += `<div class="pw-row"><span class="pw-icon">👁</span><span class="pw-lbl">Sichtweite</span><span class="pw-val">${pw.visKm} km</span></div>`;
+    html += `<div class="pw-row"><span class="pw-icon">☁️</span><span class="pw-lbl">Bewölkung</span><span class="pw-val">${pw.cloudcover}%</span></div>`;
+    html += `<div class="pw-row"><span class="pw-icon">☀️</span><span class="pw-lbl">UV-Index</span><span class="pw-val">${pw.uvIndex} – ${uvLabel(pw.uvIndex)}</span></div>`;
+    html += `<div class="pw-tip">💡 ${tip}</div>`;
+  }
+  const mp = moonPhase();
+  html += '<div class="pw-section">Astronomie</div>';
+  html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Mondphase</span><span class="pw-val">${moonPhaseLabel(mp)}</span></div>`;
+  if (!pw && !sun) html = '<div class="pw-loading">GPS benötigt – Standort erlauben, dann erneut öffnen.</div>';
+  content.innerHTML = html;
+};
+
 // Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen und
 // verknüpft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
 window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);
@@ -731,15 +820,16 @@ async function _saveCapture({ blob, mime, kind, label, key }) {
   const ext = mime.includes('mp4') ? 'mp4' : mime.includes('webm') ? 'webm' : 'jpg';
   const row = document.createElement('div'); row.className = 'rec-row';
   if (kind === 'video') {
-    const vid = document.createElement('video');
-    vid.src = url; vid.controls = true; vid.style.cssText = 'flex:1;max-width:100%;border-radius:8px;min-width:0';
-    row.appendChild(vid);
+    const thumb = _makeVideoThumb(url);
+    thumb.onclick = () => openVideoLightbox(url);
+    row.appendChild(thumb);
   } else {
     const img = document.createElement('img'); img.className = 'photo-thumb'; img.src = url; img.alt = label || 'Foto';
     img.onclick = () => openPhotoLightbox(url);
     row.appendChild(img);
   }
-  if (label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.style.flex = '1'; lb.textContent = label; row.appendChild(lb); }
+  if (label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = label; row.appendChild(lb); }
+  row.appendChild(_spacer());
   const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.' + ext; dl.textContent = '⬇'; dl.title = 'Herunterladen';
   row.appendChild(dl);
   if (kind === 'photo') row.appendChild(makeShareBtn(url, key, label));

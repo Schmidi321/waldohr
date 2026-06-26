@@ -47,6 +47,72 @@ export async function fetchWeather(lat, lng) {
   } catch { return null; }
 }
 
+// Erweitertes Foto-Wetter: Wind, Feuchte, UV, Sicht, Bewölkung.
+let _pwCache = null;
+export async function fetchPhotoWeather(lat, lng) {
+  if (lat == null || lng == null) return null;
+  const now = Date.now();
+  if (_pwCache && now - _pwCache.ts < TTL
+      && Math.abs(_pwCache.lat - lat) < 0.05 && Math.abs(_pwCache.lng - lng) < 0.05) {
+    return _pwCache.data;
+  }
+  try {
+    const url = 'https://api.open-meteo.com/v1/forecast'
+      + '?latitude=' + lat.toFixed(4) + '&longitude=' + lng.toFixed(4)
+      + '&current=temperature_2m,weathercode,wind_speed_10m,wind_direction_10m,'
+      + 'relative_humidity_2m,visibility,cloudcover,uv_index'
+      + '&timezone=auto';
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const c = j.current;
+    if (!c) return null;
+    const data = {
+      temp: Math.round(c.temperature_2m),
+      wmo: c.weathercode,
+      windKmh: Math.round(c.wind_speed_10m ?? 0),
+      windDir: Math.round(c.wind_direction_10m ?? 0),
+      humidity: Math.round(c.relative_humidity_2m ?? 0),
+      visKm: Math.round((c.visibility ?? 10000) / 1000),
+      cloudcover: Math.round(c.cloudcover ?? 0),
+      uvIndex: Math.round(c.uv_index ?? 0),
+    };
+    _pwCache = { lat, lng, ts: now, data };
+    return data;
+  } catch { return null; }
+}
+
+export function windDirLabel(deg) {
+  const dirs = ['N','NO','O','SO','S','SW','W','NW'];
+  return dirs[Math.round(deg / 45) % 8];
+}
+
+export function moonPhase() {
+  const ref = new Date(2000, 0, 6).getTime();
+  const cycle = 29.530588853;
+  const phase = ((Date.now() - ref) / 86400000 % cycle + cycle) % cycle;
+  return phase / cycle;
+}
+
+export function moonPhaseLabel(p) {
+  if (p < 0.03 || p > 0.97) return 'Neumond 🌑';
+  if (p < 0.22) return 'Zunehmende Sichel 🌒';
+  if (p < 0.28) return 'Erstes Viertel 🌓';
+  if (p < 0.47) return 'Zunehmend 🌔';
+  if (p < 0.53) return 'Vollmond 🌕';
+  if (p < 0.72) return 'Abnehmend 🌖';
+  if (p < 0.78) return 'Letztes Viertel 🌗';
+  return 'Abnehmende Sichel 🌘';
+}
+
+export function uvLabel(idx) {
+  if (idx <= 2) return 'niedrig';
+  if (idx <= 5) return 'moderat';
+  if (idx <= 7) return 'hoch';
+  if (idx <= 10) return 'sehr hoch';
+  return 'extrem';
+}
+
 // Stündliche Prognose für morgen früh (6–9 Uhr): Wolken, Regen, Temperatur, Sicht, Nebel.
 export async function fetchTomorrowMorning(lat, lng) {
   if (lat == null || lng == null) return null;
