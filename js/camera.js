@@ -41,7 +41,7 @@ function _applyZoom(v) {
 }
 
 function _stopZoomAnim() {
-  if (_zoomAnimTimer) { clearInterval(_zoomAnimTimer); _zoomAnimTimer = null; }
+  if (_zoomAnimTimer) { cancelAnimationFrame(_zoomAnimTimer); _zoomAnimTimer = null; }
 }
 
 function _startZoomAnim() {
@@ -52,13 +52,17 @@ function _startZoomAnim() {
   const dur = _zoomSpeed === 'fast' ? 7000 : 28000;
   const from = _zoomDir === 'in' ? minZ : maxZ;
   const to   = _zoomDir === 'in' ? maxZ : minZ;
+  if (from === to) return;
   _applyZoom(from);
-  const t0 = Date.now();
-  _zoomAnimTimer = setInterval(() => {
-    const p = Math.min(1, (Date.now() - t0) / dur);
-    _applyZoom(from + (to - from) * p);
-    if (p >= 1) _stopZoomAnim();
-  }, 150);
+  const t0 = performance.now();
+  const tick = now => {
+    const p = Math.min(1, (now - t0) / dur);
+    // Logarithmische Interpolation → wahrgenommene Zoom-Geschwindigkeit konstant
+    _applyZoom(from * Math.pow(to / from, p));
+    if (p < 1) { _zoomAnimTimer = requestAnimationFrame(tick); }
+    else { _zoomAnimTimer = null; _stopZoomAnim(); }
+  };
+  _zoomAnimTimer = requestAnimationFrame(tick);
 }
 
 // ---- Dual-Kamera Stream starten ----

@@ -198,10 +198,17 @@ function onAlarm(type) {
     return;
   }
   const isMC = type === 'morgenchor';
-  showInfoToast(isMC ? '🌅 Morgenchor-Alarm' : '🦉 Nacht-Modus', isMC ? 'Sonnenaufgang naht — Lauschen gestartet!' : 'Geplante Zeit — Lauschen gestartet!', isMC ? '🌅' : '🦉');
+  const icon = isMC ? '🌅' : '🦉';
+  const title = isMC ? '🌅 Morgenchor-Alarm' : '🦉 Nacht-Modus';
+  showInfoToast(title, isMC ? 'Sonnenaufgang naht — Lauschen gestartet!' : 'Geplante Zeit — Lauschen gestartet!', icon);
   if (!audio.running) {
     tryFullscreen();
-    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); }).catch(e => console.warn('alarm mic', e));
+    audio.start()
+      .then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); })
+      .catch(e => {
+        console.warn('alarm mic', e);
+        showInfoToast(title, 'Mikrofon-Freigabe nötig — tippe zum Starten.', icon, () => toggleDetection(), 'Lauschen starten');
+      });
   }
 }
 
@@ -263,7 +270,7 @@ async function maybeAutoRecord(det, samples, sampleRate) {
   const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
   wireAudioRouting(a);
   const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
-  const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + gpsTag + '.wav'; dl.textContent = '⬇'; dl.title = 'Herunterladen';
+  const dl = makeDownloadBtn(url, prefix + '_' + stamp + gpsTag + '.wav', det.species);
   let attId = null;
   try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime: 'audio/wav' }); }
   catch (e) { console.warn('addAttachment', e); }
@@ -272,6 +279,64 @@ async function maybeAutoRecord(det, samples, sampleRate) {
   const list = document.getElementById('recList'); if (list) list.prepend(row);
   registerRecording(det.key, url);
   if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
+}
+
+// ---- Herunterladen-Sheet: styled bottom-sheet statt nativer Browser-Dialog ----
+function openDownloadSheet(url, filename, label) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:150;display:flex;flex-direction:column;justify-content:flex-end';
+  const scrim = document.createElement('div');
+  scrim.style.cssText = 'position:absolute;inset:0;background:rgba(2,8,6,.62);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)';
+  const sheet = document.createElement('div');
+  sheet.style.cssText = 'position:relative;z-index:1;width:100%;max-width:480px;margin:0 auto;background:linear-gradient(160deg,#0a2518,#061a0f);border-radius:24px 24px 0 0;border-top:1px solid var(--stroke);padding:0 20px calc(24px + env(safe-area-inset-bottom))';
+  const ext = (filename.split('.').pop() || '').toUpperCase();
+  const ico = /^(JPG|JPEG|PNG|HEIC)$/.test(ext) ? '🖼' : /^(WAV|M4A|MP3|OGG|WEBM)$/.test(ext) ? '🎵' : /^(MP4|MOV)$/.test(ext) ? '🎬' : '📄';
+  sheet.innerHTML = `
+    <div style="width:36px;height:4px;border-radius:4px;background:var(--stroke-strong);margin:12px auto 16px"></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding:12px;background:var(--glass);border:1px solid var(--stroke);border-radius:16px">
+      <div style="font-size:26px;width:40px;text-align:center;flex-shrink:0">${ico}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${filename}</div>
+        ${label ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${label}</div>` : ''}
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <a id="_dsDown" href="${url}" download="${filename}" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:14px;background:#a3e635;color:#04130d;border-radius:16px;font-weight:700;font-size:15px;text-decoration:none;font-family:inherit">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="17" height="17"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Herunterladen
+      </a>
+      <button id="_dsShare" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:14px;background:var(--glass-strong);color:var(--ink);border:1px solid var(--stroke);border-radius:16px;font-weight:600;font-size:15px;cursor:pointer;font-family:inherit;width:100%">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        Teilen
+      </button>
+      <button id="_dsCancel" style="padding:12px;background:transparent;color:var(--muted);border:none;font-size:14px;cursor:pointer;font-family:inherit;width:100%">Abbrechen</button>
+    </div>`;
+  const dismiss = () => ov.remove();
+  scrim.onclick = dismiss;
+  ov.append(scrim, sheet);
+  document.body.appendChild(ov);
+  sheet.querySelector('#_dsCancel').onclick = dismiss;
+  sheet.querySelector('#_dsDown').onclick = () => setTimeout(dismiss, 350);
+  const shareBtn = sheet.querySelector('#_dsShare');
+  if (navigator.share) {
+    shareBtn.onclick = async () => {
+      try {
+        const blob = await fetch(url).then(r => r.blob());
+        await navigator.share({ files: [new File([blob], filename, { type: blob.type })], title: label || 'WaldOhr' });
+        dismiss();
+      } catch (e) { if (e?.name !== 'AbortError') console.warn('share', e); }
+    };
+  } else {
+    shareBtn.style.display = 'none';
+  }
+}
+
+function makeDownloadBtn(url, filename, label) {
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'rec-dl'; btn.title = 'Herunterladen';
+  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  btn.onclick = ev => { ev.stopPropagation(); openDownloadSheet(url, filename, label); };
+  return btn;
 }
 
 // Löschen-Button für eine Aufnahme/Foto-Zeile: entfernt die Zeile, gibt die Object-URL frei,
@@ -552,7 +617,7 @@ function attachmentRow(a) {
   const stamp = new Date(a.ts).toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const prefix = (a.label || 'waldohr').toLowerCase().replace(/[^a-z0-9]+/g, '_');
   row.appendChild(_spacer());
-  const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.' + ext; dl.textContent = '⬇'; dl.title = 'Herunterladen';
+  const dl = makeDownloadBtn(url, prefix + '_' + stamp + '.' + ext, a.label);
   row.appendChild(dl);
   if (a.kind === 'photo') row.appendChild(makeShareBtn(url, a.key, a.label));
   row.appendChild(makeDeleteBtn(row, url, a.key, a.id));
@@ -705,7 +770,7 @@ const recorder = {
     const row = document.createElement('div'); row.className = 'rec-row';
     const a = document.createElement('audio'); a.controls = true; a.src = url; a.preload = 'metadata';
     wireAudioRouting(a);
-    const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = name; dl.textContent = '⬇'; dl.title = 'Herunterladen';
+    const dl = makeDownloadBtn(url, name, this.label);
     row.appendChild(a);
     if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
     row.appendChild(_spacer());
@@ -830,7 +895,7 @@ async function _saveCapture({ blob, mime, kind, label, key }) {
   }
   if (label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = label; row.appendChild(lb); }
   row.appendChild(_spacer());
-  const dl = document.createElement('a'); dl.className = 'rec-dl'; dl.href = url; dl.download = prefix + '_' + stamp + '.' + ext; dl.textContent = '⬇'; dl.title = 'Herunterladen';
+  const dl = makeDownloadBtn(url, prefix + '_' + stamp + '.' + ext, label);
   row.appendChild(dl);
   if (kind === 'photo') row.appendChild(makeShareBtn(url, key, label));
   let attId = null;
