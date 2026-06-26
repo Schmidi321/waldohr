@@ -19,13 +19,16 @@ async function _enumerateDevices() {
     if (camSel && allCams.length) {
       // Nur Rückkameras (kein Frontkamera/Selfie)
       const back = allCams.filter(d => !d.label.toLowerCase().match(/front|facetime|user|selfie/));
-      // Weitwinkel = Hauptkamera ohne "ultra" oder "tele", Tele = Teleobjektiv
+      const ultraWide = back.find(d => d.label.toLowerCase().match(/ultra/));
       const wide = back.find(d => !d.label.toLowerCase().match(/ultra|telephoto|tele|[23]\.?[0-9]?x\b/)) || back[0];
       const tele = back.find(d => d.label.toLowerCase().match(/telephoto|tele|[23]\.?[0-9]?x\b/) && d !== wide);
-      const chosen = [wide, tele].filter(Boolean);
-      if (!chosen.length) chosen.push(...allCams.slice(0, 2));
-      const labels = ['📷 Weitwinkel', '🔭 Tele'];
-      camSel.innerHTML = chosen.map((d, i) => `<option value="${d.deviceId}">${labels[i]}</option>`).join('');
+      const chosen = [ultraWide, wide, tele].filter(Boolean);
+      if (!chosen.length) chosen.push(...allCams.slice(0, 3));
+      camSel.innerHTML = chosen.map(d => {
+        const lbl = d.label.toLowerCase();
+        const name = lbl.match(/ultra/) ? '🔭 Ultra-Weit' : lbl.match(/telephoto|tele|[23]\.?[0-9]?x\b/) ? '🔭 Tele' : '📷 Weitwinkel';
+        return `<option value="${d.deviceId}">${name}</option>`;
+      }).join('');
       camSel.style.display = chosen.length > 1 ? '' : 'none';
     }
     const micSel = document.getElementById('camMicSelect');

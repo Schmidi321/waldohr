@@ -201,6 +201,25 @@ async function _showPkResults(el, startTs) {
       } catch {}
     };
   }
+  _showPkEndPopup(list.length);
+}
+
+function _showPkEndPopup(count) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
+  ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:28px 28px 22px;text-align:center;max-width:270px;width:88%">
+    <div style="font-size:44px;margin-bottom:6px">🎯</div>
+    <div style="font-size:26px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;margin-bottom:4px">${count} ${count === 1 ? 'Art' : 'Arten'}</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:18px">in 5 Minuten erkannt</div>
+    <button id="_pkPopupBtn" style="width:100%;padding:13px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:15px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Zu Protokollen →</button>
+  </div>`;
+  document.body.appendChild(ov);
+  const go = () => {
+    ov.remove();
+    document.querySelector('#orniToggle button[data-tab="protokolle"]')?.click();
+  };
+  ov.querySelector('#_pkPopupBtn').onclick = go;
+  setTimeout(go, 6000);
 }
 
 function _renderProtokolle() {

@@ -278,7 +278,7 @@ async function _saveAutoRecRow(det, blob, mime) {
   try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime }); }
   catch (e) { console.warn('addAttachment', e); }
   const del = makeDeleteBtn(row, url, det.key, attId);
-  row.append(_makeAudioIcon(), lb, _spacer(), dl, del, a);
+  row.append(_makeAudioIcon(), lb, _spacer(), dl, _makeScissorsBtn(row), del, a);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
   registerRecording(det.key, url);
   if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
@@ -398,6 +398,45 @@ function makeDeleteBtn(row, url, key, attId) {
     if (attId != null) deleteAttachment(attId).catch(e => console.warn('deleteAttachment', e));
   };
   return del;
+}
+
+function _makeScissorsBtn(row) {
+  const btn = document.createElement('button');
+  btn.className = 'rec-dl'; btn.title = 'Zuschneiden';
+  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 6 9M20 20 6 15"/></svg>';
+  btn.onclick = () => _toggleTrimPanel(row);
+  return btn;
+}
+
+async function _toggleTrimPanel(row) {
+  const existing = row.querySelector('.rec-trim-panel');
+  if (existing) { existing.remove(); return; }
+  const audio = row.querySelector('audio');
+  if (!audio?.src) return;
+  const panel = document.createElement('div'); panel.className = 'rec-trim-panel';
+  panel.innerHTML = '<span class="tr-lbl">Lade…</span>';
+  row.appendChild(panel);
+  let decoded;
+  try {
+    const ab = await fetch(audio.src).then(r => r.arrayBuffer());
+    const tmp = new (window.AudioContext || window.webkitAudioContext)();
+    decoded = await new Promise((res, rej) => tmp.decodeAudioData(ab, res, rej));
+    tmp.close().catch(() => {});
+  } catch { panel.innerHTML = '<span class="tr-lbl" style="color:var(--rose)">Fehler</span>'; return; }
+  const dur = decoded.duration.toFixed(1);
+  panel.innerHTML = `<span class="tr-lbl">Von</span><input type="number" class="tr-inp tr-s" min="0" max="${dur}" step="0.1" value="0"><span class="tr-lbl">bis</span><input type="number" class="tr-inp tr-e" min="0" max="${dur}" step="0.1" value="${dur}"><span class="tr-lbl">Sek</span><button class="tr-go">✂ Zuschneiden</button>`;
+  panel.querySelector('.tr-go').onclick = async () => {
+    const start = Math.max(0, parseFloat(panel.querySelector('.tr-s').value) || 0);
+    const end = Math.min(decoded.duration, parseFloat(panel.querySelector('.tr-e').value) || decoded.duration);
+    if (start >= end) return;
+    const sr = decoded.sampleRate;
+    const trimmed = decoded.getChannelData(0).slice(Math.floor(start * sr), Math.floor(end * sr));
+    const wav = encodeWav(trimmed, sr);
+    const newUrl = URL.createObjectURL(wav);
+    if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
+    audio.src = newUrl; audio.load();
+    panel.remove();
+  };
 }
 
 // ---- Video-Lightbox ----
@@ -819,6 +858,7 @@ const recorder = {
     if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
     row.appendChild(_spacer());
     row.appendChild(dl);
+    row.appendChild(_makeScissorsBtn(row));
     let attId = null;
     try { attId = await addAttachment({ key: this.key, label: this.label, kind: 'audio', blob: saveBlob, mime }); }
     catch (e) { console.warn('addAttachment', e); }
