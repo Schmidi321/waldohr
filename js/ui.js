@@ -265,7 +265,7 @@ function initSensitivitySliders() {
   };
   const durPresets = $('autoRecDurPresets');
   if (durPresets) {
-    const curDur = (() => { try { const v = parseInt(localStorage.getItem('waldohr.autoRecDur'), 10); return [3, 5, 10].includes(v) ? v : 3; } catch { return 3; } })();
+    const curDur = (() => { try { const v = parseInt(localStorage.getItem('waldohr.autoRecDur'), 10); return [3, 5, 10, 60].includes(v) ? v : 3; } catch { return 3; } })();
     durPresets.querySelectorAll('.du-preset').forEach(btn => {
       btn.classList.toggle('on', parseInt(btn.dataset.dur, 10) === curDur);
       btn.onclick = () => {

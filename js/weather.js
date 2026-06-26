@@ -150,6 +150,66 @@ export function uvLabel(idx) {
   return 'extrem';
 }
 
+// Mondaufgang/-untergang für heute via Open-Meteo daily.
+let _moonTimesCache = null;
+export async function fetchMoonTimes(lat, lng) {
+  if (lat == null || lng == null) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  if (_moonTimesCache?.dateStr === today
+      && Math.abs(_moonTimesCache.lat - lat) < 0.05 && Math.abs(_moonTimesCache.lng - lng) < 0.05)
+    return _moonTimesCache.data;
+  try {
+    const url = 'https://api.open-meteo.com/v1/forecast'
+      + '?latitude=' + lat.toFixed(4) + '&longitude=' + lng.toFixed(4)
+      + '&daily=moonrise,moonset&timezone=auto&forecast_days=1';
+    const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const mr = j.daily?.moonrise?.[0];
+    const ms = j.daily?.moonset?.[0];
+    const data = { moonrise: mr ? new Date(mr) : null, moonset: ms ? new Date(ms) : null };
+    _moonTimesCache = { dateStr: today, lat, lng, data };
+    return data;
+  } catch { return null; }
+}
+
+// Stündliche Slots für die aktuelle + nächste Stunden (Jetzt-Vorschau).
+let _todayCache = null;
+export async function fetchTodayHours(lat, lng) {
+  if (lat == null || lng == null) return null;
+  const now = Date.now();
+  if (_todayCache && now - _todayCache.ts < TTL
+      && Math.abs(_todayCache.lat - lat) < 0.05 && Math.abs(_todayCache.lng - lng) < 0.05)
+    return _todayCache.slots;
+  try {
+    const url = 'https://api.open-meteo.com/v1/forecast'
+      + '?latitude=' + lat.toFixed(4) + '&longitude=' + lng.toFixed(4)
+      + '&hourly=temperature_2m,precipitation_probability,cloudcover,weathercode,visibility'
+      + '&timezone=auto&forecast_days=1';
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const times = j.hourly.time;
+    const today = new Date().toISOString().slice(0, 10);
+    const nowH = new Date().getHours();
+    const slots = [nowH, nowH + 1, nowH + 2].filter(h => h < 24).map(h => {
+      const t = today + 'T' + String(h).padStart(2, '0') + ':00';
+      const i = times.indexOf(t);
+      if (i < 0) return null;
+      return {
+        hour: h,
+        temp: Math.round(j.hourly.temperature_2m[i]),
+        precipProb: Math.round(j.hourly.precipitation_probability[i] ?? 0),
+        cloudcover: Math.round(j.hourly.cloudcover[i] ?? 0),
+        wmo: j.hourly.weathercode[i] ?? 0,
+        visKm: Math.round((j.hourly.visibility[i] ?? 10000) / 1000),
+      };
+    }).filter(Boolean);
+    _todayCache = { lat, lng, ts: now, slots };
+    return slots;
+  } catch { return null; }
+}
+
 // Stündliche Prognose für morgen früh (6–9 Uhr): Wolken, Regen, Temperatur, Sicht, Nebel.
 export async function fetchTomorrowMorning(lat, lng) {
   if (lat == null || lng == null) return null;

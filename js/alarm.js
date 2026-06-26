@@ -49,9 +49,12 @@ export async function getSunriseFull(lat, lng) {
     const res = j.results;
     const full = {
       sunrise: new Date(res.sunrise),
-      civilBegin: new Date(res.civil_twilight_begin),       // Blaue Stunde
+      civilBegin: new Date(res.civil_twilight_begin),
       nauticalBegin: new Date(res.nautical_twilight_begin),
       astronomicalBegin: new Date(res.astronomical_twilight_begin),
+      sunset: new Date(res.sunset),
+      civilEnd: new Date(res.civil_twilight_end),
+      nauticalEnd: new Date(res.nautical_twilight_end),
     };
     _sunriseCache = { dateStr, sunrise: full.sunrise, full };
     return full;

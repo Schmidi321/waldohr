@@ -3,7 +3,7 @@ import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal } from './ui.js';
-import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
+import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, fetchMoonTimes, fetchTodayHours, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
 import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
 import { openCamera } from './camera.js';
@@ -679,6 +679,7 @@ function attachmentRow(a) {
   if (a.kind === 'audio') {
     const el = document.createElement('audio'); el.controls = true; el.src = url; el.preload = 'metadata';
     wireAudioRouting(el);
+    row.appendChild(_makeAudioIcon());
     row.appendChild(el);
   } else if (a.kind === 'video') {
     const thumb = _makeVideoThumb(url);
@@ -703,6 +704,7 @@ function attachmentRow(a) {
   const dl = makeDownloadBtn(url, prefix + '_' + stamp + '.' + ext, a.label);
   row.appendChild(dl);
   if (a.kind === 'photo') row.appendChild(makeShareBtn(url, a.key, a.label));
+  if (a.kind === 'audio') row.appendChild(_makeScissorsBtn(row));
   row.appendChild(makeDeleteBtn(row, url, a.key, a.id));
   return row;
 }
@@ -929,9 +931,11 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
     reverseGeocode(lat, lng).then(name => { if (name && locEl) locEl.textContent = '📍 ' + name; });
   }
 
-  const [pw, sun] = await Promise.all([
+  const [pw, sun, moonTimes, todaySlots] = await Promise.all([
     fetchPhotoWeather(lat, lng),
-    lat != null ? getSunriseFull(lat, lng) : Promise.resolve(null)
+    lat != null ? getSunriseFull(lat, lng) : Promise.resolve(null),
+    lat != null ? fetchMoonTimes(lat, lng) : Promise.resolve(null),
+    lat != null ? fetchTodayHours(lat, lng) : Promise.resolve(null),
   ]);
   const fmt = d => d instanceof Date ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '–';
   const fmtDate = d => d instanceof Date ? d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) : '–';
@@ -944,6 +948,12 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
     if (sun.civilBegin) html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Blaue Stunde</span><span class="pw-val">${fmt(sun.civilBegin)} – ${blueEnd ? fmt(blueEnd) : '–'}</span></div>`;
     if (sr) html += `<div class="pw-row"><span class="pw-icon">🌄</span><span class="pw-lbl">Sonnenaufgang</span><span class="pw-val">${fmt(sr)}</span></div>`;
     if (sr) html += `<div class="pw-row"><span class="pw-icon">🌅</span><span class="pw-lbl">Goldene Stunde</span><span class="pw-val">${fmt(sr)} – ${goldenEnd ? fmt(goldenEnd) : '–'}</span></div>`;
+    if (sun.sunset) {
+      const goldenBegin = new Date(sun.sunset.getTime() - 45 * 60000);
+      html += `<div class="pw-row"><span class="pw-icon">🌇</span><span class="pw-lbl">Goldene Stunde ↓</span><span class="pw-val">${fmt(goldenBegin)} – ${fmt(sun.sunset)}</span></div>`;
+      html += `<div class="pw-row"><span class="pw-icon">🌆</span><span class="pw-lbl">Sonnenuntergang</span><span class="pw-val">${fmt(sun.sunset)}</span></div>`;
+      if (sun.civilEnd) html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Blaue Stunde ↓</span><span class="pw-val">${fmt(sun.sunset)} – ${fmt(sun.civilEnd)}</span></div>`;
+    }
   }
   if (pw) {
     const fogRisk = pw.visKm < 1 ? 'Nebel' : pw.visKm < 5 && pw.humidity > 85 ? 'Dunst' : pw.humidity > 92 ? 'Nebelgefahr' : null;
@@ -960,11 +970,20 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
     html += `<div class="pw-row"><span class="pw-icon">☁️</span><span class="pw-lbl">Bewölkung</span><span class="pw-val">${pw.cloudcover}%</span></div>`;
     html += `<div class="pw-row"><span class="pw-icon">☀️</span><span class="pw-lbl">UV-Index</span><span class="pw-val">${pw.uvIndex} – ${uvLabel(pw.uvIndex)}</span></div>`;
     html += `<div class="pw-tip">💡 ${tip}</div>`;
+    if (todaySlots?.length) {
+      html += '<div class="tmw-slots" style="margin-top:8px">'
+        + todaySlots.map(s => {
+            const fog = s.visKm < 2 ? ' 🌫️' : s.visKm < 5 ? ' 🌁' : '';
+            return `<div class="tmw-slot"><div class="tmw-h">${s.hour}:00</div><div class="tmw-ico">${weatherEmoji(s.wmo)}${fog}</div><div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}°</div><div class="tmw-cc">${s.cloudcover}%☁️</div><div class="tmw-rain">${s.precipProb > 0 ? '💧' + s.precipProb + '%' : ''}</div></div>`;
+          }).join('') + '</div>';
+    }
   }
   // Mond-Kalender
   const mc = moonCalendar();
   html += '<div class="pw-section">Mond</div>';
   html += `<div class="pw-row"><span class="pw-icon">${moonPhaseLabel(mc.phase).split(' ')[1] || '🌙'}</span><span class="pw-lbl">Phase</span><span class="pw-val">${moonPhaseLabel(mc.phase).replace(/\s[\S]+$/, '')} · ${mc.ageInDays} Tage</span></div>`;
+  if (moonTimes?.moonrise) html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Mondaufgang</span><span class="pw-val">${fmt(moonTimes.moonrise)}</span></div>`;
+  if (moonTimes?.moonset) html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Monduntergang</span><span class="pw-val">${fmt(moonTimes.moonset)}</span></div>`;
   html += `<div class="pw-row"><span class="pw-icon">🌕</span><span class="pw-lbl">Nächster Vollmond</span><span class="pw-val">${fmtDate(mc.nextFull)} (in ${mc.daysToFull} d)</span></div>`;
   html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Nächster Neumond</span><span class="pw-val">${fmtDate(mc.nextNew)} (in ${mc.daysToNew} d)</span></div>`;
 

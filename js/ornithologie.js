@@ -98,6 +98,13 @@ function _initDU() {
     b.classList.add('on');
     save();
   }));
+  const startBtn = $('duStartBtn');
+  if (startBtn) startBtn.addEventListener('click', async () => {
+    if (window.__waldohr) {
+      await window.__waldohr.startDetection();
+      window.__waldohr.switchTab('v-listen');
+    }
+  });
 }
 
 // ---- Punkt-Zählung (5-min BirdLife-Standard) ----
