@@ -220,21 +220,22 @@ function _initPunktZaehlung() {
     if (window.__waldohr) window.__waldohr.switchTab('v-orni');
   }
 
-  startBtn.onclick = async () => {
+  startBtn.onclick = () => {
     if (_pkInterval) { _endPk(); return; }
 
     _pkStartTs = Date.now();
     _pkWasDetecting = window.__waldohr ? window.__waldohr.isDetecting() : false;
 
-    if (window.__waldohr) {
-      try { await window.__waldohr.startDetection(); } catch (e) { console.warn('pk start', e); }
-      window.__waldohr.switchTab('v-listen');
-    }
     _showStartPopup('Punkt-Zählung');
     startBtn.textContent = 'Stoppen';
     startBtn.classList.add('primary');
     if (speciesEl) { speciesEl.hidden = true; speciesEl.innerHTML = ''; }
     if (banner) { banner.hidden = false; if (bannerTimer) bannerTimer.textContent = '5:00'; }
+
+    if (window.__waldohr) {
+      window.__waldohr.startDetection().catch(e => console.warn('pk start', e));
+      window.__waldohr.switchTab('v-listen');
+    }
 
     let remaining = PK_SECS;
     _pkInterval = setInterval(async () => {

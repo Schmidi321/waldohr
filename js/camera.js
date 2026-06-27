@@ -51,7 +51,6 @@ function _applyZoom(v) {
     if (vid) vid.style.transform = `scale(${Math.max(1, v / (_zoomMin || 1))})`;
   }
   const sl = document.getElementById('camZoom'); if (sl) sl.value = v;
-  const zv = document.getElementById('camZoomVal'); if (zv) zv.textContent = v.toFixed(1) + '×';
 }
 
 function _stopZoomAnim() {
@@ -69,15 +68,23 @@ function _playShutter() {
   if (localStorage.getItem('waldohr.shutterSound') !== 'on') return;
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const rate = ctx.sampleRate;
+    const dur = 0.14;
+    const buf = ctx.createBuffer(1, Math.floor(dur * rate), rate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) {
+      const t = i / rate;
+      const env = Math.exp(-t * 55);
+      ch[i] = (Math.random() * 2 - 1) * env * 0.35;
+      ch[i] += Math.sin(2 * Math.PI * 160 * t) * Math.exp(-t * 90) * 0.65;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.25, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.07);
-    gain.connect(ctx.destination);
-    const osc = ctx.createOscillator();
-    osc.type = 'square'; osc.frequency.setValueAtTime(1400, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(280, ctx.currentTime + 0.06);
-    osc.connect(gain); osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.07);
-    osc.onended = () => { try { ctx.close(); } catch {} };
+    gain.gain.setValueAtTime(1.0, ctx.currentTime);
+    src.connect(gain); gain.connect(ctx.destination);
+    src.start(ctx.currentTime);
+    src.onended = () => { try { ctx.close(); } catch {} };
   } catch {}
 }
 
@@ -166,7 +173,6 @@ function _startZoomAnim() {
     // CSS scale für flüssige Animation ohne physischen Linsenwechsel-Sprung
     if (vid) vid.style.transform = `scale(${Math.max(1, v / (minZ || 1))})`;
     const sl = document.getElementById('camZoom'); if (sl) sl.value = v;
-    const zv = document.getElementById('camZoomVal'); if (zv) zv.textContent = v.toFixed(1) + '×';
     if (p < 1) { _zoomAnimTimer = requestAnimationFrame(tick); }
     else { _zoomAnimTimer = null; }
   };
@@ -266,8 +272,6 @@ async function _startStream(camId, micId) {
   if (_vid0) _vid0.style.transform = '';
   const _zsl0 = document.getElementById('camZoom');
   if (_zsl0) _zsl0.value = parseFloat(_zsl0.min) || 1;
-  const _zvl0 = document.getElementById('camZoomVal');
-  if (_zvl0) _zvl0.textContent = '1.0×';
   if (_stream)  { _stream.getTracks().forEach(t => t.stop());  _stream = null; }
   if (_stream2) { _stream2.getTracks().forEach(t => t.stop()); _stream2 = null; }
   const pip = document.getElementById('camVideo2');
@@ -303,7 +307,6 @@ async function _startStream(camId, micId) {
           zoomSlider.min = _zoomMin; zoomSlider.max = _zoomMax;
           zoomSlider.step = (_zoomMax - _zoomMin) / 50; zoomSlider.value = _zoomMin;
         }
-        const zv = document.getElementById('camZoomVal'); if (zv) zv.textContent = _zoomMin.toFixed(1) + '×';
       }
     } catch {}
   }

@@ -126,7 +126,11 @@ function wireSplash() {
   const hide = () => splash.classList.add('hide');
   if (btn) {
     setTimeout(() => btn.classList.add('show'), 2000);
-    btn.addEventListener('click', hide, { once: true });
+    btn.addEventListener('click', () => {
+      navigator.geolocation.getCurrentPosition(() => {}, () => {});
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(s => s.getTracks().forEach(t => t.stop())).catch(() => {});
+      hide();
+    }, { once: true });
   } else {
     setTimeout(hide, 3000);
   }
@@ -850,8 +854,8 @@ async function openShareMixer(photoUrl, key, label) {
 
 function makeReelBtn(url, mime) {
   const btn = document.createElement('button');
-  btn.type = 'button'; btn.title = 'Reel erstellen'; btn.className = 'rec-dl'; btn.style.color = 'var(--amber)';
-  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><rect x="2" y="2" width="20" height="20" rx="4"/><path d="M7 2v20M17 2v20M2 12h20M2 7h5M17 7h5M2 17h5M17 17h5"/></svg>';
+  btn.type = 'button'; btn.title = 'Teilen / Reel'; btn.className = 'rec-dl'; btn.style.color = 'var(--muted)';
+  btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
   btn.onclick = ev => { ev.stopPropagation(); _openVideoReelModal(url, mime); };
   return btn;
 }
@@ -1146,10 +1150,11 @@ if (orbBtn) orbBtn.addEventListener('click', async ev => {
 const recBtn = document.getElementById('recBtn');
 if (recBtn && !window.MediaRecorder) recBtn.style.display = 'none';
 
-let _recPopupEl = null, _recPopupTimer = null, _recLevelRaf = null;
+let _recPopupEl = null, _recPopupTimer = null, _recLevelRaf = null, _recPopupT0 = 0;
 function _showRecPopup(state) {
   // state: 'preparing' | 'recording'
   if (!_recPopupEl) {
+    _recPopupT0 = Date.now();
     _recPopupEl = document.createElement('div');
     _recPopupEl.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;pointer-events:none';
     _recPopupEl.innerHTML = `<div style="background:linear-gradient(160deg,#200808,#100404);border:1px solid rgba(239,68,68,.35);border-radius:24px;padding:28px 32px 22px;text-align:center;min-width:200px;box-shadow:0 12px 40px rgba(0,0,0,.6)">
@@ -1158,40 +1163,35 @@ function _showRecPopup(state) {
       </div>
       <div id="_recPopupTime" style="font-size:30px;font-weight:700;color:#ef4444;font-family:'Outfit',sans-serif;letter-spacing:2px">0:00</div>
       <div id="_recPopupStatus" style="font-size:12px;color:rgba(239,68,68,.6);margin-top:6px;letter-spacing:.5px">Vorbereitung…</div>
-      <canvas id="_recLevelCv" width="140" height="20" style="display:block;margin:10px auto 0;border-radius:6px;background:rgba(239,68,68,.08)"></canvas>
+      <div style="width:140px;height:6px;background:rgba(239,68,68,.12);border-radius:4px;margin:12px auto 0;overflow:hidden"><div id="_recLevelFill" style="height:100%;width:0%;border-radius:4px;background:linear-gradient(90deg,#22c55e,#a3e635);transition:width 80ms linear"></div></div>
     </div>`;
     document.body.appendChild(_recPopupEl);
-  }
-  if (state === 'recording') {
-    const s = document.getElementById('_recPopupStatus');
-    if (s) s.textContent = 'Aufnahme läuft';
     if (!_recPopupTimer) _recPopupTimer = setInterval(() => {
       const el = document.getElementById('_recPopupTime');
-      if (el) el.textContent = recorder.fmt();
+      if (!el) return;
+      const s = Math.floor((Date.now() - _recPopupT0) / 1000);
+      el.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
     }, 500);
     if (!_recLevelRaf) {
       const drawLevel = () => {
-        const cv = document.getElementById('_recLevelCv');
-        if (!cv) { _recLevelRaf = null; return; }
-        const ctx = cv.getContext('2d');
-        const W = cv.width, H = cv.height;
-        ctx.clearRect(0, 0, W, H);
+        const fill = document.getElementById('_recLevelFill');
+        if (!fill) { _recLevelRaf = null; return; }
         if (audio.analyser) {
           const data = new Uint8Array(audio.analyser.frequencyBinCount);
           audio.analyser.getByteFrequencyData(data);
-          const bars = 16, bw = (W - bars + 1) / bars;
-          for (let i = 0; i < bars; i++) {
-            const v = data[Math.floor(i / bars * data.length)] / 255;
-            const bh = Math.max(2, v * H);
-            ctx.fillStyle = `hsl(${Math.round(120 - v * 120)},80%,55%)`;
-            ctx.fillRect(i * (bw + 1), H - bh, Math.max(1, bw), bh);
-          }
+          let sum = 0; for (let i = 0; i < data.length; i++) sum += data[i];
+          const lvl = Math.min(1, (sum / data.length / 255) * 3.5);
+          fill.style.width = Math.round(lvl * 100) + '%';
         }
         if (_recPopupEl) _recLevelRaf = requestAnimationFrame(drawLevel);
         else _recLevelRaf = null;
       };
       _recLevelRaf = requestAnimationFrame(drawLevel);
     }
+  }
+  if (state === 'recording') {
+    const s = document.getElementById('_recPopupStatus');
+    if (s) s.textContent = 'Aufnahme läuft';
   }
 }
 function _hideRecPopup() {
@@ -1597,7 +1597,7 @@ function startSpectrogram() {
 
     if (levelFill) {
       const last = cols[cols.length - 1];
-      const lvl = body.classList.contains('listening') ? Math.min(1, Math.max(0, ...last)) : 0;
+      const lvl = body.classList.contains('listening') ? Math.min(1, Math.max(0, ...last) * 1.5) : 0;
       levelFill.style.width = Math.round(lvl * 100) + '%';
     }
 
