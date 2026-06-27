@@ -866,24 +866,34 @@ function _openVideoReelModal(url, mime) {
   const sheet = document.createElement('div');
   sheet.style.cssText = 'position:relative;width:100%;max-width:480px;background:linear-gradient(160deg,#0a1a12,#060f0a);border-radius:24px 24px 0 0;border-top:1px solid var(--stroke);padding:14px 16px calc(22px + env(safe-area-inset-bottom));max-height:92vh;overflow-y:auto;scrollbar-width:none';
   const fmtT = s => Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+  const playIco = '<svg viewBox="0 0 24 24" fill="#04130d" width="22" height="22"><path d="M8 5v14l11-7z"/></svg>';
+  const pauseIco = '<svg viewBox="0 0 24 24" fill="#04130d" width="22" height="22"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
   sheet.innerHTML = `
     <div style="width:36px;height:4px;border-radius:4px;background:var(--stroke-strong);margin:0 auto 12px"></div>
     <h3 style="font-size:16px;font-weight:700;margin:0 0 10px;text-align:center;color:var(--ink)">🎬 Reel erstellen</h3>
-    <video id="_rvVid" src="${url}" style="width:100%;border-radius:12px;max-height:200px;object-fit:contain;background:#000;display:block;margin-bottom:8px"></video>
+    <div style="position:relative;margin-bottom:8px">
+      <video id="_rvVid" src="${url}" playsinline style="width:100%;border-radius:12px;max-height:200px;object-fit:contain;background:#000;display:block"></video>
+      <button id="_rvPlay" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:54px;height:54px;border-radius:50%;background:rgba(163,230,53,.92);border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.45)">${playIco}</button>
+    </div>
     <div id="_rvDurInfo" style="text-align:center;font-size:11px;color:var(--muted);margin-bottom:8px">Lade Video…</div>
     <div id="_rvTrimWrap" style="position:relative;height:36px;background:rgba(163,230,53,.08);border-radius:10px;border:1px solid rgba(163,230,53,.2);margin-bottom:8px;touch-action:none">
       <div id="_rvKept" style="position:absolute;top:0;bottom:0;left:0;width:100%;background:rgba(163,230,53,.18);border-radius:10px"></div>
-      <div id="_rvPos" style="position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,.7);display:none"></div>
+      <div id="_rvPos" style="position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,.85);display:none;z-index:3"></div>
       <div id="_rvHs" style="position:absolute;top:-3px;bottom:-3px;width:14px;left:0;margin-left:-7px;background:var(--lime);border-radius:5px;cursor:ew-resize;z-index:2;touch-action:none"></div>
       <div id="_rvHe" style="position:absolute;top:-3px;bottom:-3px;width:14px;right:0;margin-right:-7px;background:var(--lime);border-radius:5px;cursor:ew-resize;z-index:2;touch-action:none"></div>
     </div>
-    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:10px;font-variant-numeric:tabular-nums">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:12px;font-variant-numeric:tabular-nums">
       <span id="_rvSLbl">0:00</span><span id="_rvELbl">0:00</span>
     </div>
-    <label class="switch-row" style="margin-bottom:12px">
-      <span>Originalton stummschalten</span>
-      <span class="switch"><input type="checkbox" id="_rvMute"><span class="switch-track"></span></span>
-    </label>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span style="font-size:13px;color:var(--ink);white-space:nowrap">🔊 Originalton</span>
+      <input type="range" id="_rvVol" min="0" max="100" value="100" style="flex:1;accent-color:var(--lime)">
+      <span id="_rvVolLbl" style="font-size:12px;color:var(--muted);width:38px;text-align:right;font-variant-numeric:tabular-nums">100%</span>
+    </div>
+    <div style="font-size:13px;color:var(--ink);margin-bottom:6px">🎵 Tonaufnahme hinzufügen</div>
+    <div id="_rvAudioList" style="max-height:150px;overflow-y:auto;margin-bottom:12px;scrollbar-width:none;display:flex;flex-direction:column;gap:6px">
+      <div style="color:var(--faint);font-size:12px;padding:8px 0">Lade Aufnahmen…</div>
+    </div>
     <button id="_rvExport" style="width:100%;padding:14px;border-radius:16px;background:var(--lime);color:#04130d;font-weight:700;font-size:15px;cursor:pointer;border:none;font-family:inherit;margin-bottom:6px">🎬 Reel exportieren</button>
     <div id="_rvProgress" style="display:none;margin-bottom:8px">
       <div class="mixer-prog-track"><div id="_rvProgFill" class="mixer-prog-fill" style="width:0%"></div></div>
@@ -893,6 +903,7 @@ function _openVideoReelModal(url, mime) {
   ov.appendChild(sheet);
   document.body.appendChild(ov);
   const vid = document.getElementById('_rvVid');
+  const playBtn = document.getElementById('_rvPlay');
   const durInfo = document.getElementById('_rvDurInfo');
   const trimWrap = document.getElementById('_rvTrimWrap');
   const kept = document.getElementById('_rvKept');
@@ -901,12 +912,24 @@ function _openVideoReelModal(url, mime) {
   const he = document.getElementById('_rvHe');
   const sLbl = document.getElementById('_rvSLbl');
   const eLbl = document.getElementById('_rvELbl');
+  const volSlider = document.getElementById('_rvVol');
+  const volLbl = document.getElementById('_rvVolLbl');
+  const audioListEl = document.getElementById('_rvAudioList');
   const exportBtn = document.getElementById('_rvExport');
   const closeBtn = document.getElementById('_rvClose');
   const progress = document.getElementById('_rvProgress');
   const progFill = document.getElementById('_rvProgFill');
   const progLabel = document.getElementById('_rvProgLabel');
   let duration = 0, startFrac = 0, endFrac = 1, _vidRaf = null;
+  let origVol = 1, selAudioBlob = null, selAudioBuffer = null;
+
+  vid.volume = origVol;
+  volSlider.addEventListener('input', () => {
+    origVol = volSlider.value / 100;
+    vid.volume = origVol;
+    volLbl.textContent = volSlider.value + '%';
+  });
+
   function updateTrim() {
     hs.style.left = (startFrac * 100) + '%';
     he.style.right = ((1 - endFrac) * 100) + '%';
@@ -918,13 +941,21 @@ function _openVideoReelModal(url, mime) {
   vid.addEventListener('loadedmetadata', () => {
     duration = vid.duration; durInfo.textContent = 'Dauer: ' + fmtT(duration); eLbl.textContent = fmtT(duration);
   }, { once: true });
-  vid.addEventListener('click', () => {
-    if (vid.paused) { vid.currentTime = startFrac * duration; vid.play().catch(() => {}); _vidRaf = requestAnimationFrame(tickVid); }
-    else vid.pause();
-  });
+
+  function setPlayIcon(playing) { playBtn.innerHTML = playing ? pauseIco : playIco; playBtn.style.opacity = playing ? '0' : '1'; }
+  function togglePlay() {
+    if (vid.paused) {
+      if (vid.currentTime < startFrac * duration || vid.currentTime >= endFrac * duration) vid.currentTime = startFrac * duration;
+      vid.play().catch(() => {});
+      setPlayIcon(true);
+      if (!_vidRaf) _vidRaf = requestAnimationFrame(tickVid);
+    } else { vid.pause(); setPlayIcon(false); }
+  }
+  playBtn.addEventListener('click', togglePlay);
+  vid.addEventListener('click', togglePlay);
   function tickVid() {
-    if (vid.paused) { posLine.style.display = 'none'; _vidRaf = null; return; }
-    if (vid.currentTime >= endFrac * duration) { vid.pause(); vid.currentTime = startFrac * duration; posLine.style.display = 'none'; _vidRaf = null; return; }
+    if (vid.paused) { posLine.style.display = 'none'; _vidRaf = null; setPlayIcon(false); return; }
+    if (vid.currentTime >= endFrac * duration) { vid.pause(); vid.currentTime = startFrac * duration; posLine.style.display = 'none'; _vidRaf = null; setPlayIcon(false); return; }
     const rel = (vid.currentTime / duration - startFrac) / (endFrac - startFrac);
     posLine.style.left = (rel * 100) + '%'; posLine.style.display = 'block';
     _vidRaf = requestAnimationFrame(tickVid);
@@ -932,9 +963,11 @@ function _openVideoReelModal(url, mime) {
   function makeDrag(handle, isStart) {
     handle.addEventListener('pointerdown', e => {
       e.preventDefault(); handle.setPointerCapture(e.pointerId);
+      if (!vid.paused) { vid.pause(); setPlayIcon(false); }
       const mv = e2 => {
         const rect = trimWrap.getBoundingClientRect();
         const f = Math.max(0, Math.min(1, (e2.clientX - rect.left) / rect.width));
+        // Live-Vorschau: Videobild folgt dem gezogenen Griff direkt
         if (isStart) { startFrac = Math.min(f, endFrac - 0.02); vid.currentTime = startFrac * duration; }
         else { endFrac = Math.max(f, startFrac + 0.02); vid.currentTime = endFrac * duration; }
         updateTrim();
@@ -944,23 +977,93 @@ function _openVideoReelModal(url, mime) {
     });
   }
   makeDrag(hs, true); makeDrag(he, false);
-  document.getElementById('_rvMute')?.addEventListener('change', e => { vid.muted = e.target.checked; });
+
+  // Tonaufnahmen zum Mitschneiden laden (gleiche Auswahl wie bei Fotos)
+  (async () => {
+    try {
+      const all = await allAttachments();
+      const audios = all.filter(a => a.kind === 'audio');
+      audioListEl.innerHTML = '';
+      const noneRow = document.createElement('div');
+      noneRow.className = 'mixer-audio-row on';
+      noneRow.innerHTML = '<span class="mr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 3l18 18M9 9v3a3 3 0 0 0 4.5 2.6M12 4v2M15 6v.5"/></svg></span><span class="mr-label">Kein zusätzlicher Ton</span>';
+      noneRow.onclick = () => {
+        audioListEl.querySelectorAll('.mixer-audio-row').forEach(r => r.classList.remove('on'));
+        noneRow.classList.add('on'); selAudioBlob = null; selAudioBuffer = null;
+      };
+      audioListEl.appendChild(noneRow);
+      if (!audios.length) {
+        const hint = document.createElement('div');
+        hint.style.cssText = 'color:var(--faint);font-size:12px;padding:6px 0';
+        hint.textContent = 'Keine Tonaufnahmen vorhanden — zuerst über REC aufnehmen.';
+        audioListEl.appendChild(hint);
+      }
+      for (const att of audios) {
+        const row = document.createElement('div');
+        row.className = 'mixer-audio-row';
+        const lbl = att.label || 'Aufnahme';
+        const when = att.ts ? new Date(att.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '';
+        row.innerHTML = `<span class="mr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v4M8 23h8"/></svg></span><span class="mr-label"></span><span class="mr-dur"></span>`;
+        row.querySelector('.mr-label').textContent = lbl;
+        row.querySelector('.mr-dur').textContent = when;
+        row.onclick = () => {
+          audioListEl.querySelectorAll('.mixer-audio-row').forEach(r => r.classList.remove('on'));
+          row.classList.add('on'); selAudioBlob = att.blob; selAudioBuffer = null;
+        };
+        audioListEl.appendChild(row);
+      }
+    } catch (e) {
+      console.warn('reel audio load', e);
+      audioListEl.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:6px 0">Fehler beim Laden der Aufnahmen.</div>';
+    }
+  })();
+
   exportBtn.onclick = async () => {
-    const muted = document.getElementById('_rvMute')?.checked;
-    vid.pause(); exportBtn.disabled = true; progress.style.display = 'block';
+    vid.pause(); setPlayIcon(false);
+    exportBtn.disabled = true; progress.style.display = 'block';
     const startTime = startFrac * duration, endTime = endFrac * duration, trimDur = endTime - startTime;
+    let audioCtx = null;
     try {
       const srcVid = document.createElement('video');
-      srcVid.src = url; srcVid.muted = !!muted; srcVid.preload = 'auto';
+      srcVid.src = url; srcVid.preload = 'auto'; srcVid.playsInline = true;
+      // Stummschalten am Element vermeiden — die Lautstärke regeln wir über den WebAudio-Gain,
+      // damit Originalton (geregelt) und ausgewählter Clip zusammen exportiert werden können.
       await new Promise((res, rej) => { srcVid.addEventListener('canplaythrough', res, { once: true }); srcVid.addEventListener('error', rej, { once: true }); srcVid.load(); });
       srcVid.currentTime = startTime;
       await new Promise(res => srcVid.addEventListener('seeked', res, { once: true }));
-      const stream = srcVid.captureStream();
+
+      // Ausgewählten Clip dekodieren (falls noch nicht geschehen)
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') { try { await audioCtx.resume(); } catch {} }
+      if (selAudioBlob && !selAudioBuffer) {
+        try { selAudioBuffer = await audioCtx.decodeAudioData(await selAudioBlob.arrayBuffer()); } catch (err) { console.warn('clip decode', err); }
+      }
+
+      const dest = audioCtx.createMediaStreamDestination();
+      // Originalton des Videos über Gain regeln
+      let elSrc = null;
+      try {
+        elSrc = audioCtx.createMediaElementSource(srcVid);
+        const origGain = audioCtx.createGain(); origGain.gain.value = origVol;
+        elSrc.connect(origGain); origGain.connect(dest);
+      } catch (err) { console.warn('orig audio route', err); }
+      // Ausgewählten Clip dazumischen (in Schleife über die Trim-Dauer)
+      let clipSrc = null;
+      if (selAudioBuffer) {
+        clipSrc = audioCtx.createBufferSource();
+        clipSrc.buffer = selAudioBuffer; clipSrc.loop = true;
+        clipSrc.connect(dest);
+      }
+
+      const videoTrack = srcVid.captureStream().getVideoTracks()[0];
+      const audioTracks = dest.stream.getAudioTracks();
+      const combined = new MediaStream(videoTrack ? [videoTrack, ...audioTracks] : audioTracks);
+
       let exportMime = '';
       for (const t of ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']) {
         if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { exportMime = t; break; }
       }
-      const mr = exportMime ? new MediaRecorder(stream, { mimeType: exportMime }) : new MediaRecorder(stream);
+      const mr = exportMime ? new MediaRecorder(combined, { mimeType: exportMime }) : new MediaRecorder(combined);
       const chunks = [];
       mr.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
       const t0 = Date.now();
@@ -972,8 +1075,10 @@ function _openVideoReelModal(url, mime) {
       await new Promise((res, rej) => {
         mr.onstop = () => { clearInterval(progInterval); res(); };
         mr.onerror = e => { clearInterval(progInterval); rej(e); };
-        mr.start(); srcVid.play().catch(() => {});
-        setTimeout(() => { try { mr.stop(); srcVid.pause(); } catch {} }, trimDur * 1000 + 500);
+        mr.start();
+        srcVid.play().catch(() => {});
+        if (clipSrc) { try { clipSrc.start(0); } catch {} }
+        setTimeout(() => { try { mr.stop(); srcVid.pause(); } catch {} try { if (clipSrc) clipSrc.stop(); } catch {} }, trimDur * 1000 + 500);
       });
       if (progFill) progFill.style.width = '100%';
       if (progLabel) progLabel.textContent = 'Fertig!';
@@ -988,9 +1093,11 @@ function _openVideoReelModal(url, mime) {
         const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 8000);
       }
+      try { audioCtx.close(); } catch {}
       ov.remove();
     } catch (e) {
       console.warn('reel export', e);
+      try { if (audioCtx) audioCtx.close(); } catch {}
       if (progLabel) progLabel.textContent = 'Fehler: ' + (e?.message || 'Export fehlgeschlagen');
       exportBtn.disabled = false;
     }
@@ -1211,6 +1318,9 @@ const recorder = {
     if (!audio.running) {
       tryFullscreen();
       _showRecPopup('preparing');
+      // Zwei Frames abwarten, damit das Popup garantiert gezeichnet ist, BEVOR getUserMedia
+      // den Hauptthread blockiert — sonst erscheint das Fenster erst nach der Mikro-Initialisierung.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       try { await audio.start(); geo.start(); }
       catch (e) { console.warn('mic', e); statusTxt.textContent = 'Mikro nicht erlaubt'; _hideRecPopup(); return; }
     }
@@ -1419,6 +1529,8 @@ window.__waldohr = {
     setUI('mic');
     if (recBtn) recBtn.classList.add('rec-on');
     if (!audio.running) {
+      // Erst die UI (Timer/Banner) zeichnen lassen, dann das blockierende getUserMedia starten.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       try { await audio.start(); geo.start(); }
       catch (e) { detectionActive = false; setUI('off'); if (recBtn) recBtn.classList.remove('rec-on'); throw e; }
     }
