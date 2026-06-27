@@ -119,10 +119,14 @@ const geo = {
   stop() { if (this.watchId != null) { navigator.geolocation.clearWatch(this.watchId); this.watchId = null; } setLoc('off', 'Standort aus'); }
 };
 
+// Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
+const APP_VERSION = 'v61';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
   if (!splash) return;
+  const ver = document.getElementById('splashVer');
+  if (ver) ver.textContent = APP_VERSION;
   const hide = () => splash.classList.add('hide');
   if (btn) {
     setTimeout(() => btn.classList.add('show'), 2000);

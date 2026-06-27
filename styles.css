@@ -52,6 +52,7 @@ h1,h2,h3,.brand,.big{font-family:'Outfit',sans-serif}
 .splash-continue.show{opacity:1;pointer-events:auto;transform:none}
 .splash-continue:active{transform:scale(.95)}
 .splash-by{position:absolute;bottom:calc(28px + env(safe-area-inset-bottom));font-size:12px;color:var(--faint);letter-spacing:.5px}
+.splash-ver{position:absolute;bottom:calc(50px + env(safe-area-inset-bottom));font-size:11px;color:var(--faint);opacity:.6;letter-spacing:.5px;font-variant-numeric:tabular-nums}
 
 .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:19px;letter-spacing:.2px}
