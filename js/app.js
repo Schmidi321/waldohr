@@ -120,7 +120,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v62';
+const APP_VERSION = 'v63';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1345,11 +1345,12 @@ const recorder = {
   async toggle(label, key) {
     if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
     if (!audio.running) {
-      // Popup ZUERST anzeigen (sofortiges Feedback), dann Fullscreen, dann zwei Frames warten,
-      // damit das Fenster garantiert gezeichnet ist, BEVOR getUserMedia den Hauptthread blockiert.
+      // Popup ZUERST anzeigen, dem Browser per setTimeout sicher einen Render-Tick geben und ERST
+      // DANN die (auf manchen Handys >10 s langsame) Mikrofon-Initialisierung starten. setTimeout
+      // statt requestAnimationFrame, weil rAF auf manchen Geräten (Fullscreen-/Render-Pausen)
+      // sekundenlang aussetzen kann — dann erschiene das Popup gar nicht.
       _showRecPopup('preparing');
-      tryFullscreen();
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await new Promise(r => setTimeout(r, 60));
       try { await audio.start(); geo.start(); }
       catch (e) { console.warn('mic', e); statusTxt.textContent = 'Mikro nicht erlaubt'; _hideRecPopup(); return; }
     }
@@ -1559,7 +1560,8 @@ window.__waldohr = {
     if (recBtn) recBtn.classList.add('rec-on');
     if (!audio.running) {
       // Erst die UI (Timer/Banner) zeichnen lassen, dann das blockierende getUserMedia starten.
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      // setTimeout statt rAF (rAF kann auf manchen Handys sekundenlang aussetzen).
+      await new Promise(r => setTimeout(r, 60));
       try { await audio.start(); geo.start(); }
       catch (e) { detectionActive = false; setUI('off'); if (recBtn) recBtn.classList.remove('rec-on'); throw e; }
     }
