@@ -153,12 +153,8 @@ function _initDU() {
 
   function _startDU() {
     if (_duInterval) return;
-    if (window.__waldohr) {
-      window.__waldohr.startDetection().catch(e => console.warn('du start', e));
-      window.__waldohr.switchTab('v-listen');
-      const trig = _getTrigger();
-      if (trig.enabled) setTimeout(() => window.__waldohr.startTriggerRec?.(trig.level), 1200);
-    }
+    // ZUERST sofort sichtbares Feedback (Timer/Banner/Countdown), DANN erst die langsame
+    // Mikrofon-Initialisierung — sonst wirkt der Klick sekundenlang wie ohne Reaktion.
     _showStartPopup('Dauerüberwachung');
     const preset = presetsEl.querySelector('.du-preset.on');
     let remaining = parseInt(preset?.dataset.min ?? '30') * 60;
@@ -176,6 +172,12 @@ function _initDU() {
       if (bannerTimer) bannerTimer.textContent = ts;
       if (remaining <= 0) _endDU();
     }, 1000);
+    if (window.__waldohr) {
+      window.__waldohr.startDetection().catch(e => console.warn('du start', e));
+      window.__waldohr.switchTab('v-listen');
+      const trig = _getTrigger();
+      if (trig.enabled) setTimeout(() => window.__waldohr.startTriggerRec?.(trig.level), 1200);
+    }
   }
 
   enabled.addEventListener('change', e => {

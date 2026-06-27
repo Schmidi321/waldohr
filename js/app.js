@@ -1021,43 +1021,54 @@ function _openVideoReelModal(url, mime) {
   exportBtn.onclick = async () => {
     vid.pause(); setPlayIcon(false);
     exportBtn.disabled = true; progress.style.display = 'block';
-    const startTime = startFrac * duration, endTime = endFrac * duration, trimDur = endTime - startTime;
-    let audioCtx = null;
+    if (progFill) progFill.style.width = '0%';
+    if (progLabel) progLabel.textContent = 'Wird vorbereitet…';
+    const startTime = startFrac * duration, endTime = endFrac * duration, trimDur = Math.max(0.1, endTime - startTime);
+    let audioCtx = null, srcVid = null;
     try {
-      const srcVid = document.createElement('video');
-      srcVid.src = url; srcVid.preload = 'auto'; srcVid.playsInline = true;
-      // Stummschalten am Element vermeiden — die Lautstärke regeln wir über den WebAudio-Gain,
-      // damit Originalton (geregelt) und ausgewählter Clip zusammen exportiert werden können.
-      await new Promise((res, rej) => { srcVid.addEventListener('canplaythrough', res, { once: true }); srcVid.addEventListener('error', rej, { once: true }); srcVid.load(); });
+      // Quell-Video STUMM -> play() ist ohne erneute Nutzergeste immer erlaubt (sonst blockt die
+      // Autoplay-Policy und es würden keine Frames aufgenommen). Der Ton kommt komplett aus WebAudio.
+      srcVid = document.createElement('video');
+      srcVid.src = url; srcVid.preload = 'auto'; srcVid.playsInline = true; srcVid.muted = true;
+      srcVid.style.cssText = 'position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+      document.body.appendChild(srcVid);
+      // loadeddata (statt canplaythrough) feuert zuverlässig auch bei Offscreen-Blob-Videos; Timeout als Notnagel.
+      await new Promise((res, rej) => {
+        srcVid.addEventListener('loadeddata', res, { once: true });
+        srcVid.addEventListener('error', () => rej(new Error('Video konnte nicht geladen werden')), { once: true });
+        setTimeout(res, 4000);
+        srcVid.load();
+      });
       srcVid.currentTime = startTime;
-      await new Promise(res => srcVid.addEventListener('seeked', res, { once: true }));
+      await new Promise(res => { srcVid.addEventListener('seeked', res, { once: true }); setTimeout(res, 1500); });
 
-      // Ausgewählten Clip dekodieren (falls noch nicht geschehen)
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') { try { await audioCtx.resume(); } catch {} }
-      if (selAudioBlob && !selAudioBuffer) {
-        try { selAudioBuffer = await audioCtx.decodeAudioData(await selAudioBlob.arrayBuffer()); } catch (err) { console.warn('clip decode', err); }
-      }
-
       const dest = audioCtx.createMediaStreamDestination();
-      // Originalton des Videos über Gain regeln
-      let elSrc = null;
-      try {
-        elSrc = audioCtx.createMediaElementSource(srcVid);
-        const origGain = audioCtx.createGain(); origGain.gain.value = origVol;
-        elSrc.connect(origGain); origGain.connect(dest);
-      } catch (err) { console.warn('orig audio route', err); }
-      // Ausgewählten Clip dazumischen (in Schleife über die Trim-Dauer)
+
+      // Originalton aus dem Video-Blob dekodieren und lautstärkegeregelt beimischen
+      let origSrc = null;
+      if (origVol > 0) {
+        try {
+          const vBlob = await fetch(url).then(r => r.blob());
+          const origBuf = await audioCtx.decodeAudioData(await vBlob.arrayBuffer());
+          origSrc = audioCtx.createBufferSource(); origSrc.buffer = origBuf;
+          const g = audioCtx.createGain(); g.gain.value = origVol;
+          origSrc.connect(g); g.connect(dest);
+        } catch (err) { console.warn('orig audio decode', err); }
+      }
+      // Ausgewählten Clip dekodieren und (in Schleife) dazumischen
       let clipSrc = null;
-      if (selAudioBuffer) {
-        clipSrc = audioCtx.createBufferSource();
-        clipSrc.buffer = selAudioBuffer; clipSrc.loop = true;
-        clipSrc.connect(dest);
+      if (selAudioBlob) {
+        try {
+          if (!selAudioBuffer) selAudioBuffer = await audioCtx.decodeAudioData(await selAudioBlob.arrayBuffer());
+          clipSrc = audioCtx.createBufferSource(); clipSrc.buffer = selAudioBuffer; clipSrc.loop = true;
+          clipSrc.connect(dest);
+        } catch (err) { console.warn('clip decode', err); }
       }
 
       const videoTrack = srcVid.captureStream().getVideoTracks()[0];
-      const audioTracks = dest.stream.getAudioTracks();
-      const combined = new MediaStream(videoTrack ? [videoTrack, ...audioTracks] : audioTracks);
+      const combined = new MediaStream(videoTrack ? [videoTrack, ...dest.stream.getAudioTracks()] : dest.stream.getAudioTracks());
 
       let exportMime = '';
       for (const t of ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']) {
@@ -1077,12 +1088,19 @@ function _openVideoReelModal(url, mime) {
         mr.onerror = e => { clearInterval(progInterval); rej(e); };
         mr.start();
         srcVid.play().catch(() => {});
-        if (clipSrc) { try { clipSrc.start(0); } catch {} }
-        setTimeout(() => { try { mr.stop(); srcVid.pause(); } catch {} try { if (clipSrc) clipSrc.stop(); } catch {} }, trimDur * 1000 + 500);
+        try { if (origSrc) origSrc.start(0, startTime); } catch {}
+        try { if (clipSrc) clipSrc.start(0); } catch {}
+        setTimeout(() => {
+          try { mr.stop(); } catch {}
+          try { srcVid.pause(); } catch {}
+          try { if (origSrc) origSrc.stop(); } catch {}
+          try { if (clipSrc) clipSrc.stop(); } catch {}
+        }, trimDur * 1000 + 300);
       });
       if (progFill) progFill.style.width = '100%';
       if (progLabel) progLabel.textContent = 'Fertig!';
       const blob = new Blob(chunks, { type: exportMime || 'video/webm' });
+      if (!blob.size) throw new Error('Aufnahme leer');
       const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
       const ext = (exportMime || '').includes('mp4') ? 'mp4' : 'webm';
       const fname = 'waldohr-reel-' + stamp + '.' + ext;
@@ -1094,10 +1112,12 @@ function _openVideoReelModal(url, mime) {
         setTimeout(() => URL.revokeObjectURL(a.href), 8000);
       }
       try { audioCtx.close(); } catch {}
+      if (srcVid) srcVid.remove();
       ov.remove();
     } catch (e) {
       console.warn('reel export', e);
       try { if (audioCtx) audioCtx.close(); } catch {}
+      if (srcVid) { try { srcVid.remove(); } catch {} }
       if (progLabel) progLabel.textContent = 'Fehler: ' + (e?.message || 'Export fehlgeschlagen');
       exportBtn.disabled = false;
     }
@@ -1316,10 +1336,10 @@ const recorder = {
   async toggle(label, key) {
     if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
     if (!audio.running) {
-      tryFullscreen();
+      // Popup ZUERST anzeigen (sofortiges Feedback), dann Fullscreen, dann zwei Frames warten,
+      // damit das Fenster garantiert gezeichnet ist, BEVOR getUserMedia den Hauptthread blockiert.
       _showRecPopup('preparing');
-      // Zwei Frames abwarten, damit das Popup garantiert gezeichnet ist, BEVOR getUserMedia
-      // den Hauptthread blockiert — sonst erscheint das Fenster erst nach der Mikro-Initialisierung.
+      tryFullscreen();
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       try { await audio.start(); geo.start(); }
       catch (e) { console.warn('mic', e); statusTxt.textContent = 'Mikro nicht erlaubt'; _hideRecPopup(); return; }
