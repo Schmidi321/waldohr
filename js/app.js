@@ -120,7 +120,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v61';
+const APP_VERSION = 'v62';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -946,22 +946,31 @@ function _openVideoReelModal(url, mime) {
     duration = vid.duration; durInfo.textContent = 'Dauer: ' + fmtT(duration); eLbl.textContent = fmtT(duration);
   }, { once: true });
 
+  function curDur() { return duration || vid.duration || 0; }
   function setPlayIcon(playing) { playBtn.innerHTML = playing ? pauseIco : playIco; playBtn.style.opacity = playing ? '0' : '1'; }
   function togglePlay() {
+    const dur = curDur();
     if (vid.paused) {
-      if (vid.currentTime < startFrac * duration || vid.currentTime >= endFrac * duration) vid.currentTime = startFrac * duration;
+      if (vid.currentTime < startFrac * dur || vid.currentTime >= endFrac * dur - 0.02) vid.currentTime = startFrac * dur;
       vid.play().catch(() => {});
       setPlayIcon(true);
       if (!_vidRaf) _vidRaf = requestAnimationFrame(tickVid);
     } else { vid.pause(); setPlayIcon(false); }
   }
+  // Sicherheitsnetz: stoppt zuverlässig am Trim-Ende, auch wenn der rAF gedrosselt wird
+  vid.addEventListener('timeupdate', () => {
+    const dur = curDur(); if (!dur || vid.paused) return;
+    if (vid.currentTime >= endFrac * dur - 0.01) { vid.pause(); vid.currentTime = startFrac * dur; setPlayIcon(false); }
+    else if (vid.currentTime < startFrac * dur - 0.05) { vid.currentTime = startFrac * dur; }
+  });
   playBtn.addEventListener('click', togglePlay);
   vid.addEventListener('click', togglePlay);
   function tickVid() {
+    const dur = curDur();
     if (vid.paused) { posLine.style.display = 'none'; _vidRaf = null; setPlayIcon(false); return; }
-    if (vid.currentTime >= endFrac * duration) { vid.pause(); vid.currentTime = startFrac * duration; posLine.style.display = 'none'; _vidRaf = null; setPlayIcon(false); return; }
-    const rel = (vid.currentTime / duration - startFrac) / (endFrac - startFrac);
-    posLine.style.left = (rel * 100) + '%'; posLine.style.display = 'block';
+    if (dur && vid.currentTime >= endFrac * dur - 0.01) { vid.pause(); vid.currentTime = startFrac * dur; posLine.style.display = 'none'; _vidRaf = null; setPlayIcon(false); return; }
+    const rel = dur ? (vid.currentTime / dur - startFrac) / Math.max(0.0001, (endFrac - startFrac)) : 0;
+    posLine.style.left = Math.max(0, Math.min(100, rel * 100)) + '%'; posLine.style.display = 'block';
     _vidRaf = requestAnimationFrame(tickVid);
   }
   function makeDrag(handle, isStart) {
@@ -1027,13 +1036,15 @@ function _openVideoReelModal(url, mime) {
     exportBtn.disabled = true; progress.style.display = 'block';
     if (progFill) progFill.style.width = '0%';
     if (progLabel) progLabel.textContent = 'Wird vorbereitet…';
-    const startTime = startFrac * duration, endTime = endFrac * duration, trimDur = Math.max(0.1, endTime - startTime);
+    const dur0 = duration || vid.duration || 0;
+    const startTime = startFrac * dur0, endTime = endFrac * dur0, trimDur = Math.max(0.1, endTime - startTime);
     let audioCtx = null, srcVid = null;
     try {
-      // Quell-Video STUMM -> play() ist ohne erneute Nutzergeste immer erlaubt (sonst blockt die
-      // Autoplay-Policy und es würden keine Frames aufgenommen). Der Ton kommt komplett aus WebAudio.
+      // Quell-Video NICHT stummschalten: captureStream() liefert dann Video + Originalton in einem
+      // Stream (bewährter Weg). Lautstärke/Clip werden über WebAudio auf den erfassten Tonspur-Track
+      // gelegt — decodeAudioData scheitert an Video-Containern, createMediaStreamSource nicht.
       srcVid = document.createElement('video');
-      srcVid.src = url; srcVid.preload = 'auto'; srcVid.playsInline = true; srcVid.muted = true;
+      srcVid.src = url; srcVid.preload = 'auto'; srcVid.playsInline = true; srcVid.muted = false;
       srcVid.style.cssText = 'position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
       document.body.appendChild(srcVid);
       // loadeddata (statt canplaythrough) feuert zuverlässig auch bei Offscreen-Blob-Videos; Timeout als Notnagel.
@@ -1046,22 +1057,19 @@ function _openVideoReelModal(url, mime) {
       srcVid.currentTime = startTime;
       await new Promise(res => { srcVid.addEventListener('seeked', res, { once: true }); setTimeout(res, 1500); });
 
+      const videoTrack = srcVid.captureStream().getVideoTracks()[0];
+
+      // Ton komplett über WebAudio: Originalton via MediaElementSource (lautstärkegeregelt) +
+      // optionaler Clip. decodeAudioData scheitert an Video-Containern und die Tonspur ist im
+      // Element-captureStream nicht enthalten — MediaElementSource ist der zuverlässige Weg.
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') { try { await audioCtx.resume(); } catch {} }
       const dest = audioCtx.createMediaStreamDestination();
-
-      // Originalton aus dem Video-Blob dekodieren und lautstärkegeregelt beimischen
-      let origSrc = null;
-      if (origVol > 0) {
-        try {
-          const vBlob = await fetch(url).then(r => r.blob());
-          const origBuf = await audioCtx.decodeAudioData(await vBlob.arrayBuffer());
-          origSrc = audioCtx.createBufferSource(); origSrc.buffer = origBuf;
-          const g = audioCtx.createGain(); g.gain.value = origVol;
-          origSrc.connect(g); g.connect(dest);
-        } catch (err) { console.warn('orig audio decode', err); }
-      }
-      // Ausgewählten Clip dekodieren und (in Schleife) dazumischen
+      try {
+        const elSrc = audioCtx.createMediaElementSource(srcVid);
+        const g = audioCtx.createGain(); g.gain.value = origVol;
+        elSrc.connect(g); g.connect(dest);
+      } catch (err) { console.warn('orig audio route', err); }
       let clipSrc = null;
       if (selAudioBlob) {
         try {
@@ -1071,7 +1079,6 @@ function _openVideoReelModal(url, mime) {
         } catch (err) { console.warn('clip decode', err); }
       }
 
-      const videoTrack = srcVid.captureStream().getVideoTracks()[0];
       const combined = new MediaStream(videoTrack ? [videoTrack, ...dest.stream.getAudioTracks()] : dest.stream.getAudioTracks());
 
       let exportMime = '';
@@ -1092,12 +1099,10 @@ function _openVideoReelModal(url, mime) {
         mr.onerror = e => { clearInterval(progInterval); rej(e); };
         mr.start();
         srcVid.play().catch(() => {});
-        try { if (origSrc) origSrc.start(0, startTime); } catch {}
         try { if (clipSrc) clipSrc.start(0); } catch {}
         setTimeout(() => {
           try { mr.stop(); } catch {}
           try { srcVid.pause(); } catch {}
-          try { if (origSrc) origSrc.stop(); } catch {}
           try { if (clipSrc) clipSrc.stop(); } catch {}
         }, trimDur * 1000 + 300);
       });
