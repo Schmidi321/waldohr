@@ -12,6 +12,8 @@ import { exportBackup, importBackup } from './backup.js';
 import { renderQR, scanQR, createOfferer, createAnswerer, waitForOpen, monitorQuality } from './pairing.js';
 import * as locate from './locate.js';
 import * as chat from './chat.js';
+import * as session from './session.js';
+import * as filetransfer from './filetransfer.js';
 
 // ---- In-App Lightbox für Fotos ----
 function openPhotoLightbox(url) {
@@ -124,7 +126,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v85';
+const APP_VERSION = 'v86';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1194,6 +1196,29 @@ function makeShareBtn(url, key, label) {
   return btn;
 }
 
+// Sende-Button für Foto-/Video-Zeilen: schickt die Datei direkt ans gekoppelte Partner-Handy,
+// komplett ohne Internet, über den bestehenden WebRTC-Datenkanal (js/filetransfer.js).
+function makeSendToPartnerBtn(blob, kind, label) {
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.title = 'Ans Partner-Handy senden'; btn.className = 'rec-dl'; btn.style.color = 'var(--muted)';
+  const idleIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><rect x="6" y="2" width="12" height="20" rx="2"/><line x1="10" y1="18" x2="14" y2="18"/></svg>';
+  btn.innerHTML = idleIcon;
+  btn.onclick = async ev => {
+    ev.stopPropagation();
+    if (!filetransfer.isActive()) { showInfoToast('📲 Nicht gekoppelt', 'Erst ein Partner-Handy koppeln, dann senden.', '📲'); return; }
+    btn.disabled = true; btn.textContent = '⏳';
+    try {
+      await filetransfer.sendFile(blob, kind, label || '');
+      showInfoToast('📲 Gesendet', (kind === 'video' ? 'Video' : 'Foto') + ' ans Partner-Handy geschickt.', '✅');
+    } catch (e) {
+      showInfoToast('📲 Fehler', e?.message || 'Senden fehlgeschlagen.', '⚠️');
+    } finally {
+      btn.disabled = false; btn.innerHTML = idleIcon;
+    }
+  };
+  return btn;
+}
+
 // Baut eine Aufnahme/Foto-Zeile aus einem gespeicherten Anhang (nach Reload) — selbe Optik wie
 // frisch erzeugte Zeilen, aber aus dem in IndexedDB gesicherten Blob statt einer Live-Aufnahme.
 function attachmentRow(a) {
@@ -1228,6 +1253,7 @@ function attachmentRow(a) {
   row.appendChild(dl);
   if (a.kind === 'photo') row.appendChild(makeShareBtn(url, a.key, a.label));
   if (a.kind === 'video') row.appendChild(makeReelBtn(url, mime));
+  if (a.kind === 'photo' || a.kind === 'video') row.appendChild(makeSendToPartnerBtn(a.blob, a.kind, a.label));
   if (a.kind === 'audio') row.appendChild(_makeScissorsBtn(row));
   row.appendChild(makeDeleteBtn(row, url, a.key, a.id));
   if (_audioEl) row.appendChild(_audioEl);
@@ -1716,6 +1742,7 @@ async function _saveCapture({ blob, mime, kind, label, key }) {
   row.appendChild(dl);
   if (kind === 'photo') row.appendChild(makeShareBtn(url, key, label));
   if (kind === 'video') row.appendChild(makeReelBtn(url, mime));
+  row.appendChild(makeSendToPartnerBtn(blob, kind, label));
   let attId = null;
   try { attId = await addAttachment({ key: key || null, label: label || null, kind, blob, mime }); }
   catch (e) { console.warn('addAttachment', e); }
@@ -1931,6 +1958,67 @@ function showLocateResult(r) {
   setTimeout(close, 14000);
 }
 
+// Gemeinsamer Session-Bericht: führt die eigenen Funde seit Sessionbeginn mit denen des Partners
+// zusammen. Partner-Daten kommen über den Datenkanal (js/session.js) -> IMMER per textContent
+// rendern, nie per innerHTML, genau wie beim Chat (fremder Input ist nicht vertrauenswürdig).
+function showSessionReport(myDets, peerDets, peerAvailable) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
+  const card = document.createElement('div');
+  card.style.cssText = "background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:22px 22px 18px;max-width:340px;width:90%;max-height:80vh;display:flex;flex-direction:column;font-family:'Outfit',sans-serif";
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:18px;font-weight:700;color:var(--lime)';
+  title.textContent = '📋 Gemeinsamer Bericht';
+  const sub = document.createElement('div');
+  sub.style.cssText = "font-size:12px;color:var(--muted);margin:4px 0 12px;font-family:'Inter',sans-serif";
+  sub.textContent = peerAvailable ? 'Funde von beiden Handys zusammengeführt' : 'Partner hat nicht geantwortet — zeigt nur deine eigenen Funde';
+
+  const tally = new Map(); // Artname -> {mine, peer}
+  for (const d of myDets) {
+    const sp = typeof d.species === 'string' && d.species ? d.species : 'Unbekannt';
+    const e = tally.get(sp) || { mine: 0, peer: 0 };
+    e.mine++; tally.set(sp, e);
+  }
+  for (const d of peerDets) {
+    const sp = typeof d.species === 'string' && d.species ? d.species : 'Unbekannt';
+    const e = tally.get(sp) || { mine: 0, peer: 0 };
+    e.peer++; tally.set(sp, e);
+  }
+  const sorted = [...tally.entries()].sort((a, b) => (b[1].mine + b[1].peer) - (a[1].mine + a[1].peer));
+
+  const list = document.createElement('div');
+  list.style.cssText = "overflow-y:auto;display:flex;flex-direction:column;gap:8px;font-family:'Inter',sans-serif";
+  if (!sorted.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'font-size:13px;color:var(--muted);text-align:center;padding:20px 0';
+    empty.textContent = 'Noch keine Funde in dieser Session.';
+    list.appendChild(empty);
+  }
+  for (const [species, e] of sorted) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px;background:var(--glass);border-radius:12px;padding:9px 12px';
+    const nameSpan = document.createElement('span'); nameSpan.style.cssText = 'color:var(--ink)'; nameSpan.textContent = species;
+    const countSpan = document.createElement('span'); countSpan.style.cssText = 'color:var(--muted);font-size:11.5px;white-space:nowrap';
+    countSpan.textContent = (e.mine + e.peer) + '× (du ' + e.mine + (peerAvailable ? ', Partner ' + e.peer : '') + ')';
+    row.append(nameSpan, countSpan);
+    list.appendChild(row);
+  }
+
+  const totalLine = document.createElement('div');
+  totalLine.style.cssText = "font-size:11.5px;color:var(--faint);margin:10px 0 2px;font-family:'Inter',sans-serif";
+  totalLine.textContent = 'Insgesamt ' + (myDets.length + peerDets.length) + ' Funde, ' + sorted.length + ' Arten';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.textContent = 'Schließen';
+  closeBtn.style.cssText = "width:100%;margin-top:12px;padding:11px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif";
+  closeBtn.onclick = () => ov.remove();
+
+  card.append(title, sub, list, totalLine, closeBtn);
+  ov.appendChild(card);
+  document.body.appendChild(ov);
+}
+
 // ---- Partner koppeln (WebRTC + QR) + gemeinsame Ruf-Ortung sobald verbunden ----
 function initPairing() {
   const openBtn = document.getElementById('pairOpenBtn');
@@ -2109,6 +2197,9 @@ function initPairing() {
     if (geo.pos) locate.setLocalPos(geo.pos);
     if (chatList) chatList.innerHTML = '';
     chat.attach(dc, onChatMessage);
+    session.attach(dc);
+    session.startSession();
+    filetransfer.attach(dc, onFileReceived, onFileProgress);
     setPairChip(true, 'Verbunden');
     if (stopQualityMonitor) stopQualityMonitor();
     stopQualityMonitor = monitorQuality(activePc, ({ level }) => updatePairSignal(level));
@@ -2143,6 +2234,8 @@ function initPairing() {
     if (stopQualityMonitor) { stopQualityMonitor(); stopQualityMonitor = null; }
     locate.detach();
     chat.detach();
+    session.detach();
+    filetransfer.detach();
     activePc = null;
     showInfoToast('📡 Verbindung zum Partner verloren', 'Nicht automatisch behebbar — bitte neu koppeln.', '📡', () => openBtn.click(), 'Neu koppeln');
   }
@@ -2176,6 +2269,8 @@ function initPairing() {
       if (activePc) { try { activePc.close(); } catch {} activePc = null; }
       locate.detach();
       chat.detach();
+      session.detach();
+      filetransfer.detach();
       showStep_('choice');
     }
     modal.classList.add('open');
@@ -2259,6 +2354,44 @@ function initPairing() {
     scanStatus.textContent = 'Richte die Kamera auf den Code des anderen Handys…';
     startScan(onOfferScanned, scanStatus);
   };
+
+  // ---- Gemeinsamer Session-Bericht ----
+  session.setDetectionsProvider(async startTs => {
+    try { return (await allDetections()).filter(d => d.ts >= startTs).map(d => ({ species: d.species, ts: d.ts })); }
+    catch { return []; }
+  });
+  const sessionReportBtn = document.getElementById('pairSessionReportBtn');
+  if (sessionReportBtn) sessionReportBtn.onclick = async () => {
+    sessionReportBtn.disabled = true;
+    const orig = sessionReportBtn.textContent;
+    sessionReportBtn.textContent = 'Frage Partner…';
+    try {
+      const startTs = session.getSessionStart();
+      let myDets = [];
+      try { myDets = (await allDetections()).filter(d => d.ts >= startTs); } catch {}
+      const peerDets = await session.requestPeerDetections(startTs);
+      showSessionReport(myDets, peerDets || [], !!peerDets);
+    } finally {
+      sessionReportBtn.disabled = false;
+      sessionReportBtn.textContent = orig;
+    }
+  };
+
+  // ---- Foto/Video direkt ans Partner-Handy (ganz ohne Internet, über den Datenkanal) ----
+  function onFileProgress({ direction, sent, total }) {
+    if (direction !== 'receive') return;
+    if (sent === 1) showInfoToast('📲 Empfange Datei…', 'Vom Partner-Handy — bitte warten.', '📲');
+  }
+  async function onFileReceived({ blob, kind, name, mime }) {
+    const label = 'Vom Partner' + (name ? ': ' + name : '');
+    let attId = null;
+    try { attId = await addAttachment({ key: null, label, kind, blob, mime: mime || blob.type }); }
+    catch (e) { console.warn('addAttachment (partner file)', e); }
+    const list = document.getElementById('recList');
+    if (list) list.prepend(attachmentRow({ blob, kind, label, mime: mime || blob.type, key: null, id: attId, ts: Date.now() }));
+    showInfoToast('📲 Vom Partner erhalten', (kind === 'video' ? 'Video' : 'Foto') + ' angekommen — in der Galerie.', '📲');
+    if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
+  }
 }
 initPairing();
 

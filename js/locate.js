@@ -48,6 +48,16 @@ export function isActive() {
   return !!(_dc && _dc.readyState === 'open');
 }
 
+// Für die ständige Distanz-/Richtungsanzeige im Karten-Tab — liefert die aktuell bekannte
+// Entfernung + Peilung zum Partner, unabhängig von einem gemeinsamen Fund-Ereignis.
+export function getPeerGeoInfo() {
+  if (!_myPos || !_peerPos) return null;
+  return {
+    baselineM: Math.round(haversineKm(_myPos, _peerPos) * 1000),
+    bearingToPeer: Math.round(bearingDeg(_myPos, _peerPos)),
+  };
+}
+
 function _send(obj) {
   if (_dc && _dc.readyState === 'open') { try { _dc.send(JSON.stringify(obj)); } catch {} }
 }

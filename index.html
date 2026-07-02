@@ -81,7 +81,7 @@
 
     <!-- ============ MAP ============ -->
     <section class="view" id="v-map">
-      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></svg></span>Fundkarte</div><div style="display:flex;align-items:center;gap:8px"><div class="chip" id="mapCount">0 Funde</div><button class="route-toggle-btn" id="routeToggleBtn" title="Route aufzeichnen ein/aus" aria-label="Route aufzeichnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path d="M3 17l4-8 4 4 4-6 4 4"/><circle cx="3" cy="17" r="1.5" fill="currentColor" stroke="none"/><circle cx="21" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg></button></div></div>
+      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></svg></span>Fundkarte</div><div style="display:flex;align-items:center;gap:8px"><div class="chip" id="mapCount">0 Funde</div><div class="chip peer-dist-chip" id="peerDistChip" hidden>🤝 <span id="peerDistTxt"></span></div><button class="route-toggle-btn" id="routeToggleBtn" title="Route aufzeichnen ein/aus" aria-label="Route aufzeichnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path d="M3 17l4-8 4 4 4-6 4 4"/><circle cx="3" cy="17" r="1.5" fill="currentColor" stroke="none"/><circle cx="21" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg></button></div></div>
       <div class="map" id="map">
         <div class="map-empty" id="mapEmpty" hidden>Noch keine verorteten Funde.<br>Mikro starten &amp; Standort erlauben.</div>
       </div>
@@ -849,6 +849,7 @@
             <button id="pairChatSend" class="pair-chat-send" aria-label="Senden">➤</button>
           </div>
           <div id="pairVoiceStatus" class="pair-voice-status" hidden>🔴 Aufnahme… <span id="pairVoiceTimer">0:00</span> — loslassen zum Senden</div>
+          <button type="button" class="btn ghost" id="pairSessionReportBtn" style="width:100%;margin-top:12px">📋 Gemeinsamen Bericht erstellen</button>
         </div>
 
         <div class="actions">

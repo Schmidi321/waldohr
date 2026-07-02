@@ -562,7 +562,7 @@ let collMode = 'here';
 let lastCollStats = null, lastCollDets = [], lastCollPos = null;
 let livePos = null;
 // Wird bei jedem GPS-Update aufgerufen (auch ohne vollen Re-Render) — fürs Kompass-Feature.
-export function setLivePos(pos) { livePos = pos; updateCompassUI(); updateUserMarker(); }
+export function setLivePos(pos) { livePos = pos; updateCompassUI(); updateUserMarker(); _updatePeerDistChip(); }
 
 function renderCollStats() {
   if (!lastCollStats) return;
@@ -834,6 +834,7 @@ export async function renderMap(dets) {
   }
   updateUserMarker();
   _applyPeerMarker();
+  _updatePeerDistChip();
   setTimeout(() => mapInst && mapInst.invalidateSize(), 60);
 }
 
@@ -892,6 +893,24 @@ let _lastPeerAnimPos = null;
 export function updatePeerMarker(pos) {
   lastPeerPos = pos;
   _applyPeerMarker();
+  _updatePeerDistChip();
+}
+
+// Ständige Distanz-/Richtungsanzeige zum Partner im Karten-Tab (nicht nur beim gemeinsamen Fund-
+// Ereignis) — läuft mit, sobald beide Positionen bekannt sind, unabhängig davon, ob gerade eine
+// Erkennung stattfindet.
+function _updatePeerDistChip() {
+  const chip = document.getElementById('peerDistChip');
+  const txt = document.getElementById('peerDistTxt');
+  if (!chip || !txt) return;
+  if (!lastPeerPos || !livePos) { chip.hidden = true; return; }
+  const distM = Math.round(haversineKm(livePos, lastPeerPos) * 1000);
+  const brg = bearingDeg(livePos, lastPeerPos);
+  const dirs = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
+  const dirTxt = dirs[Math.round(brg / 45) % 8];
+  const distTxt = distM >= 1000 ? (distM / 1000).toFixed(1) + ' km' : distM + ' m';
+  txt.textContent = distTxt + ' · ' + dirTxt;
+  chip.hidden = false;
 }
 function _applyPeerMarker() {
   if (!lastPeerPos) { if (peerMarker) { peerMarker.remove(); peerMarker = null; } _lastPeerAnimPos = null; return; }
