@@ -120,7 +120,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v65';
+const APP_VERSION = 'v66';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -872,6 +872,12 @@ function _openVideoReelModal(url, mime) {
   const fmtT = s => Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
   const playIco = '<svg viewBox="0 0 24 24" fill="#04130d" width="22" height="22"><path d="M8 5v14l11-7z"/></svg>';
   const pauseIco = '<svg viewBox="0 0 24 24" fill="#04130d" width="22" height="22"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
+  // iOS Safari (und manche WebViews) implementieren HTMLVideoElement.captureStream() nicht —
+  // dort ist clientseitiges Neu-Encodieren (Trimmen/Mischen) technisch unmöglich. Statt eines
+  // Fehlers beim Export erkennen wir das vorher und bieten Original-Teilen als Fallback an.
+  const probeVid = document.createElement('video');
+  const supportsCapture = typeof probeVid.captureStream === 'function' || typeof probeVid.mozCaptureStream === 'function';
+  const unsupportedNote = supportsCapture ? '' : `<div style="background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:12px;padding:10px 12px;font-size:12px;color:#fbbf24;margin-bottom:12px">⚠️ Dein Browser unterstützt kein Zuschneiden/Mischen von Videos. Du kannst das Original trotzdem teilen.</div>`;
   sheet.innerHTML = `
     <div style="width:36px;height:4px;border-radius:4px;background:var(--stroke-strong);margin:0 auto 12px"></div>
     <h3 style="font-size:16px;font-weight:700;margin:0 0 10px;text-align:center;color:var(--ink)">🎬 Reel erstellen</h3>
@@ -898,7 +904,8 @@ function _openVideoReelModal(url, mime) {
     <div id="_rvAudioList" style="max-height:150px;overflow-y:auto;margin-bottom:12px;scrollbar-width:none;display:flex;flex-direction:column;gap:6px">
       <div style="color:var(--faint);font-size:12px;padding:8px 0">Lade Aufnahmen…</div>
     </div>
-    <button id="_rvExport" style="width:100%;padding:14px;border-radius:16px;background:var(--lime);color:#04130d;font-weight:700;font-size:15px;cursor:pointer;border:none;font-family:inherit;margin-bottom:6px">🎬 Reel exportieren</button>
+    ${unsupportedNote}
+    <button id="_rvExport" style="width:100%;padding:14px;border-radius:16px;background:var(--lime);color:#04130d;font-weight:700;font-size:15px;cursor:pointer;border:none;font-family:inherit;margin-bottom:6px">${supportsCapture ? '🎬 Reel exportieren' : '📤 Original teilen'}</button>
     <div id="_rvProgress" style="display:none;margin-bottom:8px">
       <div class="mixer-prog-track"><div id="_rvProgFill" class="mixer-prog-fill" style="width:0%"></div></div>
       <div id="_rvProgLabel" class="mixer-prog-label" style="margin-top:5px;text-align:center;font-size:12px;color:var(--muted)">Exportiere…</div>
@@ -1036,6 +1043,33 @@ function _openVideoReelModal(url, mime) {
     exportBtn.disabled = true; progress.style.display = 'block';
     if (progFill) progFill.style.width = '0%';
     if (progLabel) progLabel.textContent = 'Wird vorbereitet…';
+
+    if (!supportsCapture) {
+      // Kein Trimmen/Mischen möglich -> Original-Datei unverändert teilen/herunterladen.
+      try {
+        if (progLabel) progLabel.textContent = 'Bereite Original zum Teilen vor…';
+        const origBlob = await fetch(url).then(r => r.blob());
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        const ext = (mime || '').includes('mp4') ? 'mp4' : 'webm';
+        const fname = 'waldohr-video-' + stamp + '.' + ext;
+        const file = new File([origBlob], fname, { type: mime || 'video/webm' });
+        if (progFill) progFill.style.width = '100%';
+        if (progLabel) progLabel.textContent = 'Fertig!';
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ title: 'WaldOhr Video', files: [file] });
+        } else {
+          const a = document.createElement('a'); a.href = URL.createObjectURL(origBlob); a.download = fname; a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+        }
+        ov.remove();
+      } catch (e) {
+        console.warn('fallback share', e);
+        if (progLabel) progLabel.textContent = 'Fehler: ' + (e?.message || 'Teilen fehlgeschlagen');
+        exportBtn.disabled = false;
+      }
+      return;
+    }
+
     const dur0 = duration || vid.duration || 0;
     const startTime = startFrac * dur0, endTime = endFrac * dur0, trimDur = Math.max(0.1, endTime - startTime);
     let audioCtx = null, srcVid = null;
