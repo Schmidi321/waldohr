@@ -9,6 +9,7 @@ import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from
 import { openCamera } from './camera.js';
 import { initOrni } from './ornithologie.js';
 import { exportBackup, importBackup } from './backup.js';
+import { renderQR, scanQR, createOfferer, createAnswerer, waitForOpen } from './pairing.js';
 
 // ---- In-App Lightbox für Fotos ----
 function openPhotoLightbox(url) {
@@ -121,7 +122,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v70';
+const APP_VERSION = 'v71';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1869,5 +1870,134 @@ if (dbResetBtn) dbResetBtn.onclick = async () => {
 function registerSW() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+
+// ---- Partner koppeln (WebRTC + QR) — Grundlage für künftige Zwei-Handy-Funktionen ----
+// (z.B. gemeinsame Ruf-Ortung per Zeitversatz). Diese erste Stufe stellt nur die Verbindung her;
+// der Datenkanal ist danach offen und bereit für weitere Nachrichten in einem späteren Update.
+function initPairing() {
+  const openBtn = document.getElementById('pairOpenBtn');
+  const modal = document.getElementById('pairModal');
+  if (!openBtn || !modal) return;
+  const scrim = document.getElementById('pairScrim');
+  const closeBtn = document.getElementById('pairCloseBtn');
+  const choice = document.getElementById('pairChoice');
+  const showBtn = document.getElementById('pairShowBtn');
+  const scanBtn = document.getElementById('pairScanBtn');
+  const showStep = document.getElementById('pairShowStep');
+  const scanStep = document.getElementById('pairScanStep');
+  const answerStep = document.getElementById('pairAnswerStep');
+  const connectedStep = document.getElementById('pairConnectedStep');
+  const status = document.getElementById('pairStatus');
+  const qrCanvas = document.getElementById('pairQrCanvas');
+  const scanVideo = document.getElementById('pairScanVideo');
+  const scanStatus = document.getElementById('pairScanStatus');
+  const answerQrCanvas = document.getElementById('pairAnswerQrCanvas');
+  const answerStatus = document.getElementById('pairAnswerStatus');
+  const showScanAnswerBtn = document.getElementById('pairShowScanAnswerBtn');
+
+  let scanStream = null, stopScan = null, activePc = null;
+
+  function stopCamera() {
+    if (stopScan) { stopScan(); stopScan = null; }
+    if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+    scanVideo.srcObject = null;
+  }
+
+  function showStep_(name) {
+    choice.hidden = name !== 'choice';
+    showStep.hidden = name !== 'show';
+    scanStep.hidden = name !== 'scan';
+    answerStep.hidden = name !== 'answer';
+    connectedStep.hidden = name !== 'connected';
+    if (name !== 'scan') stopCamera();
+  }
+
+  function closeModal() {
+    stopCamera();
+    if (activePc) { try { activePc.close(); } catch {} activePc = null; }
+    showScanAnswerBtn.hidden = true;
+    modal.classList.remove('open');
+  }
+
+  openBtn.onclick = () => { showStep_('choice'); modal.classList.add('open'); };
+  closeBtn.onclick = closeModal;
+  if (scrim) scrim.onclick = closeModal;
+
+  async function startScan(onDecoded, statusEl) {
+    stopCamera();
+    try {
+      scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      scanVideo.srcObject = scanStream;
+      await scanVideo.play().catch(() => {});
+      stopScan = scanQR(scanVideo, onDecoded);
+    } catch (e) {
+      if (statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e?.message || '');
+    }
+  }
+
+  // ---- Seite A: "QR-Code zeigen" (Angebot erstellen) ----
+  showBtn.onclick = async () => {
+    showStep_('show');
+    status.textContent = 'Code wird erstellt…';
+    showScanAnswerBtn.hidden = true;
+    let offerer;
+    try {
+      offerer = await createOfferer();
+      activePc = offerer.pc;
+      renderQR(offerer.qrText, qrCanvas);
+      status.textContent = 'Lass das andere Handy diesen Code scannen';
+      showScanAnswerBtn.hidden = false;
+    } catch (e) {
+      status.textContent = 'Fehler: ' + (e?.message || 'Verbindung konnte nicht vorbereitet werden');
+      return;
+    }
+    async function onAnswerScanned(text) {
+      try {
+        await offerer.applyAnswer(text);
+        showStep_('connected');
+        connectedStep.querySelector('#pairConnectedSub').textContent = 'Verbinde…';
+        await waitForOpen(offerer.dc);
+        connectedStep.querySelector('#pairConnectedSub').textContent = 'Bereit für weitere Funktionen.';
+      } catch (err) {
+        scanStatus.textContent = 'Ungültiger Code oder Verbindung fehlgeschlagen — bitte erneut versuchen.';
+        startScan(onAnswerScanned, scanStatus);
+      }
+    }
+    showScanAnswerBtn.onclick = () => {
+      showStep_('scan');
+      scanStatus.textContent = 'Richte die Kamera auf den Antwort-Code…';
+      startScan(onAnswerScanned, scanStatus);
+    };
+  };
+
+  // ---- Seite B: "QR-Code scannen" (Angebot einlesen, Antwort zurückgeben) ----
+  async function onOfferScanned(text) {
+    let answerer;
+    try {
+      answerer = await createAnswerer(text);
+    } catch (e) {
+      scanStatus.textContent = 'Ungültiger Code — bitte erneut versuchen.';
+      startScan(onOfferScanned, scanStatus);
+      return;
+    }
+    activePc = answerer.pc;
+    showStep_('answer');
+    renderQR(answerer.qrText, answerQrCanvas);
+    answerStatus.textContent = 'Zeig dieses Handy jetzt dem Partner — Warte auf Verbindung…';
+    try {
+      await waitForOpen(answerer.dc);
+      showStep_('connected');
+      connectedStep.querySelector('#pairConnectedSub').textContent = 'Bereit für weitere Funktionen.';
+    } catch (err) {
+      answerStatus.textContent = 'Verbindung fehlgeschlagen: ' + (err?.message || '');
+    }
+  }
+  scanBtn.onclick = () => {
+    showStep_('scan');
+    scanStatus.textContent = 'Richte die Kamera auf den Code des anderen Handys…';
+    startScan(onOfferScanned, scanStatus);
+  };
+}
+initPairing();
 
 boot();

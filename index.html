@@ -190,6 +190,11 @@
           <button class="btn ghost" id="txStart" style="width:100%">Transekt starten</button>
           <div id="txSpecies" style="margin-top:14px" hidden></div>
         </div>
+        <div class="infoblock" style="margin-top:14px">
+          <h3><span style="font-size:15px">🤝</span> Partner koppeln <span style="font-size:11px;color:var(--faint);font-weight:400">(Beta)</span></h3>
+          <p style="margin-bottom:12px">Verbinde ein zweites Handy per QR-Code, um später gemeinsam Rufe zu orten. Kein Server nötig — die Geräte verbinden sich direkt.</p>
+          <button class="btn ghost" id="pairOpenBtn" style="width:100%">Kopplung starten</button>
+        </div>
       </div>
 
       <!-- Protokolle -->
@@ -776,8 +781,56 @@
       </div>
     </div>
 
+    <!-- ============ PARTNER KOPPELN (WebRTC + QR) ============ -->
+    <div class="modal" id="pairModal">
+      <div class="scrim" id="pairScrim"></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <h2 style="font-size:18px;margin-bottom:4px">🤝 Partner koppeln</h2>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:16px">Verbindet zwei Handys direkt miteinander per QR-Code — kein Server. Beide Geräte brauchen kurz Internet oder dasselbe WLAN zum Verbindungsaufbau.</p>
+
+        <div id="pairChoice">
+          <button class="btn ghost" id="pairShowBtn" style="width:100%;margin-bottom:10px">📱 QR-Code zeigen (ich starte)</button>
+          <button class="btn ghost" id="pairScanBtn" style="width:100%">📷 QR-Code scannen</button>
+        </div>
+
+        <div id="pairShowStep" hidden>
+          <div id="pairStatus" style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:12px">Code wird erstellt…</div>
+          <canvas id="pairQrCanvas" style="display:block;margin:0 auto 14px;border-radius:12px"></canvas>
+          <p style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:14px">Lass das andere Handy diesen Code scannen.</p>
+          <button class="btn ghost" id="pairShowScanAnswerBtn" style="width:100%" hidden>📷 Antwort-Code scannen</button>
+        </div>
+
+        <div id="pairScanStep" hidden>
+          <div style="position:relative;border-radius:16px;overflow:hidden;background:#000;margin-bottom:12px">
+            <video id="pairScanVideo" autoplay playsinline muted style="width:100%;display:block;max-height:280px;object-fit:cover"></video>
+          </div>
+          <div id="pairScanStatus" style="font-size:13px;color:var(--muted);text-align:center">Richte die Kamera auf den QR-Code…</div>
+        </div>
+
+        <div id="pairAnswerStep" hidden>
+          <div style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:12px">Zeig dieses Handy jetzt zurück — Partner scannt die Antwort:</div>
+          <canvas id="pairAnswerQrCanvas" style="display:block;margin:0 auto 14px;border-radius:12px"></canvas>
+          <div id="pairAnswerStatus" style="font-size:13px;color:var(--muted);text-align:center">Warte auf Verbindung…</div>
+        </div>
+
+        <div id="pairConnectedStep" hidden>
+          <div style="text-align:center;padding:20px 0">
+            <div style="font-size:44px;margin-bottom:8px">✅</div>
+            <div style="font-size:16px;font-weight:700;color:var(--lime)">Verbunden!</div>
+            <div id="pairConnectedSub" style="font-size:12px;color:var(--muted);margin-top:6px">Bereit für weitere Funktionen.</div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn ghost" id="pairCloseBtn">Schließen</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
+<script src="js/vendor/jsQR.js"></script>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>
