@@ -11,6 +11,7 @@ import { initOrni } from './ornithologie.js';
 import { exportBackup, importBackup } from './backup.js';
 import { renderQR, scanQR, createOfferer, createAnswerer, waitForOpen } from './pairing.js';
 import * as locate from './locate.js';
+import * as chat from './chat.js';
 
 // ---- In-App Lightbox für Fotos ----
 function openPhotoLightbox(url) {
@@ -123,7 +124,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v75';
+const APP_VERSION = 'v76';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1921,6 +1922,9 @@ function initPairing() {
   const answerQrCanvas = document.getElementById('pairAnswerQrCanvas');
   const answerStatus = document.getElementById('pairAnswerStatus');
   const showScanAnswerBtn = document.getElementById('pairShowScanAnswerBtn');
+  const chatList = document.getElementById('pairChatList');
+  const chatInput = document.getElementById('pairChatInput');
+  const chatSend = document.getElementById('pairChatSend');
 
   let scanStream = null, stopScan = null, activePc = null, isConnected = false;
 
@@ -1930,12 +1934,47 @@ function initPairing() {
     scanVideo.srcObject = null;
   }
 
-  // Sobald die Verbindung steht, an js/locate.js übergeben — die Ortung läuft im Hintergrund
-  // weiter, auch wenn der Nutzer das Kopplungs-Fenster schließt und normal weiterlauscht.
+  // Partner-Text ist fremder Input -> IMMER textContent, nie innerHTML (siehe die BirdNET-XSS-Lücke,
+  // die wir schon einmal an anderer Stelle gefunden & gefixt haben — hier von Anfang an sauber).
+  function appendChatBubble(msg) {
+    if (!chatList) return;
+    const row = document.createElement('div');
+    row.className = 'pair-chat-row ' + (msg.from === 'me' ? 'me' : 'peer');
+    const bubble = document.createElement('div');
+    bubble.className = 'pair-chat-bubble';
+    bubble.textContent = msg.text;
+    row.appendChild(bubble);
+    chatList.appendChild(row);
+    chatList.scrollTop = chatList.scrollHeight;
+  }
+
+  function onChatMessage(msg) {
+    appendChatBubble(msg);
+    // Wenn das Kopplungs-Fenster gerade nicht offen ist, trotzdem kurz benachrichtigen.
+    if (!modal.classList.contains('open')) {
+      showInfoToast('💬 Nachricht vom Partner', msg.text, '💬');
+    }
+  }
+
+  function sendChat() {
+    if (!chatInput) return;
+    const msg = chat.send(chatInput.value);
+    if (!msg) return;
+    appendChatBubble(msg);
+    chatInput.value = '';
+  }
+  if (chatSend) chatSend.onclick = sendChat;
+  if (chatInput) chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
+
+  // Sobald die Verbindung steht, an js/locate.js + js/chat.js übergeben — beides läuft im
+  // Hintergrund weiter, auch wenn der Nutzer das Kopplungs-Fenster schließt und normal
+  // weiterlauscht.
   function onPaired(dc) {
     isConnected = true;
     locate.attach(dc, showLocateResult, updatePeerMarker);
     if (geo.pos) locate.setLocalPos(geo.pos);
+    if (chatList) chatList.innerHTML = '';
+    chat.attach(dc, onChatMessage);
   }
 
   function showStep_(name) {
@@ -1965,6 +2004,7 @@ function initPairing() {
     } else {
       if (activePc) { try { activePc.close(); } catch {} activePc = null; }
       locate.detach();
+      chat.detach();
       showStep_('choice');
     }
     modal.classList.add('open');

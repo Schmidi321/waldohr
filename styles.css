@@ -399,6 +399,18 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .peer-dot{position:absolute;inset:5px;border-radius:50%;background:var(--amber, #fbbf24);border:2px solid #04130d;box-shadow:0 0 0 1px #fbbf2488}
 .peer-pulse{position:absolute;inset:0;border-radius:50%;background:#fbbf2455;animation:pulseyou 2s ease-out infinite}
 
+/* Kurznachrichten zwischen gekoppelten Handys (js/chat.js) im Kopplungs-Modal */
+.pair-chat-list{max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:10px;scrollbar-width:none;padding:2px}
+.pair-chat-list:empty::before{content:'Noch keine Nachrichten.';display:block;text-align:center;font-size:12px;color:var(--faint);padding:10px 0}
+.pair-chat-row{display:flex}
+.pair-chat-row.me{justify-content:flex-end}
+.pair-chat-row.peer{justify-content:flex-start}
+.pair-chat-bubble{max-width:78%;padding:8px 12px;border-radius:14px;font-size:13px;line-height:1.35;word-break:break-word;white-space:pre-wrap}
+.pair-chat-row.me .pair-chat-bubble{background:var(--lime);color:#04130d;border-bottom-right-radius:4px}
+.pair-chat-row.peer .pair-chat-bubble{background:var(--glass);color:var(--ink);border:1px solid var(--stroke);border-bottom-left-radius:4px}
+.pair-chat-input{flex:1;padding:10px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:14px;font-family:inherit;outline:none;min-width:0}
+.pair-chat-send{padding:0 16px;border-radius:12px;background:var(--lime);color:#04130d;border:none;font-weight:700;cursor:pointer;font-family:inherit;flex-shrink:0}
+
 /* Fotografen-Wecker: Klapp-Popup Lichtphasen */
 .fw-detail-popup{background:rgba(0,0,0,.3);border:1px solid var(--stroke);border-radius:14px;padding:12px 14px;margin-top:10px}
 .fw-detail-popup[hidden]{display:none}
