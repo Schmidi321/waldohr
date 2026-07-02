@@ -167,12 +167,21 @@ function _startZoomAnim() {
   if (from === to) return;
   const vid = document.getElementById('camVideo');
   const t0 = performance.now();
+  let _lastHwSync = 0;
   const tick = now => {
     const p = Math.min(1, (now - t0) / dur);
     // Logarithmische Interpolation → wahrgenommene Zoom-Geschwindigkeit konstant
     const v = from * Math.pow(to / from, p);
-    // CSS scale für flüssige Animation ohne physischen Linsenwechsel-Sprung
+    // CSS scale für flüssige Animation jeden Frame (kein Ruckeln) — auf Geräten mit echtem
+    // optischem/Hardware-Zoom lief bisher NUR diese CSS-Simulation, der reale Zoom blieb fix
+    // stehen. Dadurch driftete das sichtbare Bild vom eigentlichen Kamera-Zoom auseinander und
+    // fühlte sich je nach Zoomstufe uneinheitlich schnell an. Jetzt wird der echte Zoom parallel
+    // nachgeführt (gedrosselt, nicht jeden Frame — sonst Ruckeln am Kameramotor).
     if (vid) vid.style.transform = `scale(${Math.max(1, v / (minZ || 1))})`;
+    if (_zoomSupported && _videoTrack && (p >= 1 || now - _lastHwSync > 180)) {
+      _lastHwSync = now;
+      try { _videoTrack.applyConstraints({ advanced: [{ zoom: v }] }); } catch {}
+    }
     const sl = document.getElementById('camZoom'); if (sl) sl.value = v;
     if (p < 1) { _zoomAnimTimer = requestAnimationFrame(tick); }
     else { _zoomAnimTimer = null; }
@@ -559,10 +568,26 @@ export function openCamera(onCapture) {
   modal.classList.add('open');
   _updateModeUI();
 
+  // Fadenkreuz-Einstellung merkt sich über Sitzungen hinweg (wie Auslöseton/Linkshänder-Modus).
+  const crosshair = document.getElementById('camCrosshair');
+  const crosshairBtn = document.getElementById('camCrosshairToggle');
+  const crosshairOn = localStorage.getItem('waldohr.crosshair') === 'on';
+  if (crosshair) crosshair.hidden = !crosshairOn;
+  if (crosshairBtn) crosshairBtn.classList.toggle('active', crosshairOn);
+
   if (!modal._camWired) {
     modal._camWired = true;
 
     document.getElementById('camClose')?.addEventListener('click', _close);
+
+    document.getElementById('camCrosshairToggle')?.addEventListener('click', () => {
+      const ch = document.getElementById('camCrosshair');
+      const btn = document.getElementById('camCrosshairToggle');
+      if (!ch) return;
+      ch.hidden = !ch.hidden;
+      if (btn) btn.classList.toggle('active', !ch.hidden);
+      try { localStorage.setItem('waldohr.crosshair', ch.hidden ? 'off' : 'on'); } catch {}
+    });
 
     document.getElementById('camAzToggle')?.addEventListener('click', () => {
       const wrap = document.getElementById('camAutoZoomWrap');

@@ -448,6 +448,15 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .cam-bottom{position:absolute;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:20px 20px calc(20px + env(safe-area-inset-bottom));background:linear-gradient(to top,rgba(0,0,0,.65),transparent);gap:12px}
 .cam-ctrl-btn{width:40px;height:40px;border-radius:50%;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.25);color:#fff;display:grid;place-items:center;cursor:pointer;flex:0 0 auto;backdrop-filter:blur(8px)}
 .cam-ctrl-btn:active{transform:scale(.9)}
+.cam-ctrl-btn.active{background:rgba(163,230,53,.28);border-color:rgba(163,230,53,.55);color:#a3e635}
+
+/* Fadenkreuz-Overlay: exakt mittig im Kamerabild, unabhängig vom Zoom (reines Overlay, kein
+   Teil des Video-Streams) — dünne Linien, damit es beim Anvisieren nicht stört. */
+.cam-crosshair{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:46px;height:46px;pointer-events:none;z-index:6}
+.cam-crosshair[hidden]{display:none}
+.cam-crosshair::before,.cam-crosshair::after{content:'';position:absolute;background:rgba(255,255,255,.85);box-shadow:0 0 2px rgba(0,0,0,.8)}
+.cam-crosshair::before{top:50%;left:0;right:0;height:1px;transform:translateY(-.5px)}
+.cam-crosshair::after{left:50%;top:0;bottom:0;width:1px;transform:translateX(-.5px)}
 .cam-mode-toggle{display:flex;gap:5px;background:rgba(0,0,0,.4);border-radius:20px;padding:4px;backdrop-filter:blur(8px);overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;max-width:calc(100vw - 120px)}
 .cam-mode-toggle::-webkit-scrollbar{display:none}
 .cam-mode-btn{padding:5px 11px;border-radius:14px;border:none;background:transparent;color:rgba(255,255,255,.65);cursor:pointer;font-size:12px;font-weight:500;transition:.2s;white-space:nowrap;flex-shrink:0}
