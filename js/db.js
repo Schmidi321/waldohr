@@ -43,11 +43,11 @@ export async function addDetection(d) {
 }
 
 // ---- Anhänge (eigene Audio-Aufnahmen & Fotos) — Grundlage fürs Naturtagebuch ----
-export async function addAttachment({ detId = null, key = null, label = null, kind, blob, mime = '', note = null }) {
+export async function addAttachment({ detId = null, key = null, label = null, kind, blob, mime = '', note = null, ts = Date.now() }) {
   const database = await db();
   return new Promise((res, rej) => {
     const tx = database.transaction(ATT_STORE, 'readwrite');
-    const req = tx.objectStore(ATT_STORE).add({ detId, key, label, kind, blob, mime, note, ts: Date.now() });
+    const req = tx.objectStore(ATT_STORE).add({ detId, key, label, kind, blob, mime, note, ts });
     let newId;
     req.onsuccess = () => { newId = req.result; };
     tx.oncomplete = () => res(newId);

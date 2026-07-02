@@ -8,6 +8,7 @@ import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
 import { openCamera } from './camera.js';
 import { initOrni } from './ornithologie.js';
+import { exportBackup, importBackup } from './backup.js';
 
 // ---- In-App Lightbox für Fotos ----
 function openPhotoLightbox(url) {
@@ -120,7 +121,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v68';
+const APP_VERSION = 'v69';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1812,6 +1813,47 @@ if (hereResetBtn) hereResetBtn.onclick = async () => {
   await hydrateAttachments();
   refresh();
   showInfoToast('Funde gelöscht', ids.length + ' heutige Fund(e) hier wurden entfernt.', '🗑️');
+};
+
+// ---- Sicherung (Export/Import der kompletten lokalen Datenbank) ----
+const backupExportBtn = document.getElementById('backupExportBtn');
+const backupImportBtn = document.getElementById('backupImportBtn');
+const backupImportFile = document.getElementById('backupImportFile');
+const backupStatus = document.getElementById('backupStatus');
+if (backupExportBtn) backupExportBtn.onclick = async () => {
+  backupExportBtn.disabled = true;
+  if (backupStatus) { backupStatus.hidden = false; backupStatus.textContent = 'Sicherung wird erstellt…'; }
+  try {
+    const res = await exportBackup((done, total) => {
+      if (backupStatus) backupStatus.textContent = `Sicherung wird erstellt… ${done}/${total}`;
+    });
+    if (backupStatus) backupStatus.textContent = `✅ Fertig: ${res.detCount} Funde, ${res.attCount} Anhänge (${res.filename})`;
+  } catch (e) {
+    console.warn('backup export', e);
+    if (backupStatus) backupStatus.textContent = 'Fehler beim Erstellen der Sicherung: ' + (e?.message || '');
+  } finally {
+    backupExportBtn.disabled = false;
+  }
+};
+if (backupImportBtn) backupImportBtn.onclick = () => backupImportFile?.click();
+if (backupImportFile) backupImportFile.onchange = async () => {
+  const file = backupImportFile.files?.[0];
+  backupImportFile.value = '';
+  if (!file) return;
+  if (!confirm('Sicherung "' + file.name + '" wiederherstellen? Die enthaltenen Funde & Anhänge werden zu den vorhandenen Daten HINZUGEFÜGT (nichts wird gelöscht).')) return;
+  if (backupStatus) { backupStatus.hidden = false; backupStatus.textContent = 'Sicherung wird eingelesen…'; }
+  try {
+    const res = await importBackup(file, (done, total) => {
+      if (backupStatus) backupStatus.textContent = `Anhänge werden wiederhergestellt… ${done}/${total}`;
+    });
+    await hydrateAttachments();
+    refresh();
+    if (backupStatus) backupStatus.textContent = `✅ Wiederhergestellt: ${res.detCount} Funde, ${res.attCount} Anhänge`;
+    showInfoToast('Sicherung wiederhergestellt', res.detCount + ' Funde, ' + res.attCount + ' Anhänge importiert.', '💾');
+  } catch (e) {
+    console.warn('backup import', e);
+    if (backupStatus) backupStatus.textContent = 'Fehler: ' + (e?.message || 'Wiederherstellung fehlgeschlagen');
+  }
 };
 
 // ---- Gesamte Datenbank zurücksetzen ----
