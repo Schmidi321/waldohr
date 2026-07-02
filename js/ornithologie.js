@@ -1,5 +1,6 @@
 import { getDauerUeberwachung, setDauerUeberwachung } from './alarm.js';
 import { allDetections, qualifyingDetections } from './db.js';
+import { routeTracker } from './route.js';
 
 const $ = id => document.getElementById(id);
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -268,6 +269,112 @@ function _savePkSession(startTs, species) {
   } catch { return -1; }
 }
 
+// ---- Transekt-Zählung (feste Route, freie Dauer) ----
+let _txInterval = null, _txStartTs = 0, _txWasDetecting = false;
+
+function _initTransekt() {
+  const startBtn = $('txStart');
+  const timerEl = $('txTimer');
+  const distEl = $('txDist');
+  const speciesEl = $('txSpecies');
+  if (!startBtn || !timerEl) return;
+
+  const fmtTime = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  const fmtDist = km => km < 1 ? Math.round(km * 1000) + ' m' : km.toFixed(2) + ' km';
+
+  function _endTx() {
+    clearInterval(_txInterval);
+    _txInterval = null;
+    startBtn.textContent = 'Transekt starten';
+    startBtn.classList.remove('primary');
+    if (!_txWasDetecting && window.__waldohr) window.__waldohr.stopDetection();
+    if (window.__waldohr) window.__waldohr.switchTab('v-orni');
+  }
+
+  startBtn.onclick = async () => {
+    if (_txInterval) {
+      const startTs = _txStartTs;
+      const summary = routeTracker.stop();
+      const points = routeTracker.points.slice();
+      _endTx();
+      timerEl.textContent = '0:00';
+      if (distEl) distEl.textContent = '0 m zurückgelegt';
+      await _showTxResults(speciesEl, startTs, summary, points);
+      return;
+    }
+
+    _txStartTs = Date.now();
+    _txWasDetecting = window.__waldohr ? window.__waldohr.isDetecting() : false;
+
+    _showStartPopup('Transekt-Zählung');
+    startBtn.textContent = 'Stoppen';
+    startBtn.classList.add('primary');
+    if (speciesEl) { speciesEl.hidden = true; speciesEl.innerHTML = ''; }
+    timerEl.textContent = '0:00';
+    if (distEl) distEl.textContent = '0 m zurückgelegt';
+
+    routeTracker.start();
+    if (window.__waldohr) {
+      window.__waldohr.startDetection().catch(e => console.warn('tx start', e));
+      window.__waldohr.switchTab('v-listen');
+    }
+
+    let elapsed = 0;
+    _txInterval = setInterval(() => {
+      elapsed++;
+      timerEl.textContent = fmtTime(elapsed);
+      if (distEl) distEl.textContent = fmtDist(routeTracker.distKm) + ' zurückgelegt';
+    }, 1000);
+  };
+}
+
+function _saveTxSession(startTs, endTs, species, distKm, points) {
+  try {
+    const sessions = JSON.parse(localStorage.getItem('waldohr.tx.sessions') || '[]');
+    sessions.unshift({ name: '', ts: Date.now(), startTs, endTs, species, distKm, points });
+    if (sessions.length > 50) sessions.length = 50;
+    localStorage.setItem('waldohr.tx.sessions', JSON.stringify(sessions));
+    return 0;
+  } catch { return -1; }
+}
+
+async function _showTxResults(el, startTs, summary, points) {
+  if (!el) return;
+  const endTs = Date.now();
+  const all = await allDetections();
+  const inWindow = all.filter(d => d.ts >= startTs && d.ts <= endTs);
+  const qual = qualifyingDetections(inWindow);
+  const byKey = {};
+  for (const d of qual) {
+    if (!byKey[d.key]) byKey[d.key] = { name: d.species, count: 0 };
+    byKey[d.key].count++;
+  }
+  const list = Object.values(byKey).sort((a, b) => b.count - a.count);
+  const distKm = summary?.distKm || 0;
+  const sessionIdx = _saveTxSession(startTs, endTs, list, distKm, points);
+  const fmtDist = km => km < 1 ? Math.round(km * 1000) + ' m' : km.toFixed(2) + ' km';
+  const nameInput = `<input id="txSessionName" type="text" placeholder="Sitzungsname (optional)" style="width:100%;box-sizing:border-box;background:var(--glass);border:1px solid var(--stroke);border-radius:12px;padding:10px 14px;color:var(--ink);font-size:13px;font-family:inherit;outline:none;margin-bottom:10px">`;
+  const distLine = `<div style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:10px">${fmtDist(distKm)} zurückgelegt</div>`;
+  if (!list.length) {
+    el.innerHTML = nameInput + distLine + '<div style="color:var(--faint);font-size:13px;text-align:center;padding:12px 0">Keine Rufe auf der Strecke erkannt</div>';
+  } else {
+    el.innerHTML = nameInput + distLine
+      + '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Ergebnis</div>'
+      + list.map(s => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--stroke);font-size:14px"><span>${s.name}</span><span style="color:var(--lime);font-weight:700;font-size:15px">${s.count}×</span></div>`).join('');
+  }
+  el.hidden = false;
+  if (sessionIdx >= 0) {
+    const inp = el.querySelector('#txSessionName');
+    if (inp) inp.oninput = () => {
+      try {
+        const sessions = JSON.parse(localStorage.getItem('waldohr.tx.sessions') || '[]');
+        if (sessions[sessionIdx] != null) { sessions[sessionIdx].name = inp.value; localStorage.setItem('waldohr.tx.sessions', JSON.stringify(sessions)); }
+      } catch {}
+    };
+  }
+  _showPkEndPopup(list.length, 'auf ' + fmtDist(distKm) + ' Strecke erkannt');
+}
+
 async function _showPkResults(el, startTs) {
   if (!el) return;
   const endTs = startTs + PK_SECS * 1000;
@@ -302,13 +409,13 @@ async function _showPkResults(el, startTs) {
   _showPkEndPopup(list.length);
 }
 
-function _showPkEndPopup(count) {
+function _showPkEndPopup(count, subtitle) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
   ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:28px 28px 22px;text-align:center;max-width:270px;width:88%">
     <div style="font-size:44px;margin-bottom:6px">🎯</div>
     <div style="font-size:26px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;margin-bottom:4px">${count} ${count === 1 ? 'Art' : 'Arten'}</div>
-    <div style="font-size:13px;color:var(--muted);margin-bottom:18px">in 5 Minuten erkannt</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:18px">${subtitle || 'in 5 Minuten erkannt'}</div>
     <button id="_pkPopupBtn" style="width:100%;padding:13px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:15px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Zu Protokollen →</button>
   </div>`;
   document.body.appendChild(ov);
@@ -323,18 +430,25 @@ function _showPkEndPopup(count) {
 function _renderProtokolle() {
   const list = $('orniProtList');
   if (!list) return;
-  let sessions;
-  try { sessions = JSON.parse(localStorage.getItem('waldohr.pk.sessions') || '[]'); } catch { sessions = []; }
-  if (!sessions.length) {
-    list.innerHTML = '<div class="infoblock" style="margin-top:14px"><p style="color:var(--muted);font-size:13px;text-align:center;padding:8px 0">Noch keine Zählsitzungen gespeichert.<br>Starte eine Punkt-Zählung im Überwachungs-Tab.</p></div>';
+  let pkSessions, txSessions;
+  try { pkSessions = JSON.parse(localStorage.getItem('waldohr.pk.sessions') || '[]'); } catch { pkSessions = []; }
+  try { txSessions = JSON.parse(localStorage.getItem('waldohr.tx.sessions') || '[]'); } catch { txSessions = []; }
+  const merged = [
+    ...pkSessions.map((s, i) => ({ ...s, _type: 'pk', _idx: i })),
+    ...txSessions.map((s, i) => ({ ...s, _type: 'tx', _idx: i })),
+  ].sort((a, b) => b.ts - a.ts);
+  if (!merged.length) {
+    list.innerHTML = '<div class="infoblock" style="margin-top:14px"><p style="color:var(--muted);font-size:13px;text-align:center;padding:8px 0">Noch keine Zählsitzungen gespeichert.<br>Starte eine Punkt- oder Transekt-Zählung im Überwachungs-Tab.</p></div>';
     return;
   }
+  const fmtDist = km => km < 1 ? Math.round(km * 1000) + ' m' : km.toFixed(2) + ' km';
   list.innerHTML = '';
-  sessions.forEach((s, i) => {
+  merged.forEach((s, i) => {
+    const isTx = s._type === 'tx';
     const d = new Date(s.ts);
     const dateStr = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const timeStr = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-    const label = s.name || ('Sitzung vom ' + dateStr);
+    const label = s.name || ((isTx ? '🗺️ Transekt vom ' : '📍 Sitzung vom ') + dateStr);
 
     const card = document.createElement('div');
     card.className = 'infoblock';
@@ -344,7 +458,7 @@ function _renderProtokolle() {
     header.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;cursor:pointer;-webkit-tap-highlight-color:transparent';
     header.innerHTML = `<div style="flex:1;min-width:0">
       <div style="font-weight:700;font-size:14px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:2px">${dateStr} · ${timeStr}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">${dateStr} · ${timeStr}${isTx ? ' · ' + fmtDist(s.distKm || 0) : ''}</div>
     </div>
     <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
       <div style="font-size:17px;font-weight:700;color:var(--lime)">${s.species ? s.species.length : 0} Arten</div>
@@ -358,29 +472,45 @@ function _renderProtokolle() {
     body.style.marginTop = '8px';
 
     header.addEventListener('click', async e => {
-      if (e.target.closest('.prot-del-btn')) return;
+      if (e.target.closest('.prot-del-btn') || e.target.closest('.prot-gpx-btn')) return;
       if (body.hidden) {
         body.hidden = false;
         body.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:4px 0">Lade…</div>';
         try {
           const allDets = qualifyingDetections(await allDetections());
-          const endTs = (s.startTs || s.ts) + PK_SECS * 1000;
-          const inWindow = allDets.filter(det => det.ts >= (s.startTs || s.ts - PK_SECS * 1000) && det.ts <= endTs);
+          const winStart = s.startTs || s.ts - PK_SECS * 1000;
+          const winEnd = isTx ? (s.endTs || s.ts) : winStart + PK_SECS * 1000;
+          const inWindow = allDets.filter(det => det.ts >= winStart && det.ts <= winEnd);
+          let html = '';
+          if (isTx && s.points?.length) {
+            html += `<button class="prot-gpx-btn" style="width:100%;padding:9px;border-radius:10px;background:var(--glass);border:1px solid var(--stroke);color:var(--ink);font-size:12px;cursor:pointer;font-family:inherit;margin-bottom:8px">📍 GPX-Route exportieren</button>`;
+          }
           if (!inWindow.length) {
-            body.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:4px 0">Keine Erkennungen im Zeitfenster gefunden</div>';
+            html += '<div style="color:var(--faint);font-size:12px;padding:4px 0">Keine Erkennungen im Zeitfenster gefunden</div>';
           } else {
             const bySpecies = {};
             for (const det of inWindow) {
               if (!bySpecies[det.key]) bySpecies[det.key] = { name: det.species, times: [] };
               bySpecies[det.key].times.push(new Date(det.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
             }
-            body.innerHTML = Object.values(bySpecies).map(sp =>
+            html += Object.values(bySpecies).map(sp =>
               `<div style="border-top:1px solid var(--stroke);padding:6px 0">
                 <div style="font-weight:600;font-size:13px;color:var(--ink);margin-bottom:3px">${sp.name}</div>
                 ${sp.times.map(t => `<div style="font-size:11px;color:var(--muted);padding:1px 0">· ${t}</div>`).join('')}
               </div>`
             ).join('');
           }
+          body.innerHTML = html;
+          body.querySelector('.prot-gpx-btn')?.addEventListener('click', ev => {
+            ev.stopPropagation();
+            const date = new Date(s.startTs || s.ts).toLocaleDateString('de-DE');
+            const pts = s.points.map(p => {
+              const t = new Date(p.ts).toISOString();
+              return `      <trkpt lat="${p.lat.toFixed(6)}" lon="${p.lng.toFixed(6)}"><time>${t}</time></trkpt>`;
+            }).join('\n');
+            const gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="WaldOhr" xmlns="http://www.topografix.com/GPX/1/1">\n  <trk><name>WaldOhr-Transekt ${date}</name><trkseg>\n${pts}\n  </trkseg></trk>\n</gpx>`;
+            _dlBlob(new Blob([gpx], { type: 'application/gpx+xml' }), 'waldohr-transekt-' + todayStr() + '.gpx');
+          });
         } catch { body.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:4px 0">Fehler beim Laden</div>'; }
       } else {
         body.hidden = true;
@@ -390,9 +520,10 @@ function _renderProtokolle() {
     header.querySelector('.prot-del-btn').addEventListener('click', e => {
       e.stopPropagation();
       try {
-        let ss = JSON.parse(localStorage.getItem('waldohr.pk.sessions') || '[]');
-        ss.splice(i, 1);
-        localStorage.setItem('waldohr.pk.sessions', JSON.stringify(ss));
+        const key = isTx ? 'waldohr.tx.sessions' : 'waldohr.pk.sessions';
+        let ss = JSON.parse(localStorage.getItem(key) || '[]');
+        ss.splice(s._idx, 1);
+        localStorage.setItem(key, JSON.stringify(ss));
         _renderProtokolle();
       } catch {}
     });
@@ -476,4 +607,5 @@ export function initOrni() {
   }
   _initDU();
   _initPunktZaehlung();
+  _initTransekt();
 }

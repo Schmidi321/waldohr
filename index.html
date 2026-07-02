@@ -184,7 +184,11 @@
         </div>
         <div class="infoblock" style="margin-top:14px">
           <h3><span style="font-size:15px">🗺️</span> Transekt-Zählung</h3>
-          <p>GPS-Route mit Artenliste — kommt bald.</p>
+          <p style="margin-bottom:12px">Läuft eine Strecke ab — GPS zeichnet die Route auf, das Mikrofon lauscht durchgehend. Du beendest manuell am Ziel.</p>
+          <div id="txTimer" style="font-size:44px;font-weight:700;font-family:'Outfit',sans-serif;color:var(--lime);text-align:center;letter-spacing:3px;margin:10px 0 2px">0:00</div>
+          <div id="txDist" style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:14px">0 m zurückgelegt</div>
+          <button class="btn ghost" id="txStart" style="width:100%">Transekt starten</button>
+          <div id="txSpecies" style="margin-top:14px" hidden></div>
         </div>
       </div>
 
