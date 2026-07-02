@@ -821,7 +821,7 @@ export async function renderMap(dets) {
 
 // Mini-Männchen-Icon fürs "Du bist hier"/Partner-Marker: Pulsring + Figur + Richtungspfeil
 // (Pfeil wird nur eingeblendet/gedreht, sobald sich die Position tatsächlich ändert).
-const PERSON_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="7" r="3.2"/><path d="M12 11c-3.5 0-6 2.2-6 5.5V21h12v-4.5c0-3.3-2.5-5.5-6-5.5z"/></svg>';
+const PERSON_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6.5" r="4.2"/><path d="M12 13c-4.7 0-8.5 2.8-8.5 6.3V22h17v-2.7c0-3.5-3.8-6.3-8.5-6.3z"/></svg>';
 function _walkerIconHtml(kind) {
   return `<span class="${kind}-pulse"></span><span class="map-heading-arrow"></span><span class="${kind}-figure">${PERSON_SVG}</span>`;
 }

@@ -124,7 +124,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v82';
+const APP_VERSION = 'v84';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -2102,6 +2102,7 @@ function initPairing() {
   // Sobald die Verbindung steht, an js/locate.js + js/chat.js übergeben — beides läuft im
   // Hintergrund weiter, auch wenn der Nutzer das Kopplungs-Fenster schließt und normal
   // weiterlauscht.
+  let reconnectGraceTimer = null;
   function onPaired(dc) {
     isConnected = true;
     locate.attach(dc, showLocateResult, updatePeerMarker);
@@ -2111,9 +2112,28 @@ function initPairing() {
     setPairChip(true, 'Verbunden');
     if (stopQualityMonitor) stopQualityMonitor();
     stopQualityMonitor = monitorQuality(activePc, ({ level }) => updatePairSignal(level));
-    // Verbindungsabbruch (Partner geht offline, WLAN weg, etc.) sauber erkennen und aufräumen.
+    // Ein kompletter, stiller Neuaufbau ist mit dem QR-Kopplungsansatz nicht möglich (kein
+    // laufender Signalisierungskanal für ein neues Angebot/Antwort nach dem einmaligen Scan).
+    // ABER: kurze Wackler (WLAN-Hänger, Bildschirm aus) kann WebRTC oft selbst überstehen, wenn
+    // man ihm etwas Zeit gibt, statt sofort alles zu kappen — 'disconnected' heißt nicht
+    // zwangsläufig 'endgültig weg', erst 'failed'/'closed' oder ein anhaltendes 'disconnected'.
     activePc.addEventListener('connectionstatechange', () => {
-      if (['disconnected', 'failed', 'closed'].includes(activePc?.connectionState)) onDisconnected();
+      const state = activePc?.connectionState;
+      if (state === 'connected') {
+        if (reconnectGraceTimer) { clearTimeout(reconnectGraceTimer); reconnectGraceTimer = null; }
+        setPairChip(true, 'Verbunden');
+      } else if (state === 'disconnected') {
+        setPairChip(true, 'Verbinde neu…');
+        if (!reconnectGraceTimer) {
+          reconnectGraceTimer = setTimeout(() => {
+            reconnectGraceTimer = null;
+            if (activePc?.connectionState !== 'connected') onDisconnected();
+          }, 12000);
+        }
+      } else if (state === 'failed' || state === 'closed') {
+        if (reconnectGraceTimer) { clearTimeout(reconnectGraceTimer); reconnectGraceTimer = null; }
+        onDisconnected();
+      }
     });
   }
 
@@ -2124,6 +2144,7 @@ function initPairing() {
     locate.detach();
     chat.detach();
     activePc = null;
+    showInfoToast('📡 Verbindung zum Partner verloren', 'Nicht automatisch behebbar — bitte neu koppeln.', '📡', () => openBtn.click(), 'Neu koppeln');
   }
 
   function showStep_(name) {
@@ -2151,6 +2172,7 @@ function initPairing() {
     if (isConnected) {
       showStep_('connected');
     } else {
+      if (reconnectGraceTimer) { clearTimeout(reconnectGraceTimer); reconnectGraceTimer = null; }
       if (activePc) { try { activePc.close(); } catch {} activePc = null; }
       locate.detach();
       chat.detach();
