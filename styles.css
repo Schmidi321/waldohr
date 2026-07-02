@@ -230,6 +230,13 @@ body.mic-ready .orb{opacity:.72}
 .leaflet-control-attribution a{color:var(--muted)!important}
 .leaflet-control-zoom a{background:#0e2a1f!important;color:var(--ink)!important;border-color:var(--stroke)!important}
 .leaflet-control-zoom a:hover{background:#143626!important}
+/* Namens-Vorschau-Popup beim Antippen eines Fund-Punkts (vor dem vollen Detail-Fenster) */
+.map-pin-popup-wrap .leaflet-popup-content-wrapper{background:#0e2a1f!important;color:var(--ink)!important;border:1px solid var(--stroke)!important;border-radius:14px!important;box-shadow:0 6px 20px rgba(0,0,0,.5)!important}
+.map-pin-popup-wrap .leaflet-popup-tip{background:#0e2a1f!important;border:1px solid var(--stroke)!important}
+.map-pin-popup-wrap .leaflet-popup-content{margin:8px 10px!important}
+.map-pin-popup{display:flex;align-items:center;gap:7px;cursor:pointer;font-family:'Outfit',sans-serif}
+.map-pin-popup .mp-ico{font-size:16px}
+.map-pin-popup .mp-name{font-size:13px;font-weight:600;color:var(--ink)}
 .maplegend{display:flex;gap:14px;justify-content:center;margin-top:12px;font-size:11px;color:var(--muted)}
 .maplegend span{display:flex;align-items:center;gap:6px}
 .maplegend i{width:9px;height:9px;border-radius:50%}
@@ -388,17 +395,20 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .favstar{flex:0 0 auto;background:none;border:none;cursor:pointer;font-size:22px;line-height:1;color:var(--faint);padding:4px}
 .favstar.on{color:var(--lime)}
 
-/* "Du bist hier"-Marker auf der Karte */
-.you-marker{position:relative;width:20px;height:20px}
-.you-dot{position:absolute;inset:5px;border-radius:50%;background:var(--cyan);border:2px solid #04130d;box-shadow:0 0 0 1px #67e8f988}
-.you-pulse{position:absolute;inset:0;border-radius:50%;background:#67e8f955;animation:pulseyou 2s ease-out infinite}
+/* "Du bist hier"-Marker auf der Karte — Mini-Männchen statt schlichtem Punkt, mit kleinem
+   Richtungspfeil, der sich dreht, sobald sich die Position ändert (Bewegungsrichtung). */
+.you-marker,.peer-marker{position:relative;width:26px;height:26px}
+.you-pulse,.peer-pulse{position:absolute;inset:3px;border-radius:50%;animation:pulseyou 2s ease-out infinite}
+.you-pulse{background:#67e8f955}
+.peer-pulse{background:#fbbf2455}
 @keyframes pulseyou{0%{transform:scale(.4);opacity:.9}100%{transform:scale(2.2);opacity:0}}
-
-/* Position des gekoppelten Partner-Handys (js/locate.js) — gleiches Muster wie "Du bist hier",
-   andere Farbe (amber statt cyan) zur klaren Unterscheidung. */
-.peer-marker{position:relative;width:20px;height:20px}
-.peer-dot{position:absolute;inset:5px;border-radius:50%;background:var(--amber, #fbbf24);border:2px solid #04130d;box-shadow:0 0 0 1px #fbbf2488}
-.peer-pulse{position:absolute;inset:0;border-radius:50%;background:#fbbf2455;animation:pulseyou 2s ease-out infinite}
+.you-figure,.peer-figure{position:absolute;inset:3px;border-radius:50%;display:grid;place-items:center;border:2px solid #04130d;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+.you-figure{background:var(--cyan);color:#04130d}
+.peer-figure{background:var(--amber,#fbbf24);color:#04130d}
+.you-figure svg,.peer-figure svg{width:12px;height:12px}
+.map-heading-arrow{position:absolute;top:-7px;left:50%;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:7px solid var(--cyan);transform-origin:50% 16px;transition:transform .4s ease-out;opacity:0}
+.map-heading-arrow.visible{opacity:1}
+.peer-marker .map-heading-arrow{border-bottom-color:var(--amber,#fbbf24)}
 
 /* Kurznachrichten zwischen gekoppelten Handys (js/chat.js) im Kopplungs-Modal */
 .pair-chat-list{max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:10px;scrollbar-width:none;padding:2px}

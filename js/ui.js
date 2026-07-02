@@ -790,9 +790,18 @@ export async function renderMap(dets) {
   markersLayer.clearLayers();
   // Funde von Arten aus der Beobachtungsliste heben sich farblich ab — unabhängig von ihrer Seltenheit.
   const colorFor = d => FAVORITES.has(d.key) ? '#a3e635' : d.rarity === 'rare' ? '#fbbf24' : d.rarity === 'mammal' ? '#fb7185' : '#34d399';
+  const iconFor = d => FAVORITES.has(d.key) ? '⭐' : d.rarity === 'rare' ? '✨' : d.rarity === 'mammal' ? '🦌' : '🐦';
   for (const d of recentGeo) {
     const m = L.circleMarker([d.lat, d.lng], { radius: 7, color: colorFor(d), weight: 2, fillColor: colorFor(d), fillOpacity: .8 });
-    m.on('click', () => openModal(d.key));
+    // Erst Name+Icon als Vorschau (Leaflet-Popup) statt direkt das volle Detail-Fenster zu öffnen —
+    // bei dicht liegenden Punkten sieht man so, welchen man erwischt hat, bevor man reinklickt.
+    const popupEl = document.createElement('div');
+    popupEl.className = 'map-pin-popup';
+    const icoSpan = document.createElement('span'); icoSpan.className = 'mp-ico'; icoSpan.textContent = iconFor(d);
+    const nameSpan = document.createElement('span'); nameSpan.className = 'mp-name'; nameSpan.textContent = d.species || 'Unbekannt';
+    popupEl.append(icoSpan, nameSpan);
+    popupEl.onclick = () => openModal(d.key);
+    m.bindPopup(popupEl, { closeButton: false, offset: [0, -4], className: 'map-pin-popup-wrap' });
     m.addTo(markersLayer);
   }
 
@@ -810,15 +819,49 @@ export async function renderMap(dets) {
   setTimeout(() => mapInst && mapInst.invalidateSize(), 60);
 }
 
+// Mini-Männchen-Icon fürs "Du bist hier"/Partner-Marker: Pulsring + Figur + Richtungspfeil
+// (Pfeil wird nur eingeblendet/gedreht, sobald sich die Position tatsächlich ändert).
+const PERSON_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="7" r="3.2"/><path d="M12 11c-3.5 0-6 2.2-6 5.5V21h12v-4.5c0-3.3-2.5-5.5-6-5.5z"/></svg>';
+function _walkerIconHtml(kind) {
+  return `<span class="${kind}-pulse"></span><span class="map-heading-arrow"></span><span class="${kind}-figure">${PERSON_SVG}</span>`;
+}
+
+// Bewegt einen Marker weich von seiner aktuellen Position zur neuen (statt hart zu springen) und
+// dreht den kleinen Richtungspfeil in die Bewegungsrichtung. Bei der allerersten Platzierung
+// (kein vorheriger Punkt) wird direkt gesetzt, ohne zu gleiten (nichts, wovon man "herkommen" könnte).
+function _glideMarker(marker, fromPos, toPos, durMs = 900) {
+  if (!fromPos) { marker.setLatLng([toPos.lat, toPos.lng]); return; }
+  const el = marker.getElement();
+  const arrow = el && el.querySelector('.map-heading-arrow');
+  const distM = haversineKm(fromPos, toPos) * 1000;
+  if (arrow && distM > 1.5) {
+    const brg = bearingDeg(fromPos, toPos);
+    arrow.style.transform = `rotate(${brg}deg)`;
+    arrow.classList.add('visible');
+  }
+  const t0 = performance.now();
+  const tick = now => {
+    const p = Math.min(1, (now - t0) / durMs);
+    const lat = fromPos.lat + (toPos.lat - fromPos.lat) * p;
+    const lng = fromPos.lng + (toPos.lng - fromPos.lng) * p;
+    marker.setLatLng([lat, lng]);
+    if (p < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
 // "Du bist hier"-Marker — eigene aktuelle Position, unabhängig von den Fund-Pins.
+let _lastUserPos = null;
 function updateUserMarker() {
   if (!mapInst || !window.L || !livePos) return;
   const L = window.L;
   if (!userMarker) {
-    const icon = L.divIcon({ className: 'you-marker', html: '<span class="you-pulse"></span><span class="you-dot"></span>', iconSize: [20, 20], iconAnchor: [10, 10] });
+    const icon = L.divIcon({ className: 'you-marker', html: _walkerIconHtml('you'), iconSize: [26, 26], iconAnchor: [13, 13] });
     userMarker = L.marker([livePos.lat, livePos.lng], { icon, interactive: false, zIndexOffset: 1000 }).addTo(mapInst);
+    _lastUserPos = livePos;
   } else {
-    userMarker.setLatLng([livePos.lat, livePos.lng]);
+    _glideMarker(userMarker, _lastUserPos, livePos);
+    _lastUserPos = livePos;
   }
 }
 
@@ -827,19 +870,22 @@ function updateUserMarker() {
 // wieder (z.B. wenn die Kopplung getrennt wird). Wird gemerkt, auch bevor die Karte je geöffnet
 // wurde (mapInst existiert dann noch nicht) — beim nächsten renderMap() zieht _applyPeerMarker
 // die zwischengespeicherte Position dann nach.
+let _lastPeerAnimPos = null;
 export function updatePeerMarker(pos) {
   lastPeerPos = pos;
   _applyPeerMarker();
 }
 function _applyPeerMarker() {
-  if (!lastPeerPos) { if (peerMarker) { peerMarker.remove(); peerMarker = null; } return; }
+  if (!lastPeerPos) { if (peerMarker) { peerMarker.remove(); peerMarker = null; } _lastPeerAnimPos = null; return; }
   if (!mapInst || !window.L) return;
   const L = window.L;
   if (!peerMarker) {
-    const icon = L.divIcon({ className: 'peer-marker', html: '<span class="peer-pulse"></span><span class="peer-dot"></span>', iconSize: [20, 20], iconAnchor: [10, 10] });
+    const icon = L.divIcon({ className: 'peer-marker', html: _walkerIconHtml('peer'), iconSize: [26, 26], iconAnchor: [13, 13] });
     peerMarker = L.marker([lastPeerPos.lat, lastPeerPos.lng], { icon, interactive: false, zIndexOffset: 999 }).addTo(mapInst);
+    _lastPeerAnimPos = lastPeerPos;
   } else {
-    peerMarker.setLatLng([lastPeerPos.lat, lastPeerPos.lng]);
+    _glideMarker(peerMarker, _lastPeerAnimPos, lastPeerPos);
+    _lastPeerAnimPos = lastPeerPos;
   }
 }
 
