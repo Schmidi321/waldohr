@@ -834,10 +834,14 @@
           </div>
           <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">💬 Kurznachrichten</div>
           <div id="pairChatList" class="pair-chat-list"></div>
-          <div style="display:flex;gap:8px">
+          <div style="display:flex;gap:8px;align-items:center">
+            <button id="pairVoiceBtn" class="pair-voice-btn" aria-label="Sprachnachricht — halten zum Aufnehmen" title="Halten zum Aufnehmen">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="17" height="17"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3"/></svg>
+            </button>
             <input type="text" id="pairChatInput" placeholder="Nachricht…" maxlength="300" class="pair-chat-input">
             <button id="pairChatSend" class="pair-chat-send" aria-label="Senden">➤</button>
           </div>
+          <div id="pairVoiceStatus" class="pair-voice-status" hidden>🔴 Aufnahme… <span id="pairVoiceTimer">0:00</span> — loslassen zum Senden</div>
         </div>
 
         <div class="actions">

@@ -124,7 +124,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v81';
+const APP_VERSION = 'v82';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1992,10 +1992,30 @@ function initPairing() {
     if (!chatList) return;
     const row = document.createElement('div');
     row.className = 'pair-chat-row ' + (msg.from === 'me' ? 'me' : 'peer');
-    const bubble = document.createElement('div');
-    bubble.className = 'pair-chat-bubble';
-    bubble.textContent = msg.text;
-    row.appendChild(bubble);
+    if (msg.kind === 'voice') {
+      const bubble = document.createElement('div');
+      bubble.className = 'pair-chat-bubble pair-chat-voice';
+      const audioEl = document.createElement('audio');
+      audioEl.src = msg.url; audioEl.preload = 'metadata';
+      const playBtn = document.createElement('button');
+      playBtn.type = 'button'; playBtn.className = 'pair-chat-voice-btn';
+      playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+      playBtn.onclick = () => {
+        if (audioEl.paused) { audioEl.play().catch(() => {}); playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>'; }
+        else { audioEl.pause(); }
+      };
+      audioEl.onended = () => { playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'; };
+      const durSpan = document.createElement('span');
+      durSpan.className = 'pair-chat-voice-dur';
+      durSpan.textContent = '🎙️ ' + (msg.durationSec || 0) + 's';
+      bubble.append(playBtn, durSpan, audioEl);
+      row.appendChild(bubble);
+    } else {
+      const bubble = document.createElement('div');
+      bubble.className = 'pair-chat-bubble';
+      bubble.textContent = msg.text;
+      row.appendChild(bubble);
+    }
     chatList.appendChild(row);
     chatList.scrollTop = chatList.scrollHeight;
   }
@@ -2004,7 +2024,8 @@ function initPairing() {
     appendChatBubble(msg);
     // Wenn das Kopplungs-Fenster gerade nicht offen ist, trotzdem kurz benachrichtigen.
     if (!modal.classList.contains('open')) {
-      showInfoToast('💬 Nachricht vom Partner', msg.text, '💬');
+      const preview = msg.kind === 'voice' ? '🎙️ Sprachnachricht (' + (msg.durationSec || 0) + 's)' : msg.text;
+      showInfoToast('💬 Nachricht vom Partner', preview, '💬');
     }
   }
 
@@ -2017,6 +2038,66 @@ function initPairing() {
   }
   if (chatSend) chatSend.onclick = sendChat;
   if (chatInput) chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
+
+  // ---- Push-to-Talk: Knopf halten = aufnehmen, loslassen = sofort senden (wie Walkie-Talkie) ----
+  const voiceBtn = document.getElementById('pairVoiceBtn');
+  const voiceStatus = document.getElementById('pairVoiceStatus');
+  const voiceTimer = document.getElementById('pairVoiceTimer');
+  let voiceMr = null, voiceChunks = [], voiceStream = null, voiceOwnStream = false, voiceT0 = 0, voiceTimerInt = null, voiceMaxTimeout = null;
+
+  async function startVoiceRecording() {
+    if (voiceMr || !chat.isActive()) return;
+    // Laufendes Mikro (Lauschen-Modus) wiederverwenden statt ein zweites Mal um Erlaubnis zu
+    // fragen — nur wenn nötig eine eigene, separate Aufnahme anfordern.
+    if (audio.running && audio.stream) { voiceStream = audio.stream; voiceOwnStream = false; }
+    else {
+      try { voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true }); voiceOwnStream = true; }
+      catch (e) { console.warn('ptt mic', e); return; }
+    }
+    let type = '';
+    for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { type = t; break; }
+    }
+    try { voiceMr = type ? new MediaRecorder(voiceStream, { mimeType: type }) : new MediaRecorder(voiceStream); }
+    catch (e) { console.warn('ptt mr', e); if (voiceOwnStream) voiceStream.getTracks().forEach(t => t.stop()); voiceStream = null; return; }
+    voiceChunks = [];
+    voiceMr.ondataavailable = e => { if (e.data?.size) voiceChunks.push(e.data); };
+    voiceMr.start();
+    voiceT0 = Date.now();
+    voiceBtn.classList.add('recording');
+    if (voiceStatus) voiceStatus.hidden = false;
+    voiceTimerInt = setInterval(() => {
+      const s = Math.floor((Date.now() - voiceT0) / 1000);
+      if (voiceTimer) voiceTimer.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    }, 200);
+    voiceMaxTimeout = setTimeout(stopVoiceRecording, chat.MAX_VOICE_SECONDS * 1000);
+  }
+
+  function stopVoiceRecording() {
+    if (!voiceMr) return;
+    clearInterval(voiceTimerInt); voiceTimerInt = null;
+    clearTimeout(voiceMaxTimeout); voiceMaxTimeout = null;
+    voiceBtn.classList.remove('recording');
+    if (voiceStatus) voiceStatus.hidden = true;
+    const durationSec = (Date.now() - voiceT0) / 1000;
+    const mr = voiceMr; voiceMr = null;
+    mr.onstop = async () => {
+      if (voiceOwnStream && voiceStream) voiceStream.getTracks().forEach(t => t.stop());
+      voiceStream = null;
+      if (!voiceChunks.length || durationSec < 0.4) return; // zu kurz, vermutlich Fehlklick
+      const blob = new Blob(voiceChunks, { type: voiceChunks[0].type || 'audio/webm' });
+      const msg = await chat.sendVoice(blob, durationSec);
+      if (msg) appendChatBubble(msg);
+    };
+    try { mr.stop(); } catch {}
+  }
+
+  if (voiceBtn) {
+    voiceBtn.addEventListener('pointerdown', e => { e.preventDefault(); startVoiceRecording(); });
+    voiceBtn.addEventListener('pointerup', stopVoiceRecording);
+    voiceBtn.addEventListener('pointerleave', stopVoiceRecording);
+    voiceBtn.addEventListener('pointercancel', stopVoiceRecording);
+  }
 
   // Sobald die Verbindung steht, an js/locate.js + js/chat.js übergeben — beides läuft im
   // Hintergrund weiter, auch wenn der Nutzer das Kopplungs-Fenster schließt und normal

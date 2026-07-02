@@ -422,6 +422,18 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .pair-chat-input{flex:1;padding:10px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:14px;font-family:inherit;outline:none;min-width:0}
 .pair-chat-send{padding:0 16px;border-radius:12px;background:var(--lime);color:#04130d;border:none;font-weight:700;cursor:pointer;font-family:inherit;flex-shrink:0}
 
+/* Push-to-Talk (halten zum Aufnehmen, loslassen zum Senden) — wie ein Walkie-Talkie, nutzt den
+   gleichen Datenkanal wie der Text-Chat, kein offener Dauerkanal. */
+.pair-voice-btn{width:40px;height:40px;border-radius:50%;background:var(--glass);border:1px solid var(--stroke);color:var(--ink);display:grid;place-items:center;cursor:pointer;flex-shrink:0;transition:.15s;touch-action:none}
+.pair-voice-btn.recording{background:var(--rose,#fb7185);border-color:var(--rose,#fb7185);color:#1a0508;animation:recpulse 1.2s ease-in-out infinite;transform:scale(1.08)}
+.pair-voice-status{font-size:11px;color:var(--rose,#fb7185);text-align:center;margin-top:8px;font-weight:600}
+.pair-voice-status[hidden]{display:none}
+.pair-chat-voice{display:flex;align-items:center;gap:8px;min-width:120px}
+.pair-chat-voice-btn{width:28px;height:28px;border-radius:50%;border:none;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+.pair-chat-row.me .pair-chat-voice-btn{background:#04130d;color:var(--lime)}
+.pair-chat-row.peer .pair-chat-voice-btn{background:var(--lime);color:#04130d}
+.pair-chat-voice-dur{font-size:12px;font-variant-numeric:tabular-nums}
+
 /* Fotografen-Wecker: Klapp-Popup Lichtphasen */
 .fw-detail-popup{background:rgba(0,0,0,.3);border:1px solid var(--stroke);border-radius:14px;padding:12px 14px;margin-top:10px}
 .fw-detail-popup[hidden]{display:none}
