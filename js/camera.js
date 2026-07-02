@@ -11,6 +11,7 @@ let _zoomDir = 'none', _zoomSpeed = 'slow', _zoomAnimTimer = null;
 let _azDelayTimer = null, _intervalTimer = null, _burstActive = false;
 let _intervalCountdown = null, _intervalNext = 0;
 let _facingMode = 'environment';
+let _lapseTimer = null, _lapseFrames = [], _lapseIntervalSec = 2;
 
 // ---- Geräte aufzählen (Labels erst nach Genehmigung verfügbar) ----
 async function _enumerateDevices() {
@@ -361,6 +362,8 @@ function _cleanup() {
   _burstActive = false;
   if (_intervalTimer) { clearInterval(_intervalTimer); _intervalTimer = null; }
   if (_intervalCountdown) { _intervalCountdown.remove(); _intervalCountdown = null; } _intervalNext = 0;
+  if (_lapseTimer) { clearInterval(_lapseTimer); _lapseTimer = null; } _lapseFrames = [];
+  const building = document.getElementById('camLapseBuilding'); if (building) building.hidden = true;
   if (_mr && _mr.state === 'recording') _mr.stop();
   _mr = null; _mrChunks = [];
   if (_stream)  { _stream.getTracks().forEach(t => t.stop());  _stream = null; }
@@ -385,10 +388,11 @@ function _updateModeUI() {
   const isDual = _mode === 'tele-wide' || _mode === 'front-back';
   document.getElementById('camModePhoto')?.classList.toggle('on', _mode === 'photo');
   document.getElementById('camModeVideo')?.classList.toggle('on', _mode === 'video');
+  document.getElementById('camModeLapse')?.classList.toggle('on', _mode === 'lapse');
   document.getElementById('camModeDual')?.classList.toggle('on', _mode === 'tele-wide');
   document.getElementById('camModeFrontBack')?.classList.toggle('on', _mode === 'front-back');
   const cap = document.getElementById('camCapture');
-  if (cap) cap.className = 'cam-shutter' + (_mode === 'video' ? ' video' : '');
+  if (cap) cap.className = 'cam-shutter' + (_mode === 'video' || _mode === 'lapse' ? ' video' : '');
   // Auto-Zoom: Toggle-Button nur im Video-Modus sichtbar; Panel bleibt collapsed beim Moduswechsel
   const azToggle = document.getElementById('camAzToggle');
   if (azToggle) azToggle.hidden = _mode !== 'video';
@@ -397,6 +401,14 @@ function _updateModeUI() {
     if (azWrap) azWrap.hidden = true;
     if (azToggle) azToggle.classList.remove('active');
     if (_intervalTimer) { clearInterval(_intervalTimer); _intervalTimer = null; const ib = document.getElementById('camInterval'); if (ib) ib.classList.remove('on'); }
+  }
+  // Zeitraffer-Intervallauswahl nur im Zeitraffer-Modus sichtbar
+  const lapseWrap = document.getElementById('camLapseWrap');
+  if (lapseWrap) lapseWrap.hidden = _mode !== 'lapse';
+  if (_mode !== 'lapse' && _lapseTimer) {
+    clearInterval(_lapseTimer); _lapseTimer = null; _lapseFrames = [];
+    const ind = document.getElementById('camRecIndicator'); if (ind) { ind.hidden = true; ind.textContent = '⏺ REC'; }
+    const cap2 = document.getElementById('camCapture'); if (cap2) cap2.classList.remove('recording');
   }
   // Burst/Interval nur im Fotomodus sichtbar
   const photoExtras = document.getElementById('camPhotoExtras');
@@ -448,6 +460,96 @@ function _toggleVideo() {
   const cap = document.getElementById('camCapture'); if (cap) cap.classList.add('recording');
 }
 
+// ---- Zeitraffer: Einzelbilder in festem Intervall sammeln, danach zu Video zusammensetzen ----
+function _toggleLapse() {
+  if (_lapseTimer) {
+    clearInterval(_lapseTimer); _lapseTimer = null;
+    const ind = document.getElementById('camRecIndicator'); if (ind) { ind.hidden = true; ind.textContent = '⏺ REC'; }
+    const cap = document.getElementById('camCapture'); if (cap) cap.classList.remove('recording');
+    _buildLapseVideo();
+    return;
+  }
+  if (!_stream) return;
+  _lapseFrames = [];
+  _captureLapseFrame();
+  _lapseTimer = setInterval(_captureLapseFrame, _lapseIntervalSec * 1000);
+  const ind = document.getElementById('camRecIndicator'); if (ind) { ind.hidden = false; ind.textContent = '⏺ 1 Bild'; }
+  const cap = document.getElementById('camCapture'); if (cap) cap.classList.add('recording');
+}
+
+function _captureLapseFrame() {
+  const video = document.getElementById('camVideo');
+  const cv = document.getElementById('camCanvas');
+  if (!video || !cv) return;
+  cv.width = video.videoWidth || 1280; cv.height = video.videoHeight || 720;
+  cv.getContext('2d').drawImage(video, 0, 0, cv.width, cv.height);
+  cv.toBlob(blob => {
+    if (!blob) return;
+    _lapseFrames.push(blob);
+    const ind = document.getElementById('camRecIndicator');
+    if (ind && !ind.hidden) ind.textContent = '⏺ ' + _lapseFrames.length + (_lapseFrames.length === 1 ? ' Bild' : ' Bilder');
+  }, 'image/jpeg', 0.85);
+}
+
+function _blobToImage(blob) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = () => { URL.revokeObjectURL(url); res(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Bild konnte nicht geladen werden')); };
+    img.src = url;
+  });
+}
+
+// Setzt gesammelte Einzelbilder zu einem schnellen Video zusammen — läuft über
+// HTMLCanvasElement.captureStream(), das (anders als HTMLVideoElement.captureStream) auch in
+// Browsern ohne Video-Element-Capture-Support (z.B. iOS Safari) funktioniert.
+async function _buildLapseVideo() {
+  const frames = _lapseFrames; _lapseFrames = [];
+  if (frames.length < 2) return;
+  const building = document.getElementById('camLapseBuilding');
+  if (building) building.hidden = false;
+  const FPS = 8;
+  try {
+    const cv = document.createElement('canvas');
+    const firstImg = await _blobToImage(frames[0]);
+    cv.width = firstImg.width; cv.height = firstImg.height;
+    const ctx = cv.getContext('2d');
+    ctx.drawImage(firstImg, 0, 0);
+
+    if (typeof cv.captureStream !== 'function') throw new Error('Zeitraffer-Erstellung wird von diesem Browser nicht unterstützt');
+    const stream = cv.captureStream(FPS);
+    let mime = '';
+    for (const t of ['video/mp4', 'video/webm;codecs=vp9', 'video/webm']) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { mime = t; break; }
+    }
+    const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    const chunks = [];
+    mr.ondataavailable = e => { if (e.data?.size) chunks.push(e.data); };
+    const done = new Promise(res => { mr.onstop = res; });
+    mr.start();
+
+    const holdMs = 1000 / FPS;
+    for (let i = 1; i < frames.length; i++) {
+      const img = await _blobToImage(frames[i]);
+      ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      await new Promise(r => setTimeout(r, holdMs));
+    }
+    await new Promise(r => setTimeout(r, holdMs * 2)); // letztes Bild noch halten
+    mr.stop();
+    await done;
+
+    const blob = new Blob(chunks, { type: mime || 'video/webm' });
+    if (building) building.hidden = true;
+    if (!blob.size) { console.warn('lapse build empty'); return; }
+    const cb = _onCapture; _close();
+    if (cb) cb({ blob, mime: mime || 'video/webm', kind: 'video' });
+  } catch (e) {
+    console.warn('lapse build', e);
+    if (building) building.hidden = true;
+  }
+}
+
 // ---- Öffentliche API ----
 export function openCamera(onCapture) {
   const modal = document.getElementById('cameraModal');
@@ -487,8 +589,24 @@ export function openCamera(onCapture) {
         if (pip) { pip.srcObject = null; pip.hidden = true; }
       }
     });
+    document.getElementById('camModeLapse')?.addEventListener('click', () => {
+      _mode = 'lapse'; _updateModeUI();
+      if (_stream2) {
+        _stream2.getTracks().forEach(t => t.stop()); _stream2 = null;
+        const pip = document.getElementById('camVideo2');
+        if (pip) { pip.srcObject = null; pip.hidden = true; }
+      }
+    });
+    [['1s', 'camLapse1s', 1], ['2s', 'camLapse2s', 2], ['5s', 'camLapse5s', 5], ['10s', 'camLapse10s', 10]].forEach(([, id, sec]) => {
+      document.getElementById(id)?.addEventListener('click', () => {
+        _lapseIntervalSec = sec;
+        ['camLapse1s', 'camLapse2s', 'camLapse5s', 'camLapse10s'].forEach(bid => document.getElementById(bid)?.classList.remove('on'));
+        document.getElementById(id)?.classList.add('on');
+      });
+    });
     document.getElementById('camCapture')?.addEventListener('click', () => {
       if (_mode === 'video') _toggleVideo();
+      else if (_mode === 'lapse') _toggleLapse();
       else _takePhoto();
     });
 
