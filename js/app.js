@@ -9,7 +9,7 @@ import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from
 import { openCamera } from './camera.js';
 import { initOrni } from './ornithologie.js';
 import { exportBackup, importBackup } from './backup.js';
-import { renderQR, scanQR, createOfferer, createAnswerer, waitForOpen } from './pairing.js';
+import { renderQR, scanQR, createOfferer, createAnswerer, waitForOpen, monitorQuality } from './pairing.js';
 import * as locate from './locate.js';
 import * as chat from './chat.js';
 
@@ -124,7 +124,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v76';
+const APP_VERSION = 'v77';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1878,27 +1878,57 @@ function registerSW() {
 }
 
 // ---- Ergebnis-Popup der gemeinsamen Ruf-Ortung (js/locate.js) ----
+// Kompass-Visualisierung: zeigt die Verbindungslinie zwischen den beiden Handys (Norden oben,
+// zuverlässig aus GPS berechnet) mit einem Leuchtpunkt an der näheren Seite. BEWUSST keine
+// einzelne "Pfeil zeigt genau zum Vogel"-Darstellung — mit nur zwei Empfängern ist die Vorne-
+// /Hinten-Seite der Basislinie physikalisch nicht auflösbar (bräuchte einen dritten Referenzpunkt),
+// eine scheinbar präzise Pfeilrichtung wäre also die Hälfte der Zeit einfach falsch.
+function _compassSvg(r) {
+  const size = 140, cx = size / 2, cy = size / 2, R = 54;
+  const rad = deg => (deg - 90) * Math.PI / 180; // 0° = oben (Norden)
+  const peerAngle = r.bearingToPeer;
+  const px = cx + R * Math.cos(rad(peerAngle)), py = cy + R * Math.sin(rad(peerAngle));
+  const meCloser = r.firstHeard === 'me', peerCloser = r.firstHeard === 'peer';
+  const meR = 8 + (meCloser ? 5 : 0), peerR = 8 + (peerCloser ? 5 : 0);
+  const ticks = [0, 90, 180, 270].map(a => {
+    const x1 = cx + (R + 6) * Math.cos(rad(a)), y1 = cy + (R + 6) * Math.sin(rad(a));
+    const x2 = cx + (R + 14) * Math.cos(rad(a)), y2 = cy + (R + 14) * Math.sin(rad(a));
+    const lx = cx + (R + 24) * Math.cos(rad(a)), ly = cy + (R + 24) * Math.sin(rad(a));
+    const label = ['N', 'O', 'S', 'W'][a / 90];
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--faint)" stroke-width="1.5"/><text x="${lx}" y="${ly + 4}" text-anchor="middle" font-size="11" fill="var(--faint)" font-family="Inter,sans-serif">${label}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" style="display:block;margin:6px auto">
+    <circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="var(--stroke)" stroke-width="1.5"/>
+    ${ticks}
+    <line x1="${cx}" y1="${cy}" x2="${px}" y2="${py}" stroke="var(--lime)" stroke-width="2" stroke-dasharray="${peerCloser || meCloser ? '0' : '3,3'}" opacity=".7"/>
+    <circle cx="${cx}" cy="${cy}" r="${meR}" fill="${meCloser ? '#67e8f9' : 'var(--glass-strong)'}" stroke="#04130d" stroke-width="2"/>
+    <circle cx="${px}" cy="${py}" r="${peerR}" fill="${peerCloser ? 'var(--amber,#fbbf24)' : 'var(--glass-strong)'}" stroke="#04130d" stroke-width="2"/>
+    <text x="${cx}" y="${cy + meR + 13}" text-anchor="middle" font-size="9" fill="var(--muted)" font-family="Inter,sans-serif">Du</text>
+    <text x="${px}" y="${py + peerR + 13}" text-anchor="middle" font-size="9" fill="var(--muted)" font-family="Inter,sans-serif">Partner</text>
+  </svg>`;
+}
+
 function showLocateResult(r) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
-  const whoLine = r.firstHeard === 'me' ? 'Du hast ihn zuerst gehört — Quelle vermutlich näher an dir'
-    : r.firstHeard === 'peer' ? 'Dein Partner hat ihn zuerst gehört — Quelle vermutlich näher an ihm'
-    : 'Fast gleichzeitig gehört — Quelle vermutlich mittig zwischen euch';
-  const geoLine = (r.bearingToPeer != null && r.baselineM != null)
-    ? `<div style="font-size:12px;color:var(--muted);margin-top:10px">Verbindungslinie zu deinem Partner: ${r.bearingToPeer}° · ${r.baselineM} m · ${r.sideHint || ''}</div>`
+  const whoLine = r.firstHeard === 'me' ? '💡 Du hast ihn zuerst gehört — Quelle vermutlich näher an dir'
+    : r.firstHeard === 'peer' ? '💡 Dein Partner hat ihn zuerst gehört — Quelle vermutlich näher an ihm'
+    : '💡 Fast gleichzeitig gehört — Quelle vermutlich mittig zwischen euch';
+  const hasGeo = r.bearingToPeer != null && r.baselineM != null;
+  const compassBlock = hasGeo
+    ? `${_compassSvg(r)}<div style="font-size:11px;color:var(--faint);margin-top:2px">Nur die Seite (näher an dir/Partner) ist zuverlässig — eine genaue Pfeilrichtung würde mehr Präzision vortäuschen, als zwei Mikrofone hergeben. ${r.sideHint || ''}</div>`
     : `<div style="font-size:12px;color:var(--muted);margin-top:10px">Kein GPS bei einem der Geräte — keine Peilung möglich.</div>`;
   ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:26px 26px 20px;text-align:center;max-width:280px;width:88%">
-    <div style="font-size:40px;margin-bottom:6px">🧭</div>
     <div style="font-size:18px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;margin-bottom:4px">${r.species}</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:10px">gemeinsam geortet — Zeitversatz ${r.deltaMs} ms</div>
-    <div style="font-size:14px;color:var(--ink);line-height:1.4">${whoLine}</div>
-    ${geoLine}
-    <button id="_locResultClose" style="width:100%;margin-top:16px;padding:11px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
+    <div style="font-size:13px;color:var(--ink);line-height:1.4">${whoLine}</div>
+    ${compassBlock}
+    <button id="_locResultClose" style="width:100%;margin-top:14px;padding:11px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
   </div>`;
   document.body.appendChild(ov);
   const close = () => ov.remove();
   ov.querySelector('#_locResultClose').onclick = close;
-  setTimeout(close, 12000);
+  setTimeout(close, 14000);
 }
 
 // ---- Partner koppeln (WebRTC + QR) + gemeinsame Ruf-Ortung sobald verbunden ----
@@ -1926,13 +1956,35 @@ function initPairing() {
   const chatInput = document.getElementById('pairChatInput');
   const chatSend = document.getElementById('pairChatSend');
 
-  let scanStream = null, stopScan = null, activePc = null, isConnected = false;
+  let scanStream = null, stopScan = null, activePc = null, isConnected = false, stopQualityMonitor = null;
 
   function stopCamera() {
     if (stopScan) { stopScan(); stopScan = null; }
     if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
     scanVideo.srcObject = null;
   }
+
+  // Verbindungs-Badge oben in der Topbar (Lauschen-Tab) — zeigt Status + grobe Verbindungsqualität
+  // (Paketlaufzeit, nicht echte WLAN-Signalstärke — die ist über Web-APIs nicht abfragbar).
+  const pairChip = document.getElementById('pairStatusChip');
+  const pairChipTxt = document.getElementById('pairStatusTxt');
+  const pairSignalIco = document.getElementById('pairSignalIco');
+  function setPairChip(visible, text) {
+    if (!pairChip) return;
+    pairChip.hidden = !visible;
+    pairChip.classList.toggle('loc-off', !visible);
+    if (text && pairChipTxt) pairChipTxt.textContent = text;
+  }
+  function updatePairSignal(level) {
+    if (!pairSignalIco) return;
+    const bars = pairSignalIco.querySelectorAll('rect');
+    bars.forEach((bar, i) => { bar.style.opacity = level != null && i < level ? '1' : '.35'; });
+  }
+  if (pairChip) pairChip.onclick = () => {
+    document.querySelector('.nav button[data-v="orni"]')?.click();
+    document.querySelector('#orniToggle button[data-tab="monitoring"]')?.click();
+    openBtn.click();
+  };
 
   // Partner-Text ist fremder Input -> IMMER textContent, nie innerHTML (siehe die BirdNET-XSS-Lücke,
   // die wir schon einmal an anderer Stelle gefunden & gefixt haben — hier von Anfang an sauber).
@@ -1975,6 +2027,22 @@ function initPairing() {
     if (geo.pos) locate.setLocalPos(geo.pos);
     if (chatList) chatList.innerHTML = '';
     chat.attach(dc, onChatMessage);
+    setPairChip(true, 'Verbunden');
+    if (stopQualityMonitor) stopQualityMonitor();
+    stopQualityMonitor = monitorQuality(activePc, ({ level }) => updatePairSignal(level));
+    // Verbindungsabbruch (Partner geht offline, WLAN weg, etc.) sauber erkennen und aufräumen.
+    activePc.addEventListener('connectionstatechange', () => {
+      if (['disconnected', 'failed', 'closed'].includes(activePc?.connectionState)) onDisconnected();
+    });
+  }
+
+  function onDisconnected() {
+    isConnected = false;
+    setPairChip(false);
+    if (stopQualityMonitor) { stopQualityMonitor(); stopQualityMonitor = null; }
+    locate.detach();
+    chat.detach();
+    activePc = null;
   }
 
   function showStep_(name) {

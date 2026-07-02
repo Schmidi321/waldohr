@@ -188,3 +188,30 @@ export async function waitForOpen(dcOrPromise, timeoutMs = 15000) {
     dc.addEventListener('error', e => { clearTimeout(to); rej(e); }, { once: true });
   });
 }
+
+// ---- Verbindungsqualität überwachen ----
+// Der Browser gibt Web-Seiten keine echte WLAN-Signalstärke (das ist Betriebssystem-Ebene,
+// nicht über eine Web-API erreichbar) — als guter Näherungswert dient stattdessen die
+// Paketlaufzeit (RTT) der aktiven Peer-Verbindung: niedrige RTT = stabile, nahe Verbindung
+// (typisch fürs selbe WLAN), hohe/schwankende RTT = schwache/instabile Verbindung.
+// onUpdate({ rtt, level }) — level 1-3 (schwach/mittel/stark) oder null bei fehlendem Messwert.
+export function monitorQuality(pc, onUpdate, intervalMs = 4000) {
+  let stopped = false;
+  async function tick() {
+    if (stopped || !pc || pc.connectionState === 'closed') return;
+    try {
+      const stats = await pc.getStats();
+      let rtt = null;
+      stats.forEach(s => {
+        if (s.type === 'candidate-pair' && s.state === 'succeeded' && typeof s.currentRoundTripTime === 'number') {
+          rtt = Math.round(s.currentRoundTripTime * 1000); // s -> ms
+        }
+      });
+      const level = rtt == null ? null : rtt < 60 ? 3 : rtt < 200 ? 2 : 1;
+      onUpdate({ rtt, level });
+    } catch { onUpdate({ rtt: null, level: null }); }
+    if (!stopped) setTimeout(tick, intervalMs);
+  }
+  tick();
+  return () => { stopped = true; };
+}

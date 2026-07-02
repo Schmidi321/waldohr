@@ -114,13 +114,13 @@ function _handlePeerDetection(msg) {
   const deltaMs = match.ts - remoteTsLocal; // >0: ich habe SPÄTER gehört als der Partner -> Partner ist näher
   const firstHeard = deltaMs > 30 ? 'peer' : deltaMs < -30 ? 'me' : 'both';
 
-  let bearingToPeer = null, baselineM = null, sideHint = null;
+  let bearingToPeer = null, baselineM = null, sideHint = null, thetaDeg = null;
   if (_myPos && _peerPos) {
     baselineM = Math.round(haversineKm(_myPos, _peerPos) * 1000);
     bearingToPeer = Math.round(bearingDeg(_myPos, _peerPos));
     if (baselineM > 1) {
       const sinTheta = Math.max(-1, Math.min(1, (SOUND_SPEED_MPS * (Math.abs(deltaMs) / 1000)) / baselineM));
-      const thetaDeg = Math.asin(sinTheta) * 180 / Math.PI;
+      thetaDeg = Math.round(Math.asin(sinTheta) * 180 / Math.PI);
       sideHint = thetaDeg < 20 ? 'eher mittig zwischen euch' : thetaDeg > 60 ? 'eher seitlich, nah an der Verbindungslinie' : 'irgendwo dazwischen';
     }
   }
@@ -129,7 +129,7 @@ function _handlePeerDetection(msg) {
     _onResult({
       species: match.species, key: match.key,
       deltaMs: Math.round(Math.abs(deltaMs)), firstHeard,
-      bearingToPeer, baselineM, sideHint,
+      bearingToPeer, baselineM, sideHint, thetaDeg,
     });
   }
 }
