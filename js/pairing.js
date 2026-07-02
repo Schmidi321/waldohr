@@ -6,10 +6,17 @@
 // öffentliche STUN-Server helfen beim Auffinden der Netzwerkadresse (NAT-Traversal).
 import { qrcode } from './vendor/qrcode.mjs';
 
-const ICE_SERVERS = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+// Nur EIN STUN-Server statt zwei: die meisten Handys/Netze brauchen für die reine
+// NAT-Adressermittlung nur einen Server, ein zweiter verdoppelt nur die Anzahl der gefundenen
+// (redundanten) srflx-Kandidaten in der SDP und damit unnötig die Größe des QR-Codes.
+const ICE_SERVERS = [{ urls: ['stun:stun.l.google.com:19302'] }];
 const ICE_GATHER_TIMEOUT_MS = 4000; // Notnagel, falls 'complete' nie feuert (z.B. kein Netz)
 
 // ---- QR-Code erzeugen: rendert direkt auf ein <canvas> (kein SVG/DataURL-Umweg nötig) ----
+// Zellgröße richtet sich nach der verfügbaren Bildschirmbreite (mit Sicherheitsabstand für das
+// Sheet-Padding), aber nie kleiner als 4px — darunter verschwimmt der Code beim Fotografieren mit
+// einer Handykamera und lässt sich nicht mehr zuverlässig scannen (lieber dann leicht über den
+// sichtbaren Bereich hinausragen und im Sheet scrollen, als zu klein/unscharf darzustellen).
 export function renderQR(text, canvas) {
   let qr, typeNumber = 1;
   for (;;) {
@@ -24,10 +31,14 @@ export function renderQR(text, canvas) {
     }
   }
   const count = qr.getModuleCount();
-  const cell = Math.max(2, Math.floor(240 / count));
-  const margin = cell * 2;
+  const availableWidth = Math.min(320, (window.innerWidth || 360) - 60);
+  const cell = Math.max(4, Math.floor(availableWidth / count));
+  const margin = cell * 3;
   const size = count * cell + margin * 2;
   canvas.width = size; canvas.height = size;
+  // KEIN CSS-Downscaling auf einen festen Wert — das würde die Zellgröße wieder verwischen.
+  canvas.style.width = size + 'px';
+  canvas.style.height = size + 'px';
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, size, size);
   ctx.fillStyle = '#000';
@@ -36,7 +47,37 @@ export function renderQR(text, canvas) {
       if (qr.isDark(r, c)) ctx.fillRect(margin + c * cell, margin + r * cell, cell, cell);
     }
   }
-  return { typeNumber, size };
+  return { typeNumber, size, moduleCount: count };
+}
+
+// ---- Nutzlast verkleinern: SDP-Text ist stark repetitiv (viele ähnliche Kandidaten-Zeilen) und
+// komprimiert dadurch sehr gut — spart oft 50-70%, macht den QR-Code deutlich weniger dicht.
+// CompressionStream ist inzwischen breit unterstützt (Chrome/Edge 80+, Firefox 113+, Safari 16.4+);
+// falls doch nicht vorhanden, fällt der Code automatisch auf unkomprimierten Text zurück.
+async function gzipToBase64(text) {
+  if (typeof CompressionStream === 'undefined') return null;
+  try {
+    const cs = new CompressionStream('gzip');
+    const writer = cs.writable.getWriter();
+    writer.write(new TextEncoder().encode(text));
+    writer.close();
+    const buf = await new Response(cs.readable).arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  } catch { return null; }
+}
+async function gunzipFromBase64(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const ds = new DecompressionStream('gzip');
+  const writer = ds.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const buf = await new Response(ds.readable).arrayBuffer();
+  return new TextDecoder().decode(buf);
 }
 
 // ---- QR-Code aus der Kamera scannen ----
@@ -72,11 +113,21 @@ function waitIceComplete(pc) {
   });
 }
 
-function encodeDesc(desc) {
-  return JSON.stringify({ t: desc.type, s: desc.sdp });
+// 'g:'-Präfix = gzip+base64, 'p:'-Präfix = unkomprimierter Klartext (Fallback ohne
+// CompressionStream-Unterstützung) — Präfix nötig, da Sende- und Empfangsgerät unterschiedliche
+// Browser sein können und der Encoder nicht weiß, ob die Gegenseite dekomprimieren kann.
+async function encodeDesc(desc) {
+  const json = JSON.stringify({ t: desc.type, s: desc.sdp });
+  const gz = await gzipToBase64(json);
+  if (gz && gz.length < json.length) return 'g:' + gz;
+  return 'p:' + json;
 }
-function decodeDesc(text) {
-  const o = JSON.parse(text);
+async function decodeDesc(text) {
+  let json;
+  if (text.startsWith('g:')) json = await gunzipFromBase64(text.slice(2));
+  else if (text.startsWith('p:')) json = text.slice(2);
+  else json = text; // defensiv: älteres Format ohne Präfix
+  const o = JSON.parse(json);
   if (!o || !o.t || !o.s) throw new Error('Ungültiger Kopplungs-Code');
   return { type: o.t, sdp: o.s };
 }
@@ -88,11 +139,11 @@ export async function createOfferer() {
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   await waitIceComplete(pc);
-  const qrText = encodeDesc(pc.localDescription);
+  const qrText = await encodeDesc(pc.localDescription);
   return {
     pc, dc, qrText,
     async applyAnswer(answerText) {
-      const desc = decodeDesc(answerText);
+      const desc = await decodeDesc(answerText);
       await pc.setRemoteDescription(desc);
     },
   };
@@ -103,14 +154,14 @@ export async function createOfferer() {
 // auf das 'ondatachannel'-Event, denn das feuert erst, wenn die Verbindung schon steht. Die
 // Verbindung kann aber erst stehen, nachdem Seite A diese Antwort gescannt hat -> sonst Deadlock.
 export async function createAnswerer(offerText) {
-  const desc = decodeDesc(offerText);
+  const desc = await decodeDesc(offerText);
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   const dcPromise = new Promise(res => { pc.ondatachannel = e => res(e.channel); });
   await pc.setRemoteDescription(desc);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   await waitIceComplete(pc);
-  const qrText = encodeDesc(pc.localDescription);
+  const qrText = await encodeDesc(pc.localDescription);
   return { pc, dc: dcPromise, qrText };
 }
 
