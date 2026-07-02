@@ -10,6 +10,7 @@ import { openCamera } from './camera.js';
 import { initOrni } from './ornithologie.js';
 import { exportBackup, importBackup } from './backup.js';
 import { renderQR, scanQR, createOfferer, createAnswerer, waitForOpen } from './pairing.js';
+import * as locate from './locate.js';
 
 // ---- In-App Lightbox für Fotos ----
 function openPhotoLightbox(url) {
@@ -122,7 +123,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v73';
+const APP_VERSION = 'v74';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -240,6 +241,10 @@ async function onWindow(samples, sampleRate) {
   try { det.id = await addDetection(det); } catch (e) { console.warn('store', e); }
   liveAdd(det);
   maybeAutoRecord(det, samples, sampleRate);
+  if (locate.isActive()) {
+    if (geo.pos) locate.setLocalPos(geo.pos);
+    locate.reportDetection(det);
+  }
   refresh();
 }
 
@@ -1871,9 +1876,31 @@ function registerSW() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
-// ---- Partner koppeln (WebRTC + QR) — Grundlage für künftige Zwei-Handy-Funktionen ----
-// (z.B. gemeinsame Ruf-Ortung per Zeitversatz). Diese erste Stufe stellt nur die Verbindung her;
-// der Datenkanal ist danach offen und bereit für weitere Nachrichten in einem späteren Update.
+// ---- Ergebnis-Popup der gemeinsamen Ruf-Ortung (js/locate.js) ----
+function showLocateResult(r) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
+  const whoLine = r.firstHeard === 'me' ? 'Du hast ihn zuerst gehört — Quelle vermutlich näher an dir'
+    : r.firstHeard === 'peer' ? 'Dein Partner hat ihn zuerst gehört — Quelle vermutlich näher an ihm'
+    : 'Fast gleichzeitig gehört — Quelle vermutlich mittig zwischen euch';
+  const geoLine = (r.bearingToPeer != null && r.baselineM != null)
+    ? `<div style="font-size:12px;color:var(--muted);margin-top:10px">Verbindungslinie zu deinem Partner: ${r.bearingToPeer}° · ${r.baselineM} m · ${r.sideHint || ''}</div>`
+    : `<div style="font-size:12px;color:var(--muted);margin-top:10px">Kein GPS bei einem der Geräte — keine Peilung möglich.</div>`;
+  ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:26px 26px 20px;text-align:center;max-width:280px;width:88%">
+    <div style="font-size:40px;margin-bottom:6px">🧭</div>
+    <div style="font-size:18px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;margin-bottom:4px">${r.species}</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">gemeinsam geortet — Zeitversatz ${r.deltaMs} ms</div>
+    <div style="font-size:14px;color:var(--ink);line-height:1.4">${whoLine}</div>
+    ${geoLine}
+    <button id="_locResultClose" style="width:100%;margin-top:16px;padding:11px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
+  </div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#_locResultClose').onclick = close;
+  setTimeout(close, 12000);
+}
+
+// ---- Partner koppeln (WebRTC + QR) + gemeinsame Ruf-Ortung sobald verbunden ----
 function initPairing() {
   const openBtn = document.getElementById('pairOpenBtn');
   const modal = document.getElementById('pairModal');
@@ -1895,12 +1922,20 @@ function initPairing() {
   const answerStatus = document.getElementById('pairAnswerStatus');
   const showScanAnswerBtn = document.getElementById('pairShowScanAnswerBtn');
 
-  let scanStream = null, stopScan = null, activePc = null;
+  let scanStream = null, stopScan = null, activePc = null, isConnected = false;
 
   function stopCamera() {
     if (stopScan) { stopScan(); stopScan = null; }
     if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
     scanVideo.srcObject = null;
+  }
+
+  // Sobald die Verbindung steht, an js/locate.js übergeben — die Ortung läuft im Hintergrund
+  // weiter, auch wenn der Nutzer das Kopplungs-Fenster schließt und normal weiterlauscht.
+  function onPaired(dc) {
+    isConnected = true;
+    locate.attach(dc, showLocateResult);
+    if (geo.pos) locate.setLocalPos(geo.pos);
   }
 
   function showStep_(name) {
@@ -1914,12 +1949,22 @@ function initPairing() {
 
   function closeModal() {
     stopCamera();
-    if (activePc) { try { activePc.close(); } catch {} activePc = null; }
+    // Nur schließen, wenn noch KEINE Verbindung steht (Kopplung abgebrochen) — eine bereits
+    // hergestellte Verbindung soll im Hintergrund weiterlaufen, wenn der Nutzer das Fenster
+    // nur schließt, um wieder normal zu lauschen.
+    if (!isConnected && activePc) { try { activePc.close(); } catch {} activePc = null; }
     showScanAnswerBtn.hidden = true;
     modal.classList.remove('open');
   }
 
-  openBtn.onclick = () => { showStep_('choice'); modal.classList.add('open'); };
+  openBtn.onclick = () => {
+    // Neue Kopplung angestoßen -> eine evtl. noch offene alte Verbindung sauber schließen.
+    if (activePc) { try { activePc.close(); } catch {} activePc = null; }
+    isConnected = false;
+    locate.detach();
+    showStep_('choice');
+    modal.classList.add('open');
+  };
   closeBtn.onclick = closeModal;
   if (scrim) scrim.onclick = closeModal;
 
@@ -1956,8 +2001,9 @@ function initPairing() {
         await offerer.applyAnswer(text);
         showStep_('connected');
         connectedStep.querySelector('#pairConnectedSub').textContent = 'Verbinde…';
-        await waitForOpen(offerer.dc);
-        connectedStep.querySelector('#pairConnectedSub').textContent = 'Bereit für weitere Funktionen.';
+        const dc = await waitForOpen(offerer.dc);
+        onPaired(dc);
+        connectedStep.querySelector('#pairConnectedSub').textContent = 'Verbunden — Ruf-Ortung läuft jetzt automatisch mit.';
       } catch (err) {
         scanStatus.textContent = 'Ungültiger Code oder Verbindung fehlgeschlagen — bitte erneut versuchen.';
         startScan(onAnswerScanned, scanStatus);
@@ -1985,9 +2031,10 @@ function initPairing() {
     renderQR(answerer.qrText, answerQrCanvas);
     answerStatus.textContent = 'Zeig dieses Handy jetzt dem Partner — Warte auf Verbindung…';
     try {
-      await waitForOpen(answerer.dc);
+      const dc = await waitForOpen(answerer.dc);
+      onPaired(dc);
       showStep_('connected');
-      connectedStep.querySelector('#pairConnectedSub').textContent = 'Bereit für weitere Funktionen.';
+      connectedStep.querySelector('#pairConnectedSub').textContent = 'Verbunden — Ruf-Ortung läuft jetzt automatisch mit.';
     } catch (err) {
       answerStatus.textContent = 'Verbindung fehlgeschlagen: ' + (err?.message || '');
     }
