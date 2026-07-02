@@ -11,10 +11,17 @@ export class AudioEngine {
     this._need = 0; this._hop = 0;
   }
 
-  async start() {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-    });
+  async start(deviceId) {
+    const audioConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    if (deviceId) audioConstraints.deviceId = { exact: deviceId };
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+    } catch (e) {
+      // Gewähltes externes Mikro evtl. nicht mehr angeschlossen -> auf Standardmikro zurückfallen,
+      // statt das Lauschen komplett zu verweigern.
+      if (deviceId) this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      else throw e;
+    }
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (this.ctx.state === 'suspended') await this.ctx.resume();
     this.sampleRate = this.ctx.sampleRate;

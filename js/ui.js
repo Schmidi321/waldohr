@@ -132,6 +132,7 @@ export function initUI() {
     const sv = serverUrlGet();
     $('serverUrl').value = sv;
     $('serverStat').textContent = sv ? 'gesetzt ✓' : 'nicht gesetzt (Demo)';
+    populateMicSelect();
     settings.classList.add('open');
   };
   $('settingsScrim').onclick = closeSettings;
@@ -266,6 +267,23 @@ function initLeftHandToggle() {
     document.body.classList.toggle('left-hand', toggle.checked);
     try { localStorage.setItem('waldohr.leftHand', toggle.checked ? 'on' : 'off'); } catch {}
   };
+}
+
+// Mikrofon-Auswahl fürs Lauschen (externe Mikros, z.B. per USB-C/Bluetooth angeschlossen) —
+// separat von der Kamera-Mikrofonauswahl (js/camera.js), da für Video-Aufnahmen gedacht.
+const LS_MIC = 'waldohr.micDevice';
+export function getMicDeviceId() { try { return localStorage.getItem(LS_MIC) || ''; } catch { return ''; } }
+async function populateMicSelect() {
+  const sel = $('micDeviceSelect'); if (!sel) return;
+  const saved = getMicDeviceId();
+  try {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    const mics = all.filter(d => d.kind === 'audioinput');
+    sel.innerHTML = '<option value="">Automatisch (Standard)</option>' +
+      mics.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Mikrofon ' + (i + 1)}</option>`).join('');
+    sel.value = mics.some(d => d.deviceId === saved) ? saved : '';
+  } catch (e) { console.warn('mic enumerate', e); }
+  sel.onchange = () => { try { localStorage.setItem(LS_MIC, sel.value); } catch {} };
 }
 
 function initSensitivitySliders() {

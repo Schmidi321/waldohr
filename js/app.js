@@ -2,7 +2,7 @@
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, updatePeerMarker } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, updatePeerMarker, getMicDeviceId } from './ui.js';
 import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, fetchMoonTimes, fetchTodayHours, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
 import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
@@ -124,7 +124,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v84';
+const APP_VERSION = 'v85';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -217,7 +217,7 @@ function onAlarm(type) {
   showInfoToast(title, isMC ? 'Sonnenaufgang naht — Lauschen gestartet!' : 'Geplante Zeit — Lauschen gestartet!', icon);
   if (!audio.running) {
     tryFullscreen();
-    audio.start()
+    audio.start(getMicDeviceId())
       .then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); })
       .catch(e => {
         console.warn('alarm mic', e);
@@ -1308,7 +1308,7 @@ if (routeToggleBtn) routeToggleBtn.onclick = () => {
 function toggleDetection() {
   if (!audio.running) {
     tryFullscreen();
-    audio.start().then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); })
+    audio.start(getMicDeviceId()).then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); })
       .catch(e => { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); });
     return;
   }
@@ -1327,7 +1327,7 @@ if (orbBtn) orbBtn.addEventListener('click', async ev => {
     return;
   }
   tryFullscreen();
-  try { await audio.start(); geo.start(); setUI('mic-ready'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); }
+  try { await audio.start(getMicDeviceId()); geo.start(); setUI('mic-ready'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); }
   catch (e) { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); }
 });
 
@@ -1400,7 +1400,7 @@ const recorder = {
       // sekundenlang aussetzen kann — dann erschiene das Popup gar nicht.
       _showRecPopup('preparing');
       await new Promise(r => setTimeout(r, 60));
-      try { await audio.start(); geo.start(); }
+      try { await audio.start(getMicDeviceId()); geo.start(); }
       catch (e) { console.warn('mic', e); statusTxt.textContent = 'Mikro nicht erlaubt'; _hideRecPopup(); return; }
     }
     if (!audio.stream) { _hideRecPopup(); return; }
@@ -1611,7 +1611,7 @@ window.__waldohr = {
       // Erst die UI (Timer/Banner) zeichnen lassen, dann das blockierende getUserMedia starten.
       // setTimeout statt rAF (rAF kann auf manchen Handys sekundenlang aussetzen).
       await new Promise(r => setTimeout(r, 60));
-      try { await audio.start(); geo.start(); }
+      try { await audio.start(getMicDeviceId()); geo.start(); }
       catch (e) { detectionActive = false; setUI('off'); if (recBtn) recBtn.classList.remove('rec-on'); throw e; }
     }
   },

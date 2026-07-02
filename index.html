@@ -556,6 +556,13 @@
         <div class="grab"></div>
         <h2 style="font-size:20px;margin-bottom:4px">Einstellungen</h2>
         <div class="infoblock">
+          <h3><span style="font-size:15px">🎙️</span> Mikrofon</h3>
+          <p style="margin-bottom:12px">Falls ein externes Mikrofon (z. B. per USB-C/Bluetooth, Richtmikrofon) angeschlossen ist, hier auswählen — sonst nutzt WaldOhr automatisch das eingebaute.</p>
+          <select id="micDeviceSelect" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:14px;font-family:inherit">
+            <option value="">Automatisch (Standard)</option>
+          </select>
+        </div>
+        <div class="infoblock">
           <h3><span style="font-size:15px">✨</span> Gemini-Anreicherung</h3>
           <p style="margin-bottom:12px">Eigener Google-Gemini-API-Key. Wird nur lokal auf diesem Gerät gespeichert (nicht hochgeladen) und erklärt im Detail-Sheet die Ruf-Bedeutung &amp; den Steckbrief je Art.</p>
           <input id="geminiKey" type="password" autocomplete="off" placeholder="API-Key einfügen…" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
