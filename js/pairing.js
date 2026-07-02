@@ -13,10 +13,10 @@ const ICE_SERVERS = [{ urls: ['stun:stun.l.google.com:19302'] }];
 const ICE_GATHER_TIMEOUT_MS = 4000; // Notnagel, falls 'complete' nie feuert (z.B. kein Netz)
 
 // ---- QR-Code erzeugen: rendert direkt auf ein <canvas> (kein SVG/DataURL-Umweg nötig) ----
-// Zellgröße richtet sich nach der verfügbaren Bildschirmbreite (mit Sicherheitsabstand für das
-// Sheet-Padding), aber nie kleiner als 4px — darunter verschwimmt der Code beim Fotografieren mit
-// einer Handykamera und lässt sich nicht mehr zuverlässig scannen (lieber dann leicht über den
-// sichtbaren Bereich hinausragen und im Sheet scrollen, als zu klein/unscharf darzustellen).
+// HARTE Regel: der Code muss immer komplett auf den Bildschirm passen — ein abgeschnittener
+// QR-Code lässt sich grundsätzlich nicht scannen, das ist wichtiger als eine großzügige Zellgröße.
+// Zellgröße wird darum so groß wie irgend möglich innerhalb der verfügbaren Breite gewählt
+// (Minimum 3px als allerletzter Notnagel bei sehr vielen Modulen).
 export function renderQR(text, canvas) {
   let qr, typeNumber = 1;
   for (;;) {
@@ -31,9 +31,10 @@ export function renderQR(text, canvas) {
     }
   }
   const count = qr.getModuleCount();
-  const availableWidth = Math.min(320, (window.innerWidth || 360) - 60);
-  const cell = Math.max(4, Math.floor(availableWidth / count));
-  const margin = cell * 3;
+  const availableWidth = Math.max(180, Math.min(320, (window.innerWidth || 360) - 60));
+  const marginModules = 3; // in Zell-Einheiten, Ruhezone rundum fürs sichere Erkennen
+  const cell = Math.max(3, Math.floor(availableWidth / (count + marginModules * 2)));
+  const margin = cell * marginModules;
   const size = count * cell + margin * 2;
   canvas.width = size; canvas.height = size;
   // KEIN CSS-Downscaling auf einen festen Wert — das würde die Zellgröße wieder verwischen.
@@ -113,11 +114,20 @@ function waitIceComplete(pc) {
   });
 }
 
+// Behält nur 'host'-Kandidaten (direkte LAN-Adressen) und verwirft srflx/relay-Kandidaten aus
+// dem STUN-Server. Das ist der größte Posten in der SDP (jede Zeile ~100-150 Zeichen, oft 4-8
+// Stück) und für den Einsatzzweck vertretbar: zwei Handys, die man zum Koppeln nebeneinanderhält,
+// sind so gut wie immer im selben WLAN — dafür reichen Host-Kandidaten. Bei getrennten Netzen
+// (unterschiedliches WLAN/Mobilfunk) würde die Verbindung dann allerdings nicht zustande kommen.
+function trimCandidates(sdp) {
+  return sdp.split('\r\n').filter(line => !line.startsWith('a=candidate:') || / typ host /.test(line)).join('\r\n');
+}
+
 // 'g:'-Präfix = gzip+base64, 'p:'-Präfix = unkomprimierter Klartext (Fallback ohne
 // CompressionStream-Unterstützung) — Präfix nötig, da Sende- und Empfangsgerät unterschiedliche
 // Browser sein können und der Encoder nicht weiß, ob die Gegenseite dekomprimieren kann.
 async function encodeDesc(desc) {
-  const json = JSON.stringify({ t: desc.type, s: desc.sdp });
+  const json = JSON.stringify({ t: desc.type, s: trimCandidates(desc.sdp) });
   const gz = await gzipToBase64(json);
   if (gz && gz.length < json.length) return 'g:' + gz;
   return 'p:' + json;
