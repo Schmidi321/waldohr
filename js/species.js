@@ -247,6 +247,14 @@ Object.assign(SPECIES, EXTRA_SPECIES);
 
 export const SPECIES_LIST = Object.values(SPECIES);
 
+// BirdNET (lokal oder vom Nutzer eingetragener Server) liefert Art-Namen als freien Text, der
+// später ungefiltert in innerHTML-Templates landet (Live-Liste, Toasts, Protokolle). Ein böswilliger
+// oder kompromittierter Server könnte HTML/Skript einschleusen -> hier an der Quelle entschärfen,
+// statt an jeder Anzeigestelle einzeln (leicht zu vergessen).
+function _escText(s) {
+  return String(s).replace(/[&<>]/g, c => c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;');
+}
+
 // Stellt sicher, dass es zu einer erkannten Art einen Katalog-Eintrag gibt.
 // Bekannte Arten (per wiss. Name) werden wiederverwendet; unbekannte (z. B. aus
 // BirdNET) bekommen einen generischen Eintrag, damit Karte/Sammlung/Modal funktionieren.
@@ -257,7 +265,7 @@ export function ensureSpecies({ sci, name, rarity = 'common' }) {
   const key = 'x_' + (sci || name || 'unbekannt').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
   if (!SPECIES[key]) {
     SPECIES[key] = {
-      key, name: name || sci || 'Unbekannt', sci: sci || '', rarity,
+      key, name: _escText(name || sci || 'Unbekannt'), sci: _escText(sci || ''), rarity,
       icon: BIRD, grad: ['#0e5840', '#0a4733'], accent: '#a3e635',
       meaning: 'Über BirdNET am Ruf erkannt. Eine genaue Deutung des Rufs folgt mit der Gemini-Schicht.',
       steckbrief: 'Per BirdNET erkannte Art – noch kein ausführlicher Steckbrief hinterlegt.'
