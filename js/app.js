@@ -120,7 +120,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v63';
+const APP_VERSION = 'v64';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1047,13 +1047,20 @@ function _openVideoReelModal(url, mime) {
       srcVid.src = url; srcVid.preload = 'auto'; srcVid.playsInline = true; srcVid.muted = false;
       srcVid.style.cssText = 'position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
       document.body.appendChild(srcVid);
-      // loadeddata (statt canplaythrough) feuert zuverlässig auch bei Offscreen-Blob-Videos; Timeout als Notnagel.
+      // play() SOFORT auslösen — noch innerhalb der Klick-Nutzergeste. Vorher wurde erst nach
+      // mehreren await-Schritten (loadeddata/seeked, bis zu 5,5 s) play() aufgerufen — auf echten
+      // Handys ist die Nutzergeste dann abgelaufen, die Autoplay-Policy blockiert die unstumme
+      // Wiedergabe still, es kommen keine Frames rein und die Aufnahme bleibt leer.
+      let playErr = null;
+      const playPromise = srcVid.play().catch(err => { playErr = err; });
       await new Promise((res, rej) => {
         srcVid.addEventListener('loadeddata', res, { once: true });
         srcVid.addEventListener('error', () => rej(new Error('Video konnte nicht geladen werden')), { once: true });
         setTimeout(res, 4000);
-        srcVid.load();
       });
+      await playPromise;
+      if (playErr) throw new Error('Wiedergabe vom Browser blockiert — bitte erneut versuchen');
+      srcVid.pause();
       srcVid.currentTime = startTime;
       await new Promise(res => { srcVid.addEventListener('seeked', res, { once: true }); setTimeout(res, 1500); });
 
