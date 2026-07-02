@@ -18,14 +18,16 @@ let _dc = null;
 let _clockOffsetMs = 0; // wird zu Partner-Zeitstempeln addiert, um sie in lokale Zeit umzurechnen
 let _myPos = null, _peerPos = null;
 let _recentLocal = [];
-let _onResult = null;
+let _onResult = null, _onPeerPos = null;
 let _onMessageBound = null;
 
-// Von app.js aufgerufen, sobald der Datenkanal zum Partner offen ist.
-export function attach(dc, onResult) {
+// Von app.js aufgerufen, sobald der Datenkanal zum Partner offen ist. onPeerPos(null) wird beim
+// detach() ausgelöst, damit z.B. der Kartenmarker des Partners wieder verschwindet.
+export function attach(dc, onResult, onPeerPos) {
   detach();
   _dc = dc;
   _onResult = onResult || null;
+  _onPeerPos = onPeerPos || null;
   _recentLocal = [];
   _clockOffsetMs = 0;
   _peerPos = null;
@@ -37,6 +39,9 @@ export function attach(dc, onResult) {
 export function detach() {
   if (_dc && _onMessageBound) _dc.removeEventListener('message', _onMessageBound);
   _dc = null; _onMessageBound = null;
+  _peerPos = null;
+  if (_onPeerPos) _onPeerPos(null);
+  _onResult = null; _onPeerPos = null;
 }
 
 export function isActive() {
@@ -81,7 +86,11 @@ async function syncClock() {
 function _onMessage(e) {
   let msg; try { msg = JSON.parse(e.data); } catch { return; }
   if (msg.type === 'ping') { _send({ type: 'pong', t0: msg.t0, t1: Date.now() }); return; }
-  if (msg.type === 'pos') { _peerPos = { lat: msg.lat, lng: msg.lng }; return; }
+  if (msg.type === 'pos') {
+    _peerPos = { lat: msg.lat, lng: msg.lng };
+    if (_onPeerPos) _onPeerPos(_peerPos);
+    return;
+  }
   if (msg.type === 'detection') { _handlePeerDetection(msg); }
 }
 

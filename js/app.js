@@ -2,7 +2,7 @@
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, updatePeerMarker } from './ui.js';
 import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, fetchMoonTimes, fetchTodayHours, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
 import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
@@ -123,7 +123,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v74';
+const APP_VERSION = 'v75';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1934,7 +1934,7 @@ function initPairing() {
   // weiter, auch wenn der Nutzer das Kopplungs-Fenster schließt und normal weiterlauscht.
   function onPaired(dc) {
     isConnected = true;
-    locate.attach(dc, showLocateResult);
+    locate.attach(dc, showLocateResult, updatePeerMarker);
     if (geo.pos) locate.setLocalPos(geo.pos);
   }
 
@@ -1958,11 +1958,15 @@ function initPairing() {
   }
 
   openBtn.onclick = () => {
-    // Neue Kopplung angestoßen -> eine evtl. noch offene alte Verbindung sauber schließen.
-    if (activePc) { try { activePc.close(); } catch {} activePc = null; }
-    isConnected = false;
-    locate.detach();
-    showStep_('choice');
+    // Wenn schon eine Verbindung steht, nur den Status zeigen statt sie zu kappen — nur bei
+    // einem NEUEN Kopplungsversuch (noch nicht verbunden) eine evtl. alte Verbindung aufräumen.
+    if (isConnected) {
+      showStep_('connected');
+    } else {
+      if (activePc) { try { activePc.close(); } catch {} activePc = null; }
+      locate.detach();
+      showStep_('choice');
+    }
     modal.classList.add('open');
   };
   closeBtn.onclick = closeModal;

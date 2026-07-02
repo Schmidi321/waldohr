@@ -393,6 +393,12 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .you-pulse{position:absolute;inset:0;border-radius:50%;background:#67e8f955;animation:pulseyou 2s ease-out infinite}
 @keyframes pulseyou{0%{transform:scale(.4);opacity:.9}100%{transform:scale(2.2);opacity:0}}
 
+/* Position des gekoppelten Partner-Handys (js/locate.js) — gleiches Muster wie "Du bist hier",
+   andere Farbe (amber statt cyan) zur klaren Unterscheidung. */
+.peer-marker{position:relative;width:20px;height:20px}
+.peer-dot{position:absolute;inset:5px;border-radius:50%;background:var(--amber, #fbbf24);border:2px solid #04130d;box-shadow:0 0 0 1px #fbbf2488}
+.peer-pulse{position:absolute;inset:0;border-radius:50%;background:#fbbf2455;animation:pulseyou 2s ease-out infinite}
+
 /* Fotografen-Wecker: Klapp-Popup Lichtphasen */
 .fw-detail-popup{background:rgba(0,0,0,.3);border:1px solid var(--stroke);border-radius:14px;padding:12px 14px;margin-top:10px}
 .fw-detail-popup[hidden]{display:none}

@@ -755,7 +755,7 @@ function loadLeaflet() {
   return leafletPromise;
 }
 
-let mapInst = null, markersLayer = null, userMarker = null, lastMapDets = [], mapCenteredOnLive = false;
+let mapInst = null, markersLayer = null, userMarker = null, peerMarker = null, lastPeerPos = null, lastMapDets = [], mapCenteredOnLive = false;
 export async function renderMap(dets) {
   lastMapDets = dets;
   const mapEl = document.getElementById('map');
@@ -806,6 +806,7 @@ export async function renderMap(dets) {
     mapCenteredOnLive = true;
   }
   updateUserMarker();
+  _applyPeerMarker();
   setTimeout(() => mapInst && mapInst.invalidateSize(), 60);
 }
 
@@ -818,6 +819,27 @@ function updateUserMarker() {
     userMarker = L.marker([livePos.lat, livePos.lng], { icon, interactive: false, zIndexOffset: 1000 }).addTo(mapInst);
   } else {
     userMarker.setLatLng([livePos.lat, livePos.lng]);
+  }
+}
+
+// Position des gekoppelten Partner-Handys (js/locate.js meldet Updates hierher) — eigener Marker,
+// unabhängig von den Fund-Pins und dem "Du bist hier"-Punkt. pos===null entfernt den Marker
+// wieder (z.B. wenn die Kopplung getrennt wird). Wird gemerkt, auch bevor die Karte je geöffnet
+// wurde (mapInst existiert dann noch nicht) — beim nächsten renderMap() zieht _applyPeerMarker
+// die zwischengespeicherte Position dann nach.
+export function updatePeerMarker(pos) {
+  lastPeerPos = pos;
+  _applyPeerMarker();
+}
+function _applyPeerMarker() {
+  if (!lastPeerPos) { if (peerMarker) { peerMarker.remove(); peerMarker = null; } return; }
+  if (!mapInst || !window.L) return;
+  const L = window.L;
+  if (!peerMarker) {
+    const icon = L.divIcon({ className: 'peer-marker', html: '<span class="peer-pulse"></span><span class="peer-dot"></span>', iconSize: [20, 20], iconAnchor: [10, 10] });
+    peerMarker = L.marker([lastPeerPos.lat, lastPeerPos.lng], { icon, interactive: false, zIndexOffset: 999 }).addTo(mapInst);
+  } else {
+    peerMarker.setLatLng([lastPeerPos.lat, lastPeerPos.lng]);
   }
 }
 
