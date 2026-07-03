@@ -1,49 +1,36 @@
-// Direkte Foto-/Video-Übertragung ans gekoppelte Partner-Handy — läuft über denselben
-// RTCDataChannel wie Chat/Ortung, komplett ohne Internet. Da ein einzelner Sendevorgang auf einem
-// Datenkanal nicht beliebig groß sein darf (Kompatibilität zwischen Browsern/Geräten), wird die
-// Datei in kleine Stücke zerlegt und auf der Empfängerseite wieder zusammengesetzt.
+// Direkte Foto-/Video-Übertragung an ALLE gekoppelten Partner-Handys (js/peerhub.js — eins oder
+// mehrere, im Stern-Modell auch über die Zentrale weitergeleitet), komplett ohne Internet. Da ein
+// einzelner Sendevorgang auf einem Datenkanal nicht beliebig groß sein darf (Kompatibilität
+// zwischen Browsern/Geräten), wird die Datei in kleine Stücke zerlegt und auf der Empfängerseite
+// wieder zusammengesetzt.
+import * as hub from './peerhub.js';
+
 const CHUNK_SIZE = 16 * 1024; // sichere Größe, die auf allen gängigen WebRTC-Implementierungen funktioniert
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // Sicherheitsgrenze, damit eine Übertragung nicht endlos dauert/Speicher sprengt
 const BUFFER_HIGH = 1 * 1024 * 1024; // ab hier abwarten, bevor weitere Stücke gesendet werden
 
-let _dc = null;
-let _onMessageBound = null;
+let _unsub = null;
 let _onIncoming = null;
 let _onProgress = null;
 let _incoming = new Map(); // transferId -> { chunks, mime, kind, name, total, received }
 
-export function attach(dc, onIncoming, onProgress) {
+export function attach(onIncoming, onProgress) {
   detach();
-  _dc = dc;
   _onIncoming = onIncoming || null;
   _onProgress = onProgress || null;
-  _onMessageBound = e => _handle(e);
-  dc.addEventListener('message', _onMessageBound);
+  _incoming = new Map();
+  _unsub = hub.onMessage((msg, fromId) => _handle(msg, fromId));
 }
 
 export function detach() {
-  if (_dc && _onMessageBound) _dc.removeEventListener('message', _onMessageBound);
-  _dc = null; _onMessageBound = null;
+  if (_unsub) _unsub();
+  _unsub = null;
   _onIncoming = null; _onProgress = null;
   _incoming.clear();
 }
 
 export function isActive() {
-  return !!(_dc && _dc.readyState === 'open');
-}
-
-function _send(obj) {
-  if (!isActive()) throw new Error('nicht verbunden');
-  _dc.send(JSON.stringify(obj));
-}
-
-function _waitForBufferLow() {
-  return new Promise(res => {
-    if (!_dc || _dc.bufferedAmount < BUFFER_HIGH) { res(); return; }
-    _dc.bufferedAmountLowThreshold = Math.floor(BUFFER_HIGH / 2);
-    const onLow = () => { _dc.removeEventListener('bufferedamountlow', onLow); res(); };
-    _dc.addEventListener('bufferedamountlow', onLow);
-  });
+  return hub.isActive();
 }
 
 function _chunkToBase64(chunkBlob) {
@@ -55,22 +42,23 @@ function _chunkToBase64(chunkBlob) {
   });
 }
 
-// kind: 'photo' | 'video'. Meldet Fortschritt über onProgress({direction:'send', sent, total}).
+// kind: 'photo' | 'video'. Geht an ALLE gerade gekoppelten Geräte. Meldet Fortschritt über
+// onProgress({direction:'send', sent, total}).
 export async function sendFile(blob, kind, name) {
   if (!isActive()) throw new Error('nicht verbunden');
   if (blob.size > MAX_FILE_SIZE) throw new Error('Datei zu groß (max. 25 MB)');
   const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const totalChunks = Math.max(1, Math.ceil(blob.size / CHUNK_SIZE));
-  _send({ type: 'filestart', id, kind, name: name || '', mime: blob.type || '', size: blob.size, chunks: totalChunks });
+  hub.broadcast({ type: 'filestart', id, kind, name: name || '', mime: blob.type || '', size: blob.size, chunks: totalChunks });
   for (let i = 0; i < totalChunks; i++) {
-    await _waitForBufferLow();
+    await hub.waitUntilBufferBelow(BUFFER_HIGH);
     if (!isActive()) throw new Error('Verbindung während der Übertragung verloren');
     const chunkBlob = blob.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
     const data = await _chunkToBase64(chunkBlob);
-    _send({ type: 'filechunk', id, i, data });
+    hub.broadcast({ type: 'filechunk', id, i, data });
     if (_onProgress) _onProgress({ direction: 'send', sent: i + 1, total: totalChunks });
   }
-  _send({ type: 'fileend', id });
+  hub.broadcast({ type: 'fileend', id });
 }
 
 function _base64ToBytes(b64) {
@@ -80,18 +68,20 @@ function _base64ToBytes(b64) {
   return bytes;
 }
 
-function _handle(e) {
-  let raw; try { raw = JSON.parse(e.data); } catch { return; }
+function _handle(raw, fromId) {
+  // transferId ist zufällig genug, aber falls doch zwei Geräte gleichzeitig eine eigene
+  // Übertragung mit derselben id starten sollten, mit der Absender-Kennung entschärfen.
+  const key = fromId + ':' + raw.id;
   if (raw.type === 'filestart') {
     if (typeof raw.size === 'number' && raw.size > MAX_FILE_SIZE) return; // ignoriert überdimensionierte/fehlerhafte Ankündigung
-    _incoming.set(raw.id, {
+    _incoming.set(key, {
       chunks: new Array(raw.chunks), kind: raw.kind === 'video' ? 'video' : 'photo',
       name: typeof raw.name === 'string' ? raw.name : '', mime: raw.mime || '', total: raw.chunks, received: 0,
     });
     return;
   }
   if (raw.type === 'filechunk') {
-    const t = _incoming.get(raw.id);
+    const t = _incoming.get(key);
     if (!t || raw.i < 0 || raw.i >= t.total) return;
     t.chunks[raw.i] = _base64ToBytes(raw.data);
     t.received++;
@@ -99,11 +89,11 @@ function _handle(e) {
     return;
   }
   if (raw.type === 'fileend') {
-    const t = _incoming.get(raw.id);
-    _incoming.delete(raw.id);
+    const t = _incoming.get(key);
+    _incoming.delete(key);
     if (!t || t.chunks.some(c => !c)) { if (t) console.warn('filetransfer: unvollständige Übertragung, verworfen'); return; }
     const blob = new Blob(t.chunks, { type: t.mime || 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
-    if (_onIncoming) _onIncoming({ blob, url, kind: t.kind, name: t.name, mime: t.mime });
+    if (_onIncoming) _onIncoming({ blob, url, kind: t.kind, name: t.name, mime: t.mime, peerId: fromId });
   }
 }

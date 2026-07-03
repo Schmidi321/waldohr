@@ -562,7 +562,7 @@ let collMode = 'here';
 let lastCollStats = null, lastCollDets = [], lastCollPos = null;
 let livePos = null;
 // Wird bei jedem GPS-Update aufgerufen (auch ohne vollen Re-Render) — fürs Kompass-Feature.
-export function setLivePos(pos) { livePos = pos; updateCompassUI(); updateUserMarker(); _updatePeerDistChip(); }
+export function setLivePos(pos) { livePos = pos; updateCompassUI(); updateUserMarker(); }
 
 function renderCollStats() {
   if (!lastCollStats) return;
@@ -773,7 +773,9 @@ function loadLeaflet() {
   return leafletPromise;
 }
 
-let mapInst = null, markersLayer = null, userMarker = null, peerMarker = null, lastPeerPos = null, lastMapDets = [], mapCenteredOnLive = false;
+let mapInst = null, markersLayer = null, userMarker = null, lastMapDets = [], mapCenteredOnLive = false;
+const peerMarkers = new Map(); // peerId -> { marker, lastAnimPos }
+const peerPositions = new Map(); // peerId -> {lat,lng}
 export async function renderMap(dets) {
   lastMapDets = dets;
   const mapEl = document.getElementById('map');
@@ -833,16 +835,18 @@ export async function renderMap(dets) {
     mapCenteredOnLive = true;
   }
   updateUserMarker();
-  _applyPeerMarker();
-  _updatePeerDistChip();
+  for (const peerId of peerPositions.keys()) _applyPeerMarker(peerId);
   setTimeout(() => mapInst && mapInst.invalidateSize(), 60);
 }
 
 // Mini-Männchen-Icon fürs "Du bist hier"/Partner-Marker: Pulsring + Figur + Richtungspfeil
-// (Pfeil wird nur eingeblendet/gedreht, sobald sich die Position tatsächlich ändert).
+// (Pfeil wird nur eingeblendet/gedreht, sobald sich die Position tatsächlich ändert). Partner-
+// Marker bekommen zusätzlich eine kleine Nummer (im Stern-Modell mit 3+ Handys zur Unterscheidung,
+// wer wer ist) — badgeNum ist immer eine intern vergebene Verbindungs-Nummer, kein Fremdtext.
 const PERSON_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6.5" r="4.2"/><path d="M12 13c-4.7 0-8.5 2.8-8.5 6.3V22h17v-2.7c0-3.5-3.8-6.3-8.5-6.3z"/></svg>';
-function _walkerIconHtml(kind) {
-  return `<span class="${kind}-pulse"></span><span class="map-heading-arrow"></span><span class="${kind}-figure">${PERSON_SVG}</span>`;
+function _walkerIconHtml(kind, badgeNum) {
+  const badge = badgeNum != null ? `<span class="peer-badge">${badgeNum}</span>` : '';
+  return `<span class="${kind}-pulse"></span><span class="map-heading-arrow"></span><span class="${kind}-figure">${PERSON_SVG}</span>${badge}`;
 }
 
 // Bewegt einen Marker weich von seiner aktuellen Position zur neuen (statt hart zu springen) und
@@ -884,45 +888,59 @@ function updateUserMarker() {
   }
 }
 
-// Position des gekoppelten Partner-Handys (js/locate.js meldet Updates hierher) — eigener Marker,
-// unabhängig von den Fund-Pins und dem "Du bist hier"-Punkt. pos===null entfernt den Marker
-// wieder (z.B. wenn die Kopplung getrennt wird). Wird gemerkt, auch bevor die Karte je geöffnet
-// wurde (mapInst existiert dann noch nicht) — beim nächsten renderMap() zieht _applyPeerMarker
-// die zwischengespeicherte Position dann nach.
-let _lastPeerAnimPos = null;
-export function updatePeerMarker(pos) {
-  lastPeerPos = pos;
-  _applyPeerMarker();
-  _updatePeerDistChip();
+// Position eines gekoppelten Partner-Handys (js/locate.js meldet Updates hierher, ein Aufruf pro
+// Partner) — eigener nummerierter Marker pro Partner, unabhängig von den Fund-Pins und dem "Du
+// bist hier"-Punkt. pos===null entfernt genau diesen einen Partner-Marker wieder (z.B. Trennung).
+// Wird gemerkt, auch bevor die Karte je geöffnet wurde (mapInst existiert dann noch nicht) — beim
+// nächsten renderMap() zieht _applyPeerMarker die zwischengespeicherte Position dann nach.
+export function updatePeerMarker(peerId, pos) {
+  if (pos) peerPositions.set(peerId, pos); else peerPositions.delete(peerId);
+  _applyPeerMarker(peerId);
 }
 
-// Ständige Distanz-/Richtungsanzeige zum Partner im Karten-Tab (nicht nur beim gemeinsamen Fund-
-// Ereignis) — läuft mit, sobald beide Positionen bekannt sind, unabhängig davon, ob gerade eine
-// Erkennung stattfindet.
-function _updatePeerDistChip() {
-  const chip = document.getElementById('peerDistChip');
-  const txt = document.getElementById('peerDistTxt');
-  if (!chip || !txt) return;
-  if (!lastPeerPos || !livePos) { chip.hidden = true; return; }
-  const distM = Math.round(haversineKm(livePos, lastPeerPos) * 1000);
-  const brg = bearingDeg(livePos, lastPeerPos);
+// Distanz + Peilung zu einem Partner NICHT mehr ständig als Text-Chip (skaliert nicht auf mehrere
+// Partner) — stattdessen zeigt ein Klick auf den nummerierten Partner-Marker die Werte in einem
+// kleinen Popup, genau wie bei den Fund-Pins.
+function _peerDistText(peerId) {
+  const pos = peerPositions.get(peerId);
+  if (!pos || !livePos) return null;
+  const distM = Math.round(haversineKm(livePos, pos) * 1000);
+  const brg = bearingDeg(livePos, pos);
   const dirs = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
   const dirTxt = dirs[Math.round(brg / 45) % 8];
   const distTxt = distM >= 1000 ? (distM / 1000).toFixed(1) + ' km' : distM + ' m';
-  txt.textContent = distTxt + ' · ' + dirTxt;
-  chip.hidden = false;
+  return distTxt + ' · ' + dirTxt;
 }
-function _applyPeerMarker() {
-  if (!lastPeerPos) { if (peerMarker) { peerMarker.remove(); peerMarker = null; } _lastPeerAnimPos = null; return; }
+
+function _showPeerDistPopup(peerId, marker) {
+  const txt = _peerDistText(peerId);
+  const popupEl = document.createElement('div');
+  popupEl.className = 'map-pin-popup';
+  const icoSpan = document.createElement('span'); icoSpan.className = 'mp-ico'; icoSpan.textContent = '🤝';
+  const nameSpan = document.createElement('span'); nameSpan.className = 'mp-name';
+  nameSpan.textContent = 'Partner ' + peerId + (txt ? ' · ' + txt : ' · Entfernung noch unbekannt');
+  popupEl.append(icoSpan, nameSpan);
+  marker.bindPopup(popupEl, { closeButton: false, offset: [0, -4], className: 'map-pin-popup-wrap' }).openPopup();
+}
+
+function _applyPeerMarker(peerId) {
+  const pos = peerPositions.get(peerId);
+  let entry = peerMarkers.get(peerId);
+  if (!pos) {
+    if (entry) { entry.marker.remove(); peerMarkers.delete(peerId); }
+    return;
+  }
   if (!mapInst || !window.L) return;
   const L = window.L;
-  if (!peerMarker) {
-    const icon = L.divIcon({ className: 'peer-marker', html: _walkerIconHtml('peer'), iconSize: [26, 26], iconAnchor: [13, 13] });
-    peerMarker = L.marker([lastPeerPos.lat, lastPeerPos.lng], { icon, interactive: false, zIndexOffset: 999 }).addTo(mapInst);
-    _lastPeerAnimPos = lastPeerPos;
+  if (!entry) {
+    const icon = L.divIcon({ className: 'peer-marker', html: _walkerIconHtml('peer', peerId), iconSize: [26, 26], iconAnchor: [13, 13] });
+    const marker = L.marker([pos.lat, pos.lng], { icon, interactive: true, zIndexOffset: 999 }).addTo(mapInst);
+    marker.on('click', () => _showPeerDistPopup(peerId, marker));
+    entry = { marker, lastAnimPos: pos };
+    peerMarkers.set(peerId, entry);
   } else {
-    _glideMarker(peerMarker, _lastPeerAnimPos, lastPeerPos);
-    _lastPeerAnimPos = lastPeerPos;
+    _glideMarker(entry.marker, entry.lastAnimPos, pos);
+    entry.lastAnimPos = pos;
   }
 }
 

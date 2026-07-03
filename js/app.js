@@ -14,6 +14,7 @@ import * as locate from './locate.js';
 import * as chat from './chat.js';
 import * as session from './session.js';
 import * as filetransfer from './filetransfer.js';
+import * as hub from './peerhub.js';
 
 // ---- In-App Lightbox für Fotos ----
 function openPhotoLightbox(url) {
@@ -126,7 +127,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v86';
+const APP_VERSION = 'v87';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1209,7 +1210,9 @@ function makeSendToPartnerBtn(blob, kind, label) {
     btn.disabled = true; btn.textContent = '⏳';
     try {
       await filetransfer.sendFile(blob, kind, label || '');
-      showInfoToast('📲 Gesendet', (kind === 'video' ? 'Video' : 'Foto') + ' ans Partner-Handy geschickt.', '✅');
+      const n = hub.peerCount();
+      const dest = n > 1 ? 'an alle ' + n + ' gekoppelten Handys' : 'ans Partner-Handy';
+      showInfoToast('📲 Gesendet', (kind === 'video' ? 'Video' : 'Foto') + ' ' + dest + ' geschickt.', '✅');
     } catch (e) {
       showInfoToast('📲 Fehler', e?.message || 'Senden fehlgeschlagen.', '⚠️');
     } finally {
@@ -1938,18 +1941,24 @@ function _compassSvg(r) {
 function showLocateResult(r) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
+  const partnerLabel = hub.peerCount() > 1 ? 'Partner ' + r.peerId : 'dein Partner';
+  // Ohne direkten Uhren-Abgleich (z.B. Speiche-zu-Speiche im Stern-Modell, über die Zentrale
+  // weitergeleitet) gibt es ehrlich keine "wer war näher"-Aussage — lieber das offen zeigen als
+  // eine falsche Vermutung ("gleichzeitig") vorzutäuschen.
   const whoLine = r.firstHeard === 'me' ? '💡 Du hast ihn zuerst gehört — Quelle vermutlich näher an dir'
-    : r.firstHeard === 'peer' ? '💡 Dein Partner hat ihn zuerst gehört — Quelle vermutlich näher an ihm'
-    : '💡 Fast gleichzeitig gehört — Quelle vermutlich mittig zwischen euch';
+    : r.firstHeard === 'peer' ? `💡 ${partnerLabel} hat ihn zuerst gehört — Quelle vermutlich näher an ${hub.peerCount() > 1 ? 'ihm/ihr' : 'ihm'}`
+    : r.firstHeard === 'both' ? '💡 Fast gleichzeitig gehört — Quelle vermutlich mittig zwischen euch'
+    : `💡 Auch von ${partnerLabel} gehört — ohne direkten Uhren-Abgleich lässt sich nicht sagen, wer näher dran war.`;
   const hasGeo = r.bearingToPeer != null && r.baselineM != null;
   const compassBlock = hasGeo
     ? `${_compassSvg(r)}<div style="font-size:11px;color:var(--faint);margin-top:2px">Nur die Seite (näher an dir/Partner) ist zuverlässig — eine genaue Pfeilrichtung würde mehr Präzision vortäuschen, als zwei Mikrofone hergeben. ${r.sideHint || ''}</div>`
     : `<div style="font-size:12px;color:var(--muted);margin-top:10px">Kein GPS bei einem der Geräte — keine Peilung möglich.</div>`;
+  const deltaLine = r.deltaMs != null ? 'gemeinsam geortet — Zeitversatz ' + r.deltaMs + ' ms' : 'gemeinsam geortet mit ' + partnerLabel;
   ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:26px 26px 20px;text-align:center;max-width:280px;width:88%">
     <div style="font-size:18px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;margin-bottom:4px">${r.species}</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">gemeinsam geortet — Zeitversatz ${r.deltaMs} ms</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">${deltaLine}</div>
     <div style="font-size:13px;color:var(--ink);line-height:1.4">${whoLine}</div>
-    ${compassBlock}
+    ${r.firstHeard != null ? compassBlock : ''}
     <button id="_locResultClose" style="width:100%;margin-top:14px;padding:11px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
   </div>`;
   document.body.appendChild(ov);
@@ -1961,7 +1970,7 @@ function showLocateResult(r) {
 // Gemeinsamer Session-Bericht: führt die eigenen Funde seit Sessionbeginn mit denen des Partners
 // zusammen. Partner-Daten kommen über den Datenkanal (js/session.js) -> IMMER per textContent
 // rendern, nie per innerHTML, genau wie beim Chat (fremder Input ist nicht vertrauenswürdig).
-function showSessionReport(myDets, peerDets, peerAvailable) {
+function showSessionReport(myDets, peerResults) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
   const card = document.createElement('div');
@@ -1971,20 +1980,24 @@ function showSessionReport(myDets, peerDets, peerAvailable) {
   title.textContent = '📋 Gemeinsamer Bericht';
   const sub = document.createElement('div');
   sub.style.cssText = "font-size:12px;color:var(--muted);margin:4px 0 12px;font-family:'Inter',sans-serif";
-  sub.textContent = peerAvailable ? 'Funde von beiden Handys zusammengeführt' : 'Partner hat nicht geantwortet — zeigt nur deine eigenen Funde';
+  sub.textContent = peerResults.length
+    ? 'Funde von dir + ' + peerResults.length + ' Partner-Handy' + (peerResults.length === 1 ? '' : 's') + ' zusammengeführt'
+    : 'Kein Partner hat geantwortet — zeigt nur deine eigenen Funde';
 
-  const tally = new Map(); // Artname -> {mine, peer}
-  for (const d of myDets) {
-    const sp = typeof d.species === 'string' && d.species ? d.species : 'Unbekannt';
-    const e = tally.get(sp) || { mine: 0, peer: 0 };
-    e.mine++; tally.set(sp, e);
-  }
-  for (const d of peerDets) {
-    const sp = typeof d.species === 'string' && d.species ? d.species : 'Unbekannt';
-    const e = tally.get(sp) || { mine: 0, peer: 0 };
-    e.peer++; tally.set(sp, e);
-  }
-  const sorted = [...tally.entries()].sort((a, b) => (b[1].mine + b[1].peer) - (a[1].mine + a[1].peer));
+  // Artname -> Map(Quelle -> Anzahl); Quelle ist 'me' oder eine peerId.
+  const tally = new Map();
+  const addDets = (dets, source) => {
+    for (const d of dets) {
+      const sp = typeof d.species === 'string' && d.species ? d.species : 'Unbekannt';
+      let bySource = tally.get(sp);
+      if (!bySource) { bySource = new Map(); tally.set(sp, bySource); }
+      bySource.set(source, (bySource.get(source) || 0) + 1);
+    }
+  };
+  addDets(myDets, 'me');
+  for (const { peerId, dets } of peerResults) addDets(dets, peerId);
+  const totalFor = bySource => [...bySource.values()].reduce((a, b) => a + b, 0);
+  const sorted = [...tally.entries()].sort((a, b) => totalFor(b[1]) - totalFor(a[1]));
 
   const list = document.createElement('div');
   list.style.cssText = "overflow-y:auto;display:flex;flex-direction:column;gap:8px;font-family:'Inter',sans-serif";
@@ -1994,19 +2007,22 @@ function showSessionReport(myDets, peerDets, peerAvailable) {
     empty.textContent = 'Noch keine Funde in dieser Session.';
     list.appendChild(empty);
   }
-  for (const [species, e] of sorted) {
+  for (const [species, bySource] of sorted) {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px;background:var(--glass);border-radius:12px;padding:9px 12px';
     const nameSpan = document.createElement('span'); nameSpan.style.cssText = 'color:var(--ink)'; nameSpan.textContent = species;
     const countSpan = document.createElement('span'); countSpan.style.cssText = 'color:var(--muted);font-size:11.5px;white-space:nowrap';
-    countSpan.textContent = (e.mine + e.peer) + '× (du ' + e.mine + (peerAvailable ? ', Partner ' + e.peer : '') + ')';
+    const parts = ['du ' + (bySource.get('me') || 0)];
+    for (const { peerId } of peerResults) parts.push('Partner ' + peerId + ' ' + (bySource.get(peerId) || 0));
+    countSpan.textContent = totalFor(bySource) + '× (' + parts.join(', ') + ')';
     row.append(nameSpan, countSpan);
     list.appendChild(row);
   }
 
+  const totalAll = myDets.length + peerResults.reduce((a, p) => a + p.dets.length, 0);
   const totalLine = document.createElement('div');
   totalLine.style.cssText = "font-size:11.5px;color:var(--faint);margin:10px 0 2px;font-family:'Inter',sans-serif";
-  totalLine.textContent = 'Insgesamt ' + (myDets.length + peerDets.length) + ' Funde, ' + sorted.length + ' Arten';
+  totalLine.textContent = 'Insgesamt ' + totalAll + ' Funde, ' + sorted.length + ' Arten';
 
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
@@ -2044,7 +2060,11 @@ function initPairing() {
   const chatInput = document.getElementById('pairChatInput');
   const chatSend = document.getElementById('pairChatSend');
 
-  let scanStream = null, stopScan = null, activePc = null, isConnected = false, stopQualityMonitor = null;
+  let scanStream = null, stopScan = null, pendingPc = null, modulesAttached = false;
+  // Eine Verbindung pro gekoppeltem Gerät (Stern-Modell: mehr als eine gleichzeitig möglich) —
+  // peerId -> { pc, stopQuality, reconnectTimer }.
+  const connections = new Map();
+  const peerSignalLevels = new Map(); // peerId -> Signal-Level, fürs schwächste Glied im Chip
 
   function stopCamera() {
     if (stopScan) { stopScan(); stopScan = null; }
@@ -2053,7 +2073,9 @@ function initPairing() {
   }
 
   // Verbindungs-Badge oben in der Topbar (Lauschen-Tab) — zeigt Status + grobe Verbindungsqualität
-  // (Paketlaufzeit, nicht echte WLAN-Signalstärke — die ist über Web-APIs nicht abfragbar).
+  // (Paketlaufzeit, nicht echte WLAN-Signalstärke — die ist über Web-APIs nicht abfragbar). Bei
+  // mehreren gekoppelten Geräten (Stern-Modell) zeigt der Text die Anzahl, das Signal-Icon das
+  // schwächste Glied unter allen gleichzeitigen Verbindungen.
   const pairChip = document.getElementById('pairStatusChip');
   const pairChipTxt = document.getElementById('pairStatusTxt');
   const pairSignalIco = document.getElementById('pairSignalIco');
@@ -2068,6 +2090,27 @@ function initPairing() {
     const bars = pairSignalIco.querySelectorAll('rect');
     bars.forEach((bar, i) => { bar.style.opacity = level != null && i < level ? '1' : '.35'; });
   }
+  function updatePeerSignal(peerId, level) {
+    peerSignalLevels.set(peerId, level);
+    const levels = [...peerSignalLevels.values()].filter(l => l != null);
+    updatePairSignal(levels.length ? Math.min(...levels) : null);
+  }
+  function refreshPeerChip() {
+    const n = hub.peerCount();
+    if (n === 0) { setPairChip(false); return; }
+    setPairChip(true, n > 1 ? `Verbunden (${n})` : 'Verbunden');
+  }
+  function renderPeerList() {
+    const el = document.getElementById('pairPeerList');
+    if (!el) return;
+    el.innerHTML = '';
+    for (const { id } of hub.peerList()) {
+      const row = document.createElement('div');
+      row.className = 'pair-peer-row';
+      row.textContent = '🟢 Partner ' + id;
+      el.appendChild(row);
+    }
+  }
   if (pairChip) pairChip.onclick = () => {
     document.querySelector('.nav button[data-v="orni"]')?.click();
     document.querySelector('#orniToggle button[data-tab="monitoring"]')?.click();
@@ -2080,6 +2123,16 @@ function initPairing() {
     if (!chatList) return;
     const row = document.createElement('div');
     row.className = 'pair-chat-row ' + (msg.from === 'me' ? 'me' : 'peer');
+    // Bei mehr als einem gekoppelten Gerät (Stern-Modell) dazuschreiben, von wem die Nachricht
+    // kam — bei nur einem Partner ist das redundant (klar, wer sonst).
+    const wrap = document.createElement('div');
+    wrap.className = 'pair-chat-col';
+    if (msg.from !== 'me' && hub.peerCount() > 1) {
+      const fromLabel = document.createElement('div');
+      fromLabel.className = 'pair-chat-from';
+      fromLabel.textContent = 'Partner ' + msg.from;
+      wrap.appendChild(fromLabel);
+    }
     if (msg.kind === 'voice') {
       const bubble = document.createElement('div');
       bubble.className = 'pair-chat-bubble pair-chat-voice';
@@ -2097,13 +2150,14 @@ function initPairing() {
       durSpan.className = 'pair-chat-voice-dur';
       durSpan.textContent = '🎙️ ' + (msg.durationSec || 0) + 's';
       bubble.append(playBtn, durSpan, audioEl);
-      row.appendChild(bubble);
+      wrap.appendChild(bubble);
     } else {
       const bubble = document.createElement('div');
       bubble.className = 'pair-chat-bubble';
       bubble.textContent = msg.text;
-      row.appendChild(bubble);
+      wrap.appendChild(bubble);
     }
+    row.appendChild(wrap);
     chatList.appendChild(row);
     chatList.scrollTop = chatList.scrollHeight;
   }
@@ -2113,7 +2167,8 @@ function initPairing() {
     // Wenn das Kopplungs-Fenster gerade nicht offen ist, trotzdem kurz benachrichtigen.
     if (!modal.classList.contains('open')) {
       const preview = msg.kind === 'voice' ? '🎙️ Sprachnachricht (' + (msg.durationSec || 0) + 's)' : msg.text;
-      showInfoToast('💬 Nachricht vom Partner', preview, '💬');
+      const title = hub.peerCount() > 1 ? '💬 Nachricht von Partner ' + msg.from : '💬 Nachricht vom Partner';
+      showInfoToast(title, preview, '💬');
     }
   }
 
@@ -2187,57 +2242,73 @@ function initPairing() {
     voiceBtn.addEventListener('pointercancel', stopVoiceRecording);
   }
 
-  // Sobald die Verbindung steht, an js/locate.js + js/chat.js übergeben — beides läuft im
-  // Hintergrund weiter, auch wenn der Nutzer das Kopplungs-Fenster schließt und normal
-  // weiterlauscht.
-  let reconnectGraceTimer = null;
-  function onPaired(dc) {
-    isConnected = true;
-    locate.attach(dc, showLocateResult, updatePeerMarker);
-    if (geo.pos) locate.setLocalPos(geo.pos);
-    if (chatList) chatList.innerHTML = '';
-    chat.attach(dc, onChatMessage);
-    session.attach(dc);
-    session.startSession();
-    filetransfer.attach(dc, onFileReceived, onFileProgress);
-    setPairChip(true, 'Verbunden');
-    if (stopQualityMonitor) stopQualityMonitor();
-    stopQualityMonitor = monitorQuality(activePc, ({ level }) => updatePairSignal(level));
+  // Sobald eine Verbindung steht, bei js/peerhub.js registrieren — die eigentlichen Module
+  // (locate/chat/session/filetransfer) werden nur EINMAL angehängt (nicht pro Gerät), da sie über
+  // js/peerhub.js automatisch mit ALLEN aktuell gekoppelten Geräten sprechen. Läuft im Hintergrund
+  // weiter, auch wenn der Nutzer das Kopplungs-Fenster schließt und normal weiterlauscht.
+  function onPeerConnected(dc, pc) {
+    const peerId = hub.addPeer(dc);
+    const entry = { pc, stopQuality: null, reconnectTimer: null };
+    connections.set(peerId, entry);
+
+    if (!modulesAttached) {
+      modulesAttached = true;
+      locate.attach(showLocateResult, updatePeerMarker);
+      chat.attach(onChatMessage);
+      session.attach();
+      session.startSession();
+      filetransfer.attach(onFileReceived, onFileProgress);
+      if (chatList) chatList.innerHTML = '';
+    }
+    if (geo.pos) locate.setLocalPos(geo.pos); // damit auch ein NEU dazugekoppeltes Gerät die eigene Position bekommt
+    refreshPeerChip();
+    renderPeerList();
+
+    entry.stopQuality = monitorQuality(pc, ({ level }) => updatePeerSignal(peerId, level));
     // Ein kompletter, stiller Neuaufbau ist mit dem QR-Kopplungsansatz nicht möglich (kein
     // laufender Signalisierungskanal für ein neues Angebot/Antwort nach dem einmaligen Scan).
     // ABER: kurze Wackler (WLAN-Hänger, Bildschirm aus) kann WebRTC oft selbst überstehen, wenn
     // man ihm etwas Zeit gibt, statt sofort alles zu kappen — 'disconnected' heißt nicht
     // zwangsläufig 'endgültig weg', erst 'failed'/'closed' oder ein anhaltendes 'disconnected'.
-    activePc.addEventListener('connectionstatechange', () => {
-      const state = activePc?.connectionState;
+    pc.addEventListener('connectionstatechange', () => {
+      const state = pc.connectionState;
       if (state === 'connected') {
-        if (reconnectGraceTimer) { clearTimeout(reconnectGraceTimer); reconnectGraceTimer = null; }
-        setPairChip(true, 'Verbunden');
+        if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+        refreshPeerChip();
       } else if (state === 'disconnected') {
-        setPairChip(true, 'Verbinde neu…');
-        if (!reconnectGraceTimer) {
-          reconnectGraceTimer = setTimeout(() => {
-            reconnectGraceTimer = null;
-            if (activePc?.connectionState !== 'connected') onDisconnected();
+        refreshPeerChip();
+        if (!entry.reconnectTimer) {
+          entry.reconnectTimer = setTimeout(() => {
+            entry.reconnectTimer = null;
+            if (pc.connectionState !== 'connected') onPeerDisconnected(peerId);
           }, 12000);
         }
       } else if (state === 'failed' || state === 'closed') {
-        if (reconnectGraceTimer) { clearTimeout(reconnectGraceTimer); reconnectGraceTimer = null; }
-        onDisconnected();
+        if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+        onPeerDisconnected(peerId);
       }
     });
   }
 
-  function onDisconnected() {
-    isConnected = false;
-    setPairChip(false);
-    if (stopQualityMonitor) { stopQualityMonitor(); stopQualityMonitor = null; }
-    locate.detach();
-    chat.detach();
-    session.detach();
-    filetransfer.detach();
-    activePc = null;
-    showInfoToast('📡 Verbindung zum Partner verloren', 'Nicht automatisch behebbar — bitte neu koppeln.', '📡', () => openBtn.click(), 'Neu koppeln');
+  function onPeerDisconnected(peerId) {
+    const entry = connections.get(peerId);
+    if (entry?.stopQuality) entry.stopQuality();
+    connections.delete(peerId);
+    peerSignalLevels.delete(peerId);
+    hub.removePeer(peerId);
+    updatePeerMarker(peerId, null);
+    refreshPeerChip();
+    renderPeerList();
+    if (connections.size === 0) {
+      modulesAttached = false;
+      locate.detach();
+      chat.detach();
+      session.detach();
+      filetransfer.detach();
+      showInfoToast('📡 Verbindung zum Partner verloren', 'Nicht automatisch behebbar — bitte neu koppeln.', '📡', () => openBtn.click(), 'Neu koppeln');
+    } else {
+      showInfoToast('📡 Partner ' + peerId + ' getrennt', connections.size + ' Verbindung' + (connections.size === 1 ? '' : 'en') + ' noch aktiv.', '📡');
+    }
   }
 
   function showStep_(name) {
@@ -2251,32 +2322,36 @@ function initPairing() {
 
   function closeModal() {
     stopCamera();
-    // Nur schließen, wenn noch KEINE Verbindung steht (Kopplung abgebrochen) — eine bereits
-    // hergestellte Verbindung soll im Hintergrund weiterlaufen, wenn der Nutzer das Fenster
-    // nur schließt, um wieder normal zu lauschen.
-    if (!isConnected && activePc) { try { activePc.close(); } catch {} activePc = null; }
+    // Eine noch unfertige NEUE Kopplung (Schritt 'show'/'scan'/'answer') abbrechen — bereits
+    // hergestellte Verbindungen laufen im Hintergrund weiter, wenn der Nutzer das Fenster nur
+    // schließt, um wieder normal zu lauschen.
+    if (pendingPc) { try { pendingPc.close(); } catch {} pendingPc = null; }
     showScanAnswerBtn.hidden = true;
     modal.classList.remove('open');
   }
 
   openBtn.onclick = () => {
-    // Wenn schon eine Verbindung steht, nur den Status zeigen statt sie zu kappen — nur bei
-    // einem NEUEN Kopplungsversuch (noch nicht verbunden) eine evtl. alte Verbindung aufräumen.
-    if (isConnected) {
+    // Wenn schon mindestens eine Verbindung steht, nur den Status zeigen statt sie zu kappen —
+    // nur bei einem NEUEN Kopplungsversuch (noch nicht verbunden) eine evtl. unfertige
+    // Verbindung aufräumen.
+    if (hub.peerCount() > 0) {
+      renderPeerList();
       showStep_('connected');
     } else {
-      if (reconnectGraceTimer) { clearTimeout(reconnectGraceTimer); reconnectGraceTimer = null; }
-      if (activePc) { try { activePc.close(); } catch {} activePc = null; }
-      locate.detach();
-      chat.detach();
-      session.detach();
-      filetransfer.detach();
+      if (pendingPc) { try { pendingPc.close(); } catch {} pendingPc = null; }
       showStep_('choice');
     }
     modal.classList.add('open');
   };
   closeBtn.onclick = closeModal;
   if (scrim) scrim.onclick = closeModal;
+
+  // ---- Weiteres Handy koppeln (Stern-Modell) — bestehende Verbindungen bleiben unangetastet ----
+  const addDeviceBtn = document.getElementById('pairAddDeviceBtn');
+  if (addDeviceBtn) addDeviceBtn.onclick = () => {
+    if (pendingPc) { try { pendingPc.close(); } catch {} pendingPc = null; }
+    showStep_('choice');
+  };
 
   async function startScan(onDecoded, statusEl) {
     stopCamera();
@@ -2298,7 +2373,7 @@ function initPairing() {
     let offerer;
     try {
       offerer = await createOfferer();
-      activePc = offerer.pc;
+      pendingPc = offerer.pc;
       renderQR(offerer.qrText, qrCanvas);
       status.textContent = 'Lass das andere Handy diesen Code scannen';
       showScanAnswerBtn.hidden = false;
@@ -2312,7 +2387,8 @@ function initPairing() {
         showStep_('connected');
         connectedStep.querySelector('#pairConnectedSub').textContent = 'Verbinde…';
         const dc = await waitForOpen(offerer.dc);
-        onPaired(dc);
+        const pc = pendingPc; pendingPc = null;
+        onPeerConnected(dc, pc);
         connectedStep.querySelector('#pairConnectedSub').textContent = 'Verbunden — Ruf-Ortung läuft jetzt automatisch mit.';
       } catch (err) {
         scanStatus.textContent = 'Ungültiger Code oder Verbindung fehlgeschlagen — bitte erneut versuchen.';
@@ -2336,13 +2412,14 @@ function initPairing() {
       startScan(onOfferScanned, scanStatus);
       return;
     }
-    activePc = answerer.pc;
+    pendingPc = answerer.pc;
     showStep_('answer');
     renderQR(answerer.qrText, answerQrCanvas);
     answerStatus.textContent = 'Zeig dieses Handy jetzt dem Partner — Warte auf Verbindung…';
     try {
       const dc = await waitForOpen(answerer.dc);
-      onPaired(dc);
+      const pc = pendingPc; pendingPc = null;
+      onPeerConnected(dc, pc);
       showStep_('connected');
       connectedStep.querySelector('#pairConnectedSub').textContent = 'Verbunden — Ruf-Ortung läuft jetzt automatisch mit.';
     } catch (err) {
@@ -2369,27 +2446,27 @@ function initPairing() {
       const startTs = session.getSessionStart();
       let myDets = [];
       try { myDets = (await allDetections()).filter(d => d.ts >= startTs); } catch {}
-      const peerDets = await session.requestPeerDetections(startTs);
-      showSessionReport(myDets, peerDets || [], !!peerDets);
+      const peerResults = await session.requestAllPeerDetections(startTs);
+      showSessionReport(myDets, peerResults);
     } finally {
       sessionReportBtn.disabled = false;
       sessionReportBtn.textContent = orig;
     }
   };
 
-  // ---- Foto/Video direkt ans Partner-Handy (ganz ohne Internet, über den Datenkanal) ----
+  // ---- Foto/Video direkt an alle gekoppelten Handys (ganz ohne Internet, über den Datenkanal) ----
   function onFileProgress({ direction, sent, total }) {
     if (direction !== 'receive') return;
-    if (sent === 1) showInfoToast('📲 Empfange Datei…', 'Vom Partner-Handy — bitte warten.', '📲');
+    if (sent === 1) showInfoToast('📲 Empfange Datei…', 'Von einem Partner-Handy — bitte warten.', '📲');
   }
-  async function onFileReceived({ blob, kind, name, mime }) {
-    const label = 'Vom Partner' + (name ? ': ' + name : '');
+  async function onFileReceived({ blob, kind, name, mime, peerId }) {
+    const label = 'Von Partner ' + peerId + (name ? ': ' + name : '');
     let attId = null;
     try { attId = await addAttachment({ key: null, label, kind, blob, mime: mime || blob.type }); }
     catch (e) { console.warn('addAttachment (partner file)', e); }
     const list = document.getElementById('recList');
     if (list) list.prepend(attachmentRow({ blob, kind, label, mime: mime || blob.type, key: null, id: attId, ts: Date.now() }));
-    showInfoToast('📲 Vom Partner erhalten', (kind === 'video' ? 'Video' : 'Foto') + ' angekommen — in der Galerie.', '📲');
+    showInfoToast('📲 Von Partner ' + peerId + ' erhalten', (kind === 'video' ? 'Video' : 'Foto') + ' angekommen — in der Galerie.', '📲');
     if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
   }
 }

@@ -1,27 +1,30 @@
-// Gemeinsamer Session-Bericht: fragt beim gekoppelten Partner-Handy alle Funde seit einem
-// Startzeitpunkt ab und führt sie mit den eigenen Funden zu einem gemeinsamen Bericht zusammen —
-// läuft komplett über den bestehenden Datenkanal, kein Server nötig.
-let _dc = null;
-let _onMessageBound = null;
+// Gemeinsamer Session-Bericht: fragt bei allen gekoppelten Handys (js/peerhub.js — eins oder
+// mehrere, im Stern-Modell auch über die Zentrale weitergeleitet) die Funde seit einem
+// Startzeitpunkt ab und führt sie mit den eigenen zu einem gemeinsamen Bericht zusammen — läuft
+// komplett über den bestehenden Datenkanal, kein Server nötig.
+//
+// Anfrage UND Antwort laufen bewusst als Broadcast (nicht gezielt adressiert): im Stern-Modell
+// leitet die Zentrale jede Broadcast-Nachricht automatisch an alle anderen weiter, wodurch eine
+// Antwort einer Speiche ganz von selbst auch bei der fragenden Speiche ankommt — ganz ohne dass
+// hier eine geräteübergreifende Adressierung nachgebaut werden müsste.
+import * as hub from './peerhub.js';
+
+let _unsub = null;
 let _sessionStartTs = null;
-let _pendingResolve = null;
 let _detectionsProvider = null; // von app.js gesetzt: (startTs) => Promise<Array<det>>
 
-export function attach(dc) {
+export function attach() {
   detach();
-  _dc = dc;
-  _onMessageBound = e => _handle(e);
-  dc.addEventListener('message', _onMessageBound);
+  _unsub = hub.onMessage((msg, fromId) => _handle(msg, fromId));
 }
 
 export function detach() {
-  if (_dc && _onMessageBound) _dc.removeEventListener('message', _onMessageBound);
-  _dc = null; _onMessageBound = null;
-  _pendingResolve = null;
+  if (_unsub) _unsub();
+  _unsub = null;
 }
 
 export function isActive() {
-  return !!(_dc && _dc.readyState === 'open');
+  return hub.isActive();
 }
 
 // Von app.js beim erfolgreichen Koppeln aufgerufen — merkt sich den Startzeitpunkt der Session,
@@ -29,33 +32,30 @@ export function isActive() {
 export function startSession() { _sessionStartTs = Date.now(); }
 export function getSessionStart() { return _sessionStartTs || Date.now(); }
 
-// Von app.js gesetzt: liefert die EIGENEN Funde seit einem Zeitpunkt, wenn der Partner danach fragt.
+// Von app.js gesetzt: liefert die EIGENEN Funde seit einem Zeitpunkt, wenn ein anderes Gerät danach fragt.
 export function setDetectionsProvider(fn) { _detectionsProvider = fn; }
 
-function _send(obj) {
-  if (_dc && _dc.readyState === 'open') { try { _dc.send(JSON.stringify(obj)); } catch {} }
-}
-
-// Fragt den Partner nach dessen Funden seit startTs — löst mit dessen Liste auf, oder null bei
-// Timeout/keiner Verbindung (dann zeigt der Bericht eben nur die eigenen Funde).
-export function requestPeerDetections(startTs, timeoutMs = 8000) {
+// Fragt ALLE gekoppelten Geräte nach deren Funden seit startTs — löst mit einer Liste
+// {peerId, dets}[] auf (leer, wenn niemand innerhalb des Timeouts geantwortet hat).
+export function requestAllPeerDetections(startTs, timeoutMs = 8000) {
   return new Promise(res => {
-    if (!isActive()) { res(null); return; }
-    const to = setTimeout(() => { if (_pendingResolve === wrapped) { _pendingResolve = null; res(null); } }, timeoutMs);
-    const wrapped = data => { clearTimeout(to); res(data); };
-    _pendingResolve = wrapped;
-    _send({ type: 'sessionreq', startTs });
+    if (!isActive()) { res([]); return; }
+    const reqId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const results = new Map(); // peerId -> dets
+    const unsub = hub.onMessage((msg, fromId) => {
+      if (msg.type === 'sessionresp' && msg.reqId === reqId) results.set(fromId, msg.dets || []);
+    });
+    hub.broadcast({ type: 'sessionreq', startTs, reqId });
+    setTimeout(() => {
+      unsub();
+      res([...results.entries()].map(([peerId, dets]) => ({ peerId, dets })));
+    }, timeoutMs);
   });
 }
 
-async function _handle(e) {
-  let raw; try { raw = JSON.parse(e.data); } catch { return; }
-  if (raw.type === 'sessionreq') {
-    const dets = _detectionsProvider ? await _detectionsProvider(raw.startTs) : [];
-    _send({ type: 'sessionresp', dets });
-    return;
-  }
-  if (raw.type === 'sessionresp') {
-    if (_pendingResolve) { const r = _pendingResolve; _pendingResolve = null; r(raw.dets || []); }
+async function _handle(msg) {
+  if (msg.type === 'sessionreq') {
+    const dets = _detectionsProvider ? await _detectionsProvider(msg.startTs) : [];
+    hub.broadcast({ type: 'sessionresp', dets, reqId: msg.reqId });
   }
 }

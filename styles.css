@@ -410,6 +410,13 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .map-heading-arrow{position:absolute;top:-6px;left:50%;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:7px solid var(--cyan);transform-origin:50% 21px;transition:transform .4s ease-out;opacity:0}
 .map-heading-arrow.visible{opacity:1}
 .peer-marker .map-heading-arrow{border-bottom-color:var(--amber,#fbbf24)}
+/* Nummer-Badge auf Partner-Markern — im Stern-Modell (3+ Handys) zur Unterscheidung, wer wer ist. */
+.peer-badge{position:absolute;top:-3px;right:-3px;min-width:15px;height:15px;padding:0 3px;border-radius:8px;background:var(--amber,#fbbf24);color:#04130d;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.6);z-index:1}
+
+/* Stern-Modell: Liste der gerade gekoppelten Geräte oben im Verbunden-Schritt */
+.pair-peer-list{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
+.pair-peer-list:empty{display:none}
+.pair-peer-row{font-size:12px;color:var(--muted);background:var(--glass);border-radius:10px;padding:6px 11px;display:flex;align-items:center;gap:6px}
 
 /* Kurznachrichten zwischen gekoppelten Handys (js/chat.js) im Kopplungs-Modal */
 .pair-chat-list{max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:10px;scrollbar-width:none;padding:2px}
@@ -417,7 +424,10 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .pair-chat-row{display:flex}
 .pair-chat-row.me{justify-content:flex-end}
 .pair-chat-row.peer{justify-content:flex-start}
+.pair-chat-col{display:flex;flex-direction:column;max-width:78%}
+.pair-chat-from{font-size:10px;color:var(--faint);margin:0 2px 2px}
 .pair-chat-bubble{max-width:78%;padding:8px 12px;border-radius:14px;font-size:13px;line-height:1.35;word-break:break-word;white-space:pre-wrap}
+.pair-chat-col .pair-chat-bubble{max-width:none}
 .pair-chat-row.me .pair-chat-bubble{background:var(--lime);color:#04130d;border-bottom-right-radius:4px}
 .pair-chat-row.peer .pair-chat-bubble{background:var(--glass);color:var(--ink);border:1px solid var(--stroke);border-bottom-left-radius:4px}
 .pair-chat-input{flex:1;padding:10px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:14px;font-family:inherit;outline:none;min-width:0}
