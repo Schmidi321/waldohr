@@ -127,7 +127,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v87';
+const APP_VERSION = 'v88';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -2095,22 +2095,55 @@ function initPairing() {
     const levels = [...peerSignalLevels.values()].filter(l => l != null);
     updatePairSignal(levels.length ? Math.min(...levels) : null);
   }
+  // Wer die "Zentrale" ist, ergibt sich rein aus der Verbindungszahl (js/peerhub.js): 2+ gleich-
+  // zeitige Verbindungen -> man IST die Zentrale. Mit genau einer Verbindung sagt einem die
+  // Gegenstelle per kleinem Meta-Protokoll, welche Nummer man selbst bei ihr hat und ob sie ihrer-
+  // seits noch mit weiteren Geräten verbunden ist (dann ist SIE die Zentrale).
+  function pairStatusText() {
+    if (hub.isHost()) return 'Zentrale · ' + hub.peerCount() + ' verbunden';
+    const myId = hub.myAssignedId();
+    const idTxt = myId != null ? 'Du: Partner ' + myId : 'Verbunden';
+    return hub.remotePeerCount() > 1 ? idTxt + ' · mit Zentrale verbunden' : idTxt;
+  }
   function refreshPeerChip() {
     const n = hub.peerCount();
-    if (n === 0) { setPairChip(false); return; }
-    setPairChip(true, n > 1 ? `Verbunden (${n})` : 'Verbunden');
+    setPairChip(n > 0, n > 0 ? pairStatusText() : null);
+    updateMiniChips();
   }
   function renderPeerList() {
     const el = document.getElementById('pairPeerList');
     if (!el) return;
     el.innerHTML = '';
-    for (const { id } of hub.peerList()) {
+    if (hub.isHost()) {
+      const head = document.createElement('div');
+      head.className = 'pair-peer-row pair-peer-head';
+      head.textContent = '⭐ Du bist die Zentrale';
+      el.appendChild(head);
+      for (const { id } of hub.peerList()) {
+        const row = document.createElement('div');
+        row.className = 'pair-peer-row';
+        row.textContent = '🟢 Partner ' + id;
+        el.appendChild(row);
+      }
+    } else if (hub.peerCount() === 1) {
       const row = document.createElement('div');
       row.className = 'pair-peer-row';
-      row.textContent = '🟢 Partner ' + id;
+      const myId = hub.myAssignedId();
+      const who = myId != null ? ' — du bist Partner ' + myId : '';
+      row.textContent = hub.remotePeerCount() > 1 ? '🟢 Verbunden mit der Zentrale' + who : '🟢 Verbunden' + who;
       el.appendChild(row);
     }
   }
+  // Mini-Symbol auf den anderen Tabs (Karte/Sammlung/Statistik/Ornithologie) — dort reicht ein
+  // reines Icon ohne Text/Signalbalken, Details gibt's per Tap zurück zum Kopplungs-Fenster.
+  function updateMiniChips() {
+    const chips = document.querySelectorAll('.pair-mini-chip');
+    const connected = hub.peerCount() > 0;
+    const title = connected ? pairStatusText() : '';
+    chips.forEach(chip => { chip.hidden = !connected; chip.title = title; });
+  }
+  document.querySelectorAll('.pair-mini-chip').forEach(chip => { chip.onclick = () => openBtn.click(); });
+  hub.onTopoChange(() => { refreshPeerChip(); renderPeerList(); });
   if (pairChip) pairChip.onclick = () => {
     document.querySelector('.nav button[data-v="orni"]')?.click();
     document.querySelector('#orniToggle button[data-tab="monitoring"]')?.click();

@@ -63,6 +63,10 @@ h1,h2,h3,.brand,.big{font-family:'Outfit',sans-serif}
 .chip{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--glass);border:1px solid var(--stroke);padding:7px 11px;border-radius:30px}
 .chip[hidden]{display:none}
 .chip.loc-active,.chip.loc-searching,.chip.loc-off{padding:7px 9px;font-size:10px;font-weight:600;letter-spacing:.3px;gap:4px}
+/* Mini-Symbol für den Kopplungsstatus auf den Tabs außer "Lauschen" — dort reicht das reine Icon,
+   den Text/die Signalstärke gibt's nur auf dem Lauschen-Tab bzw. per Tap zurück ins Kopplungs-Fenster. */
+.pair-mini-chip{width:32px;height:32px;flex-shrink:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--glass);border:1px solid var(--stroke);color:var(--lime);cursor:pointer;padding:0}
+.pair-mini-chip[hidden]{display:none}
 .chip.loc-active{color:var(--lime)}
 .chip.loc-active svg{color:var(--lime)}
 .chip.loc-searching{color:var(--amber)}
@@ -417,6 +421,7 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .pair-peer-list{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
 .pair-peer-list:empty{display:none}
 .pair-peer-row{font-size:12px;color:var(--muted);background:var(--glass);border-radius:10px;padding:6px 11px;display:flex;align-items:center;gap:6px}
+.pair-peer-head{color:var(--amber,#fbbf24);font-weight:700}
 
 /* Kurznachrichten zwischen gekoppelten Handys (js/chat.js) im Kopplungs-Modal */
 .pair-chat-list{max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:10px;scrollbar-width:none;padding:2px}

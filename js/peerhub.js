@@ -11,9 +11,23 @@ const _peers = new Map(); // peerId -> { dc, label }
 let _nextId = 1;
 const _handlers = new Set(); // (msg, originPeerId) => void
 const _peerListListeners = new Set(); // () => void, feuert bei jeder Änderung der Peer-Liste
+const _topoListeners = new Set(); // () => void, feuert wenn sich die Rolle/Nummer der Gegenstelle ändert
+
+// Von der jeweils EINZIGEN Gegenstelle zugewiesene eigene Nummer + deren Verbindungszahl — nur
+// aussagekräftig, solange man selbst genau eine Verbindung hat (Speiche). Wird per kleinem
+// Meta-Protokoll (_topo, s.u.) übertragen, damit z.B. eine Speiche anzeigen kann "Du bist Partner 2,
+// verbunden mit der Zentrale (3 Geräte insgesamt)".
+let _myId = null, _remoteTotal = null;
 
 function _notifyPeerListChange() {
   for (const fn of _peerListListeners) { try { fn(); } catch {} }
+}
+
+// Jedem direkt verbundenen Gerät die eigene Sicht auf die Lage mitteilen: welche Nummer es bei mir
+// hat + wie viele Verbindungen ich insgesamt halte (>1 heißt: ich bin gerade die Zentrale). relay:
+// false, da das nur zwischen direkt verbundenen Geräten Sinn ergibt, nicht über Dritte weitergereicht.
+function _broadcastTopo() {
+  for (const [id, p] of _peers) _send(p.dc, { type: '_topo', yourId: id, hostTotal: _peers.size, relay: false });
 }
 
 // Registriert einen neu verbundenen Partner-Kanal, vergibt eine fortlaufende Nummer (für die
@@ -24,15 +38,23 @@ export function addPeer(dc, label) {
   _peers.set(id, entry);
   dc.addEventListener('message', e => _onMessage(id, e));
   _notifyPeerListChange();
+  _broadcastTopo();
+  // Beide Seiten rufen addPeer() etwa zeitgleich auf (reagieren auf dasselbe 'open'-Ereignis) — der
+  // erste, sofortige Broadcast kann die Gegenstelle daher knapp verpassen, falls die ihren eigenen
+  // Message-Listener noch nicht registriert hat. Ein zweiter, verzögerter Versuch fängt das ab.
+  setTimeout(_broadcastTopo, 800);
   return id;
 }
 
 export function removePeer(id) {
-  if (_peers.delete(id)) _notifyPeerListChange();
+  if (_peers.delete(id)) {
+    if (!_peers.size) { _myId = null; _remoteTotal = null; }
+    _notifyPeerListChange(); _broadcastTopo();
+  }
 }
 
 export function resetAll() {
-  if (_peers.size) { _peers.clear(); _notifyPeerListChange(); }
+  if (_peers.size) { _peers.clear(); _myId = null; _remoteTotal = null; _notifyPeerListChange(); }
 }
 
 export function peerList() {
@@ -47,6 +69,12 @@ export function peerCount() { return _peers.size; }
 export function isActive() { return _peers.size > 0; }
 // "Zentrale" = hält mehr als eine gleichzeitige Verbindung -> leitet zwischen den anderen weiter.
 export function isHost() { return _peers.size > 1; }
+
+// Eigene Nummer aus Sicht der (einzigen) Gegenstelle, bzw. wie viele Verbindungen sie insgesamt
+// hält (>1 -> sie ist die Zentrale) — null, solange das noch nicht mitgeteilt wurde.
+export function myAssignedId() { return _myId; }
+export function remotePeerCount() { return _remoteTotal; }
+export function onTopoChange(fn) { _topoListeners.add(fn); return () => _topoListeners.delete(fn); }
 
 // Module melden sich EINMAL an (z.B. beim App-Start), nicht pro Verbindung — bekommen danach jede
 // Nachricht von jedem aktuellen/künftigen Partner. originPeerId ist immer die ID des Geräts, das
@@ -97,6 +125,13 @@ export function waitUntilBufferBelow(thresholdBytes) {
 
 function _onMessage(fromId, e) {
   let msg; try { msg = JSON.parse(e.data); } catch { return; }
+  // Meta-Protokoll für die Rollen-/Nummern-Anzeige — wird hier verarbeitet und konsumiert, nicht
+  // an die App-Module (chat/locate/...) weitergereicht.
+  if (msg.type === '_topo') {
+    _myId = msg.yourId; _remoteTotal = msg.hostTotal;
+    for (const fn of _topoListeners) { try { fn(); } catch {} }
+    return;
+  }
   const originId = msg._origin ?? fromId;
   // Nur die Zentrale (2+ gleichzeitige Verbindungen) leitet weiter, und nur frische, dafür
   // vorgesehene Nachrichten (noch kein _hop, relay!==false) — verhindert sowohl Weiterleitungs-

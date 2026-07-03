@@ -81,7 +81,7 @@
 
     <!-- ============ MAP ============ -->
     <section class="view" id="v-map">
-      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></svg></span>Fundkarte</div><div style="display:flex;align-items:center;gap:8px"><div class="chip" id="mapCount">0 Funde</div><button class="route-toggle-btn" id="routeToggleBtn" title="Route aufzeichnen ein/aus" aria-label="Route aufzeichnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path d="M3 17l4-8 4 4 4-6 4 4"/><circle cx="3" cy="17" r="1.5" fill="currentColor" stroke="none"/><circle cx="21" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg></button></div></div>
+      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></svg></span>Fundkarte</div><div style="display:flex;align-items:center;gap:8px"><div class="chip" id="mapCount">0 Funde</div><button type="button" class="pair-mini-chip" title="Partner-Kopplung" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M17 8l4 4-4 4M7 8l-4 4 4 4M14 4l-4 16"/></svg></button><button class="route-toggle-btn" id="routeToggleBtn" title="Route aufzeichnen ein/aus" aria-label="Route aufzeichnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path d="M3 17l4-8 4 4 4-6 4 4"/><circle cx="3" cy="17" r="1.5" fill="currentColor" stroke="none"/><circle cx="21" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg></button></div></div>
       <div class="map" id="map">
         <div class="map-empty" id="mapEmpty" hidden>Noch keine verorteten Funde.<br>Mikro starten &amp; Standort erlauben.</div>
       </div>
@@ -95,7 +95,7 @@
 
     <!-- ============ COLLECTION ============ -->
     <section class="view" id="v-coll">
-      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M5 3h14v18l-7-4-7 4z"/></svg></span>Meine Sammlung</div></div>
+      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M5 3h14v18l-7-4-7 4z"/></svg></span>Meine Sammlung</div><button type="button" class="pair-mini-chip" title="Partner-Kopplung" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M17 8l4 4-4 4M7 8l-4 4 4 4M14 4l-4 16"/></svg></button></div>
       <div class="stats" id="collStats"></div>
 
       <div class="segmented" id="collToggle">
@@ -118,7 +118,7 @@
 
     <!-- ============ STATS ============ -->
     <section class="view" id="v-stat">
-      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 19v-6M13 19V9M18 19v-9"/></svg></span>Statistik</div><div class="chip">Juni 2026</div></div>
+      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 19v-6M13 19V9M18 19v-9"/></svg></span>Statistik</div><div style="display:flex;align-items:center;gap:8px"><div class="chip">Juni 2026</div><button type="button" class="pair-mini-chip" title="Partner-Kopplung" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M17 8l4 4-4 4M7 8l-4 4 4 4M14 4l-4 16"/></svg></button></div></div>
       <div class="segmented" id="statToggle">
         <button class="on" data-mode="here">Heute hier</button>
         <button data-mode="global">Global</button>
@@ -167,7 +167,7 @@
 
     <!-- ============ ORNITHOLOGIE ============ -->
     <section class="view" id="v-orni">
-      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="15" r="4"/><circle cx="18" cy="15" r="4"/><path d="M10 15h4M6 9v2M18 9v2M9 9h6"/></svg></span>Ornithologie</div></div>
+      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="15" r="4"/><circle cx="18" cy="15" r="4"/><path d="M10 15h4M6 9v2M18 9v2M9 9h6"/></svg></span>Ornithologie</div><button type="button" class="pair-mini-chip" title="Partner-Kopplung" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M17 8l4 4-4 4M7 8l-4 4 4 4M14 4l-4 16"/></svg></button></div>
       <div class="segmented" id="orniToggle">
         <button class="on" data-tab="monitoring">Überwachung</button>
         <button data-tab="protokolle">Protokolle</button>
