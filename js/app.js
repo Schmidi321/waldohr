@@ -127,7 +127,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v88';
+const APP_VERSION = 'v89';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -2052,6 +2052,7 @@ function initPairing() {
   const status = document.getElementById('pairStatus');
   const qrCanvas = document.getElementById('pairQrCanvas');
   const scanVideo = document.getElementById('pairScanVideo');
+  const scanCamSelect = document.getElementById('pairScanCamSelect');
   const scanStatus = document.getElementById('pairScanStatus');
   const answerQrCanvas = document.getElementById('pairAnswerQrCanvas');
   const answerStatus = document.getElementById('pairAnswerStatus');
@@ -2386,13 +2387,45 @@ function initPairing() {
     showStep_('choice');
   };
 
+  // Auf Handys mit mehreren Rückkamera-Objektiven (Ultra-Weit/Normal/Tele) per Auswahl das
+  // passende für den QR-Scan wählen lassen — Ultra-Weit fokussiert oft schlechter aus der Nähe,
+  // Tele kann bei sehr kleinen/dichten Codes schärfer sein. Labels sind erst NACH einer erteilten
+  // Kamera-Erlaubnis aussagekräftig, darum wird hier erst nach dem ersten Stream aufgezählt.
+  let currentScanOnDecoded = null, currentScanStatusEl = null;
+  async function _populateScanCamSelect() {
+    if (!scanCamSelect) return;
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const back = all.filter(d => d.kind === 'videoinput' && !/front|facetime|user|selfie/i.test(d.label));
+      const ultraWide = back.find(d => /ultra/i.test(d.label));
+      const wide = back.find(d => !/ultra|telephoto|tele|[23]\.?\d?x\b/i.test(d.label)) || back[0];
+      const tele = back.find(d => /telephoto|tele|[23]\.?\d?x\b/i.test(d.label) && d !== wide);
+      const chosen = [ultraWide, wide, tele].filter(Boolean);
+      if (chosen.length < 2) { scanCamSelect.hidden = true; return; }
+      const prevValue = scanCamSelect.value;
+      scanCamSelect.innerHTML = chosen.map(d => {
+        const name = /ultra/i.test(d.label) ? '📷 Ultra-Weit (0.5×)' : /telephoto|tele|[23]\.?\d?x\b/i.test(d.label) ? '🔭 Tele' : '📷 Normal (1×)';
+        return `<option value="${d.deviceId}">${name}</option>`;
+      }).join('');
+      if (prevValue && chosen.some(d => d.deviceId === prevValue)) scanCamSelect.value = prevValue;
+      scanCamSelect.hidden = false;
+    } catch (e) { console.warn('scan cam enumerate', e); }
+  }
+  if (scanCamSelect) scanCamSelect.onchange = () => {
+    if (currentScanOnDecoded) startScan(currentScanOnDecoded, currentScanStatusEl);
+  };
+
   async function startScan(onDecoded, statusEl) {
     stopCamera();
+    currentScanOnDecoded = onDecoded; currentScanStatusEl = statusEl;
     try {
-      scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const camId = scanCamSelect && scanCamSelect.value ? scanCamSelect.value : null;
+      const videoConstraints = camId ? { deviceId: { exact: camId } } : { facingMode: 'environment' };
+      scanStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
       scanVideo.srcObject = scanStream;
       await scanVideo.play().catch(() => {});
       stopScan = scanQR(scanVideo, onDecoded);
+      _populateScanCamSelect();
     } catch (e) {
       if (statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e?.message || '');
     }
