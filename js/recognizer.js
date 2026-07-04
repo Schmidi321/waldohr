@@ -179,8 +179,14 @@ const week48 = () => { const d = new Date(); return d.getMonth() * 4 + Math.min(
 
 // Server-seitige Erkennung: schickt 3-s-WAV ans Python-BirdNET-Backend (echtes BirdNET).
 export class ServerRecognizer {
-  constructor(url) { this.url = url.replace(/\/$/, ''); this.id = 'birdnet-server'; this.ready = false; this.busy = false; this.geo = null; }
-  async load() { const r = await fetch(this.url + '/health'); if (!r.ok) throw new Error('BirdNET-Server nicht erreichbar'); this.ready = true; return true; }
+  constructor(url) {
+    this.url = url.replace(/\/$/, ''); this.id = 'birdnet-server'; this.ready = false; this.busy = false; this.geo = null;
+    // Live-Verbindungsstatus fürs Icon in der App — Server-Modus hat (anders als Mock/On-Device)
+    // eine echte Netzwerkabhängigkeit, die auch NACH dem Start noch wegbrechen kann (WLAN-Hänger,
+    // Server neugestartet, ...), darum bei jedem Klassifizierungsversuch neu bewertet.
+    this.status = 'unknown'; // 'ok' | 'error' | 'unknown'
+  }
+  async load() { const r = await fetch(this.url + '/health'); if (!r.ok) throw new Error('BirdNET-Server nicht erreichbar'); this.ready = true; this.status = 'ok'; return true; }
   setGeo(pos) { this.geo = pos; }
   async classify(samples, sampleRate) {
     if (!this.ready || this.busy) return null;   // nur eine Anfrage gleichzeitig
@@ -192,13 +198,14 @@ export class ServerRecognizer {
         method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
         body: encodeWav(samples, sampleRate || 48000)
       });
-      if (!r.ok) return null;
+      if (!r.ok) { this.status = 'error'; return null; }
+      this.status = 'ok';
       const top = ((await r.json()).results || [])[0];
       if (!top) return null;
       const key = ensureSpecies({ sci: top.sci, name: top.common });
       const sp = SPECIES[key];
       return { key, name: sp.name, sci: sp.sci, rarity: sp.rarity, confidence: +(+top.confidence).toFixed(2), source: 'birdnet-server' };
-    } catch (e) { console.warn('server classify', e); return null; }
+    } catch (e) { console.warn('server classify', e); this.status = 'error'; return null; }
     finally { this.busy = false; }
   }
 }

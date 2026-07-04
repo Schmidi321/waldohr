@@ -127,7 +127,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v89';
+const APP_VERSION = 'v90';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -166,6 +166,7 @@ async function boot() {
   else if (rec.id === 'birdnet-server') statusTxt.textContent = 'Verbinde mit BirdNET-Server…';
   try { await rec.load(); }
   catch (e) { console.warn('Recognizer-Fallback auf Mock:', e); rec = new MockRecognizer(); await rec.load(); }
+  updateServerStatusChip();
 
   audio.onWindow = onWindow;
   setUI('off');
@@ -229,11 +230,28 @@ function onAlarm(type) {
   }
 }
 
+// BirdNET-Server-Verbindungsstatus (nur relevant im Server-Modus — Mock/On-Device brauchen kein
+// Netzwerk und bleiben unsichtbar). Der Server-Modus hat anders als die anderen KEINEN robusten
+// Fallback zur Laufzeit (nur einmal beim Start geprüft), darum hier bei jedem Erkennungsversuch
+// neu bewertet — sonst merkt der Nutzer eine wegbrechende Verbindung (WLAN, Server down) nicht,
+// außer dass plötzlich keine Funde mehr kommen.
+function updateServerStatusChip() {
+  const chip = document.getElementById('serverStatusChip');
+  if (!chip) return;
+  if (!rec || rec.id !== 'birdnet-server') { chip.hidden = true; return; }
+  chip.hidden = false;
+  chip.classList.remove('loc-active', 'loc-searching', 'srv-err');
+  if (rec.status === 'ok') { chip.classList.add('loc-active'); chip.title = 'BirdNET-Server verbunden'; }
+  else if (rec.status === 'error') { chip.classList.add('srv-err'); chip.title = 'BirdNET-Server nicht erreichbar — Verbindung/Empfang prüfen'; }
+  else { chip.classList.add('loc-searching'); chip.title = 'Verbinde mit BirdNET-Server…'; }
+}
+
 async function onWindow(samples, sampleRate) {
   if (!rec || !detectionActive) return;
   if (rec.setGeo) rec.setGeo(geo.pos);   // Standort für bessere Treffer (Server-Modus)
   let r = null;
   try { r = await rec.classify(samples, sampleRate); } catch (e) { console.warn('classify', e); }
+  updateServerStatusChip();
   if (!r) return;
   const det = {
     key: r.key, species: r.name, sci: r.sci, rarity: r.rarity, confidence: r.confidence,

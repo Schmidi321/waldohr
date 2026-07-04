@@ -73,6 +73,11 @@ h1,h2,h3,.brand,.big{font-family:'Outfit',sans-serif}
 .chip.loc-searching svg{color:var(--amber);animation:recpulse 1.4s infinite}
 .chip.loc-off{color:var(--faint)}
 .chip.loc-off svg{color:var(--faint)}
+/* BirdNET-Server-Verbindungsstatus (js/recognizer.js' ServerRecognizer) — nur im Server-Modus
+   sichtbar, da Mock/On-Device keine Netzwerkabhängigkeit haben. Wiederverwendet loc-active
+   (lime, verbunden) und loc-searching (amber, pulsierend, verbindet gerade); srv-err ist neu. */
+.chip.srv-err{color:var(--rose)}
+.chip.srv-err svg{color:var(--rose);animation:recpulse 1.1s infinite}
 .chip svg{width:13px;height:13px;opacity:.8}
 .gear{width:38px;height:38px;flex:0 0 38px;border-radius:12px;background:var(--glass);border:1px solid var(--stroke);color:var(--muted);display:grid;place-items:center;cursor:pointer;transition:.2s}
 .gear:active{transform:scale(.92)}
