@@ -50,7 +50,7 @@ function startDauerUeberwachung() {
   _duTimeout = setTimeout(() => {
     stopDauerUeberwachung();
     showInfoToast('⏱ Dauerüberwachung', 'Zeitlimit erreicht — Lauschen gestoppt.', '⏱');
-    if (audio.running) { audio.stop(); detectionActive = false; setUI('off'); stopSession(); }
+    if (audio.running) { audio.stop(); detectionActive = false; setUI('off'); }
   }, ms);
 }
 function stopDauerUeberwachung() {
@@ -127,7 +127,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v91';
+const APP_VERSION = 'v92';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -212,7 +212,7 @@ function onAlarm(type) {
   }
   if (type === 'nacht-end') {
     showInfoToast('🦉 Nacht-Modus beendet', 'Geplante Endzeit erreicht — Lauschen gestoppt.', '🦉');
-    if (audio.running) { stopDauerUeberwachung(); audio.stop(); detectionActive = false; setUI('off'); stopSession(); }
+    if (audio.running) { stopDauerUeberwachung(); audio.stop(); detectionActive = false; setUI('off'); }
     return;
   }
   const isMC = type === 'morgenchor';
@@ -222,7 +222,7 @@ function onAlarm(type) {
   if (!audio.running) {
     tryFullscreen();
     audio.start(getMicDeviceId())
-      .then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); })
+      .then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); startDauerUeberwachung(); })
       .catch(e => {
         console.warn('alarm mic', e);
         showInfoToast(title, 'Mikrofon-Freigabe nötig — tippe zum Starten.', icon, () => toggleDetection(), 'Lauschen starten');
@@ -1355,7 +1355,7 @@ if (routeToggleBtn) routeToggleBtn.onclick = () => {
 function toggleDetection() {
   if (!audio.running) {
     tryFullscreen();
-    audio.start(getMicDeviceId()).then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); })
+    audio.start(getMicDeviceId()).then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); startDauerUeberwachung(); })
       .catch(e => { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); });
     return;
   }
@@ -1370,11 +1370,10 @@ if (orbBtn) orbBtn.addEventListener('click', async ev => {
   if (audio.running) {
     if (recorder.mr && recorder.mr.state === 'recording') recorder.mr.stop();
     stopDauerUeberwachung(); audio.stop(); detectionActive = false; setUI('off');
-    stopSession();
     return;
   }
   tryFullscreen();
-  try { await audio.start(getMicDeviceId()); geo.start(); setUI('mic-ready'); routeTracker.start(); updateRouteToggleBtn(true); startDauerUeberwachung(); }
+  try { await audio.start(getMicDeviceId()); geo.start(); setUI('mic-ready'); startDauerUeberwachung(); }
   catch (e) { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); }
 });
 
