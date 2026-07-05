@@ -1,6 +1,11 @@
 // GPS-Routen-Recorder: zeichnet Track während einer Hörsession auf, berechnet Distanz, exportiert GPX.
 import { haversineKm } from './db.js';
 
+// Transekt-Zählung läuft meist langsamer/methodischer (feste Strecke abgehen, genau zählen) und
+// profitiert von etwas dichteren Punkten für eine genauere Distanz; die normale Route (Karte) ist
+// eher der grobe Spaziergang-Track.
+const SNAP_INTERVAL_MS = { route: 15000, transekt: 10000 };
+
 export const routeTracker = {
   points: [],  // [{lat, lng, ts}]
   distKm: 0,
@@ -22,7 +27,7 @@ export const routeTracker = {
     this.points = [];
     this.distKm = 0;
     this._snap();
-    this._timer = setInterval(() => this._snap(), 30000);
+    this._timer = setInterval(() => this._snap(), SNAP_INTERVAL_MS[this.owner] || SNAP_INTERVAL_MS.route);
     return true;
   },
 
