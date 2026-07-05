@@ -7,15 +7,23 @@ export const routeTracker = {
   _timer: null,
   _geo: null,
   onUpdate: null,  // optional callback(points) after each snap
+  // Route-Button (Karte) und Transekt-Zählung teilen sich diesen einen Tracker — owner merkt sich,
+  // wer die laufende Aufzeichnung gestartet hat, damit das jeweils andere Feature sie nicht aus
+  // Versehen mitbeendet oder überschreibt, solange eine Aufzeichnung läuft.
+  owner: null,  // 'route' | 'transekt' | null
 
   init(geo) { this._geo = geo; },
 
-  start() {
-    if (this._timer) return;
+  // Gibt false zurück, wenn schon eine Aufzeichnung läuft (von wem auch immer) — der Aufrufer
+  // muss das dann selbst dem Nutzer mitteilen, statt die laufende Session zu übernehmen.
+  start(owner) {
+    if (this._timer) return false;
+    this.owner = owner || null;
     this.points = [];
     this.distKm = 0;
     this._snap();
     this._timer = setInterval(() => this._snap(), 30000);
+    return true;
   },
 
   stop() {
@@ -23,7 +31,9 @@ export const routeTracker = {
     clearInterval(this._timer);
     this._timer = null;
     this._snap();
-    return this.getSummary();
+    const summary = this.getSummary();
+    this.owner = null;
+    return summary;
   },
 
   _snap() {

@@ -1,6 +1,7 @@
 import { getDauerUeberwachung, setDauerUeberwachung } from './alarm.js';
 import { allDetections, qualifyingDetections } from './db.js';
 import { routeTracker } from './route.js';
+import { showInfoToast } from './ui.js';
 
 const $ = id => document.getElementById(id);
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -303,6 +304,13 @@ function _initTransekt() {
       return;
     }
 
+    // Teilt sich den Tracker mit dem Route-Button (Karten-Tab) — läuft dort schon eine
+    // Aufzeichnung, nicht einfach übernehmen/überschreiben, sondern klar sagen, wo zuerst stoppen.
+    if (routeTracker._timer) {
+      showInfoToast('📍 Route läuft bereits', 'Erst im Karten-Tab beenden, dann kannst du eine Transekt-Zählung starten.', '📍');
+      return;
+    }
+
     _txStartTs = Date.now();
     _txWasDetecting = window.__waldohr ? window.__waldohr.isDetecting() : false;
 
@@ -313,7 +321,7 @@ function _initTransekt() {
     timerEl.textContent = '0:00';
     if (distEl) distEl.textContent = '0 m zurückgelegt';
 
-    routeTracker.start();
+    routeTracker.start('transekt');
     if (window.__waldohr) {
       window.__waldohr.startDetection().catch(e => console.warn('tx start', e));
       window.__waldohr.switchTab('v-listen');

@@ -127,7 +127,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v92';
+const APP_VERSION = 'v93';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1340,13 +1340,22 @@ function stopSession() {
 const timingBtn = document.getElementById('timingBtn');
 if (timingBtn) timingBtn.onclick = () => { warmAlarmCtx(); openTimingModal(geo.pos); };
 
-// Route-Toggle im Karte-Tab: Route manuell starten/stoppen ohne Mikro.
+// Route-Toggle im Karte-Tab: Route manuell starten/stoppen ohne Mikro. Teilt sich den Tracker mit
+// der Transekt-Zählung (Ornithologie-Tab) — läuft die gerade, hier nicht einfach mitbeenden/
+// überschreiben, sondern klar sagen, wo man zuerst stoppen muss.
 if (routeToggleBtn) routeToggleBtn.onclick = () => {
   if (routeTracker._timer) {
+    if (routeTracker.owner !== 'route') {
+      showInfoToast('🗺️ Transekt-Zählung läuft', 'Erst dort beenden, dann lässt sich die Route separat starten.', '🗺️');
+      return;
+    }
     stopSession();
   } else {
     geo.start();
-    routeTracker.start();
+    if (!routeTracker.start('route')) {
+      showInfoToast('🗺️ Transekt-Zählung läuft', 'Erst dort beenden, dann lässt sich die Route separat starten.', '🗺️');
+      return;
+    }
     updateRouteToggleBtn(true);
     showInfoToast('Route gestartet', 'GPS-Track wird aufgezeichnet.', '📍');
   }
