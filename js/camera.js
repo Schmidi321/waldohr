@@ -172,13 +172,18 @@ function _startZoomAnim() {
     const p = Math.min(1, (now - t0) / dur);
     // Logarithmische Interpolation → wahrgenommene Zoom-Geschwindigkeit konstant
     const v = from * Math.pow(to / from, p);
-    // CSS scale für flüssige Animation jeden Frame (kein Ruckeln) — auf Geräten mit echtem
+    // CSS scale für flüssige Vorschau jeden Frame (kein Ruckeln) — auf Geräten mit echtem
     // optischem/Hardware-Zoom lief bisher NUR diese CSS-Simulation, der reale Zoom blieb fix
-    // stehen. Dadurch driftete das sichtbare Bild vom eigentlichen Kamera-Zoom auseinander und
-    // fühlte sich je nach Zoomstufe uneinheitlich schnell an. Jetzt wird der echte Zoom parallel
-    // nachgeführt (gedrosselt, nicht jeden Frame — sonst Ruckeln am Kameramotor).
+    // stehen. Dadurch driftete das sichtbare Bild vom eigentlichen Kamera-Zoom auseinander.
+    // WICHTIG: MediaRecorder zeichnet den rohen Kamera-Track auf, nicht das gestylte <video>-
+    // Element — die CSS-Skalierung landet also NIE in der Aufnahme, nur der echte Hardware-Zoom
+    // zählt dort. Jeder applyConstraints()-Aufruf ist auf vielen Handys eine spürbare Unterbrechung
+    // der Kamera-Pipeline (kurzer Ruckler/Frame-Drop) — bei 180ms Abstand macht das über die volle
+    // Zoomdauer viele kleine Ruckler, die sich in der AUFNAHME zu heftigem Stottern aufsummieren.
+    // Deutlich seltener nachführen (450ms) reduziert die Zahl der Unterbrechungen auf gut ein
+    // Drittel; die Vorschau bleibt trotzdem flüssig, da die läuft komplett über die CSS-Skala.
     if (vid) vid.style.transform = `scale(${Math.max(1, v / (minZ || 1))})`;
-    if (_zoomSupported && _videoTrack && (p >= 1 || now - _lastHwSync > 180)) {
+    if (_zoomSupported && _videoTrack && (p >= 1 || now - _lastHwSync > 450)) {
       _lastHwSync = now;
       try { _videoTrack.applyConstraints({ advanced: [{ zoom: v }] }); } catch {}
     }

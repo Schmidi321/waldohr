@@ -127,7 +127,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v90';
+const APP_VERSION = 'v91';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
