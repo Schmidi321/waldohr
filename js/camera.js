@@ -12,6 +12,14 @@ let _azDelayTimer = null, _intervalTimer = null, _burstActive = false;
 let _intervalCountdown = null, _intervalNext = 0;
 let _facingMode = 'environment';
 let _lapseTimer = null, _lapseFrames = [], _lapseIntervalSec = 2;
+// Zoom-Modell: _viewZoom ist der logische Soll-Zoom (Anzeige + Aufnahme), _hwZoom der zuletzt
+// tatsächlich an die Kamera-Hardware übergebene Wert. Die Differenz wird digital gerendert
+// (CSS-Scale in der Vorschau, Canvas-Crop in der Aufnahme) — so kann der Hardware-Zoom selten
+// oder (während einer Aufnahme) gar nicht nachgeführt werden, ohne dass das Bild springt.
+let _viewZoom = 1, _hwZoom = 1;
+// Canvas-Aufnahme-Pipeline: Videoaufnahmen zeichnen nicht den rohen Kamera-Track auf, sondern
+// einen Canvas-Kompositor mit framegenauem Digital-Zoom (s. _startCanvasRecPipeline).
+let _recDrawRaf = null, _recCanvasStream = null;
 
 // ---- Geräte aufzählen (Labels erst nach Genehmigung verfügbar) ----
 async function _enumerateDevices() {
@@ -43,15 +51,33 @@ async function _enumerateDevices() {
   } catch (e) { console.warn('enumerate', e); }
 }
 
-// ---- Auto-Zoom ----
-function _applyZoom(v) {
-  if (_zoomSupported && _videoTrack) {
-    try { _videoTrack.applyConstraints({ advanced: [{ zoom: v }] }); } catch {}
-  } else {
-    const vid = document.getElementById('camVideo');
-    if (vid) vid.style.transform = `scale(${Math.max(1, v / (_zoomMin || 1))})`;
-  }
+// ---- Zoom-Rendering ----
+function _isRecording() { return !!(_mr && _mr.state === 'recording'); }
+
+// Logischen Zoom setzen: Vorschau (CSS) und Slider sofort, framegenau, ohne die Kamera-Pipeline
+// anzufassen. Der sichtbare Digital-Faktor ist immer relativ zum aktuellen Hardware-Stand —
+// dadurch stimmen Vorschau und (Canvas-)Aufnahme exakt überein und nichts springt.
+function _renderZoom(v) {
+  _viewZoom = v;
+  const vid = document.getElementById('camVideo');
+  if (vid) vid.style.transform = `scale(${Math.max(1, v / (_hwZoom || 1))})`;
   const sl = document.getElementById('camZoom'); if (sl) sl.value = v;
+  const zv = document.getElementById('camZoomVal'); if (zv) zv.textContent = v.toFixed(1) + '×';
+}
+
+// Hardware-Zoom tatsächlich nachführen. Jeder applyConstraints()-Aufruf ist auf vielen Handys
+// eine spürbare Unterbrechung der Kamera-Pipeline (Frame-Drop) — deshalb passiert das NIE
+// während einer laufenden Videoaufnahme (dort zoomt der Canvas-Kompositor rein digital) und
+// außerhalb von Aufnahmen nur gedrosselt.
+function _syncHwZoom(v) {
+  if (!_zoomSupported || !_videoTrack || _isRecording()) return;
+  try { _videoTrack.applyConstraints({ advanced: [{ zoom: v }] }); _hwZoom = v; } catch {}
+  _renderZoom(_viewZoom); // Digital-Anteil neu berechnen (schrumpft nach dem Sync auf ~1)
+}
+
+function _applyZoom(v) {
+  _renderZoom(v);
+  _syncHwZoom(v);
 }
 
 function _stopZoomAnim() {
@@ -165,29 +191,21 @@ function _startZoomAnim() {
   const from = _zoomDir === 'in' ? minZ : maxZ;
   const to   = _zoomDir === 'in' ? maxZ : minZ;
   if (from === to) return;
-  const vid = document.getElementById('camVideo');
   const t0 = performance.now();
   let _lastHwSync = 0;
   const tick = now => {
     const p = Math.min(1, (now - t0) / dur);
     // Logarithmische Interpolation → wahrgenommene Zoom-Geschwindigkeit konstant
     const v = from * Math.pow(to / from, p);
-    // CSS scale für flüssige Vorschau jeden Frame (kein Ruckeln) — auf Geräten mit echtem
-    // optischem/Hardware-Zoom lief bisher NUR diese CSS-Simulation, der reale Zoom blieb fix
-    // stehen. Dadurch driftete das sichtbare Bild vom eigentlichen Kamera-Zoom auseinander.
-    // WICHTIG: MediaRecorder zeichnet den rohen Kamera-Track auf, nicht das gestylte <video>-
-    // Element — die CSS-Skalierung landet also NIE in der Aufnahme, nur der echte Hardware-Zoom
-    // zählt dort. Jeder applyConstraints()-Aufruf ist auf vielen Handys eine spürbare Unterbrechung
-    // der Kamera-Pipeline (kurzer Ruckler/Frame-Drop) — bei 180ms Abstand macht das über die volle
-    // Zoomdauer viele kleine Ruckler, die sich in der AUFNAHME zu heftigem Stottern aufsummieren.
-    // Deutlich seltener nachführen (450ms) reduziert die Zahl der Unterbrechungen auf gut ein
-    // Drittel; die Vorschau bleibt trotzdem flüssig, da die läuft komplett über die CSS-Skala.
-    if (vid) vid.style.transform = `scale(${Math.max(1, v / (minZ || 1))})`;
-    if (_zoomSupported && _videoTrack && (p >= 1 || now - _lastHwSync > 450)) {
+    // Vorschau + Aufnahme laufen framegenau digital (_renderZoom bzw. Canvas-Kompositor).
+    // Der Hardware-Zoom wird nur AUSSERHALB von Aufnahmen gedrosselt nachgeführt — während
+    // einer Aufnahme fasst _syncHwZoom die Pipeline gar nicht an (jeder applyConstraints-
+    // Aufruf wäre ein Ruckler, der frueher direkt in der Aufnahme landete).
+    _renderZoom(v);
+    if (p >= 1 || now - _lastHwSync > 450) {
       _lastHwSync = now;
-      try { _videoTrack.applyConstraints({ advanced: [{ zoom: v }] }); } catch {}
+      _syncHwZoom(v);
     }
-    const sl = document.getElementById('camZoom'); if (sl) sl.value = v;
     if (p < 1) { _zoomAnimTimer = requestAnimationFrame(tick); }
     else { _zoomAnimTimer = null; }
   };
@@ -311,6 +329,7 @@ async function _startStream(camId, micId) {
 
   _videoTrack = _stream.getVideoTracks()[0];
   _zoomSupported = false;
+  _zoomMin = 1; _zoomMax = 1;
   const zoomWrap   = document.getElementById('camZoomWrap');
   const zoomSlider = document.getElementById('camZoom');
   if (_videoTrack && _videoTrack.getCapabilities) {
@@ -325,6 +344,9 @@ async function _startStream(camId, micId) {
       }
     } catch {}
   }
+  // Frischer Stream startet ungezoomt — logisches Zoom-Modell darauf zurücksetzen.
+  _hwZoom = _zoomMin || 1;
+  _viewZoom = _hwZoom;
   if (zoomWrap) zoomWrap.hidden = !_zoomSupported;
   _setupMeter();
 }
@@ -380,6 +402,7 @@ function _cleanup() {
   const building = document.getElementById('camLapseBuilding'); if (building) building.hidden = true;
   if (_mr && _mr.state === 'recording') _mr.stop();
   _mr = null; _mrChunks = [];
+  _stopCanvasRecPipeline();
   if (_stream)  { _stream.getTracks().forEach(t => t.stop());  _stream = null; }
   if (_stream2) { _stream2.getTracks().forEach(t => t.stop()); _stream2 = null; }
   _videoTrack = null; _videoTrack2 = null;
@@ -449,20 +472,69 @@ async function _takePhoto() {
 }
 
 // ---- Video aufnehmen / stoppen ----
-function _toggleVideo() {
+//
+// Aufgenommen wird NICHT der rohe Kamera-Track, sondern ein Canvas-Kompositor: das <video>-Bild
+// wird pro Frame mit dem aktuellen Digital-Zoom-Ausschnitt auf einen Canvas gezeichnet und
+// dessen captureStream() (+ Mikrofon-Ton) an den MediaRecorder gegeben. Warum: Zoomen über
+// track.applyConstraints() unterbricht auf vielen Handys jedes Mal kurz die Kamera-Pipeline —
+// beim alten Direkt-Recording summierten sich diese Frame-Drops über die Zoomdauer zu heftigem
+// Stottern in der fertigen Aufnahme. Im Canvas-Weg wird die Pipeline während der Aufnahme gar
+// nicht mehr angefasst (Zoom läuft rein digital, framegenau) — der Stream wird mit bis zu 4K
+// angefordert, der Aufnahme-Canvas ist auf Full-HD gedeckelt, dadurch bleibt auch ein kräftiger
+// Digital-Zoom scharf. Einziger Hardware-Eingriff: VOR dem Aufnahmestart wird der Zoom einmal
+// auf Minimum gestellt (voller Sensorausschnitt als Digital-Reserve) und der kurze Ruckler
+// davon bewusst abgewartet, bevor der Recorder startet.
+function _startCanvasRecPipeline() {
+  const video = document.getElementById('camVideo');
+  if (!video || !video.videoWidth || typeof document.createElement('canvas').captureStream !== 'function') return null;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const scale = Math.min(1, 1920 / Math.max(vw, vh));
+  const cw = Math.round(vw * scale / 2) * 2, ch = Math.round(vh * scale / 2) * 2; // gerade Maße für die Encoder
+  const cv = document.createElement('canvas');
+  cv.width = cw; cv.height = ch;
+  const ctx = cv.getContext('2d');
+  const draw = () => {
+    const d = Math.max(1, _viewZoom / (_hwZoom || 1));
+    const sw = vw / d, sh = vh / d;
+    ctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cw, ch);
+    _recDrawRaf = requestAnimationFrame(draw);
+  };
+  draw();
+  const stream = cv.captureStream(30);
+  for (const t of _stream.getAudioTracks()) stream.addTrack(t);
+  return stream;
+}
+
+function _stopCanvasRecPipeline() {
+  if (_recDrawRaf) { cancelAnimationFrame(_recDrawRaf); _recDrawRaf = null; }
+  // Nur den Canvas-Videotrack beenden — die Audio-Tracks gehören weiter dem Kamera-Stream!
+  if (_recCanvasStream) { _recCanvasStream.getVideoTracks().forEach(t => t.stop()); _recCanvasStream = null; }
+}
+
+async function _toggleVideo() {
   if (_mr && _mr.state === 'recording') {
     _stopZoomAnim(); _mr.stop(); return;
   }
   if (!_stream) return;
+  // Hardware-Zoom einmalig aufs Minimum: voller Sensorausschnitt = maximale Digital-Reserve,
+  // und der Pipeline-Ruckler davon passiert VOR dem Aufnahmestart statt mittendrin.
+  if (_zoomSupported && _videoTrack && _hwZoom !== _zoomMin) {
+    try { _videoTrack.applyConstraints({ advanced: [{ zoom: _zoomMin }] }); _hwZoom = _zoomMin; } catch {}
+    _renderZoom(_viewZoom);
+    await new Promise(r => setTimeout(r, 350));
+  }
+  _recCanvasStream = _startCanvasRecPipeline();
+  const recStream = _recCanvasStream || _stream; // Fallback: altes Direkt-Recording (z.B. sehr alte Browser)
   let mime = '';
   for (const t of ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']) {
     if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { mime = t; break; }
   }
-  try { _mr = mime ? new MediaRecorder(_stream, { mimeType: mime }) : new MediaRecorder(_stream); }
-  catch (e) { console.warn('cam mr', e); return; }
+  try { _mr = mime ? new MediaRecorder(recStream, { mimeType: mime }) : new MediaRecorder(recStream); }
+  catch (e) { console.warn('cam mr', e); _stopCanvasRecPipeline(); return; }
   _mrChunks = [];
   _mr.ondataavailable = e => { if (e.data?.size) _mrChunks.push(e.data); };
   _mr.onstop = () => {
+    _stopCanvasRecPipeline();
     const blob = new Blob(_mrChunks, { type: mime || 'video/webm' });
     _mrChunks = [];
     const cb = _onCapture; _close();
@@ -646,14 +718,10 @@ export function openCamera(onCapture) {
       await _startStream(null, micSel?.value || null).catch(e => console.warn('flip', e));
     });
 
-    document.getElementById('camZoom')?.addEventListener('input', async function () {
-      const v = parseFloat(this.value);
-      const zv = document.getElementById('camZoomVal'); if (zv) zv.textContent = v.toFixed(1) + '×';
-      if (_zoomSupported && _videoTrack) {
-        try { await _videoTrack.applyConstraints({ advanced: [{ zoom: v }] }); } catch {}
-      } else {
-        const vid = document.getElementById('camVideo'); if (vid) vid.style.transform = `scale(${v})`;
-      }
+    document.getElementById('camZoom')?.addEventListener('input', function () {
+      // Während einer Aufnahme rein digital (Canvas-Kompositor), sonst Hardware-Zoom —
+      // _syncHwZoom entscheidet das selbst.
+      _applyZoom(parseFloat(this.value));
     });
 
     // Auto-Zoom Richtung
