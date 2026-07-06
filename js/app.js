@@ -11,6 +11,7 @@ import { initOrni } from './ornithologie.js';
 import { exportBackup, importBackup } from './backup.js';
 import { renderQR, scanQR, createOfferer, createAnswerer, waitForOpen, monitorQuality } from './pairing.js';
 import * as locate from './locate.js';
+import * as ar from './ar.js';
 import * as chat from './chat.js';
 import * as session from './session.js';
 import * as filetransfer from './filetransfer.js';
@@ -127,7 +128,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v96';
+const APP_VERSION = 'v97';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1998,12 +1999,16 @@ function showLocateResult(r) {
     <div style="font-size:13px;color:var(--ink);line-height:1.4">${whoLine}</div>
     ${r.firstHeard != null ? compassBlock : ''}
     ${calibHint}
-    <button id="_locResultClose" style="width:100%;margin-top:14px;padding:11px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
+    ${ar.canShowAR(r) ? '<button id="_locResultAr" style="width:100%;margin-top:14px;padding:11px;border-radius:14px;background:linear-gradient(140deg,var(--lime),var(--emerald));color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:\'Outfit\',sans-serif">📷 AR-Peilung — Kamera zeigt die Richtung</button>' : ''}
+    <button id="_locResultClose" style="width:100%;margin-top:${ar.canShowAR(r) ? '8' : '14'}px;padding:11px;border-radius:14px;background:${ar.canShowAR(r) ? 'var(--glass-strong,rgba(255,255,255,.08))' : 'var(--lime)'};color:${ar.canShowAR(r) ? 'var(--ink)' : '#04130d'};font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
   </div>`;
   document.body.appendChild(ov);
   const close = () => ov.remove();
   ov.querySelector('#_locResultClose').onclick = close;
-  setTimeout(close, 14000);
+  const arBtn = ov.querySelector('#_locResultAr');
+  if (arBtn) arBtn.onclick = () => { close(); ar.openAR(r); };
+  // Mit AR-Option länger stehen lassen — der Griff zur Kamera braucht einen Moment
+  setTimeout(close, ar.canShowAR(r) ? 25000 : 14000);
 }
 
 // Gemeinsamer Session-Bericht: führt die eigenen Funde seit Sessionbeginn mit denen des Partners

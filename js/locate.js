@@ -236,7 +236,7 @@ function _emitResult(match, fromId, deltaMs, extra) {
 
   _onResult({
     species: match.species, key: match.key, peerId: fromId,
-    deltaMs: Math.round(Math.abs(deltaMs)), firstHeard,
+    deltaMs: Math.round(Math.abs(deltaMs)), deltaSignedMs: Math.round(deltaMs), firstHeard,
     bearingToPeer, baselineM, sideHint, thetaDeg,
     method: extra.method, corrConf: extra.corrConf || null, calibrated: !!extra.calibrated,
   });

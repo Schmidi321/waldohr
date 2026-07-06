@@ -1,10 +1,10 @@
 // Service Worker — cacht die App-Shell, damit Waldohr offline startet.
-const CACHE = 'waldohr-v96';
+const CACHE = 'waldohr-v97';
 const ASSETS = [
   '.', 'index.html', 'styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png',
   'js/app.js', 'js/ui.js', 'js/db.js', 'js/audio.js', 'js/recognizer.js', 'js/species.js', 'js/species-extra.js', 'js/gemini.js',
   'js/weather.js', 'js/route.js', 'js/alarm.js', 'js/camera.js', 'js/ornithologie.js', 'js/backup.js', 'js/pairing.js',
-  'js/locate.js', 'js/tdoa.js', 'js/chat.js', 'js/session.js', 'js/filetransfer.js', 'js/peerhub.js', 'js/vendor/jsQR.js', 'js/vendor/qrcode.mjs'
+  'js/locate.js', 'js/tdoa.js', 'js/ar.js', 'js/chat.js', 'js/session.js', 'js/filetransfer.js', 'js/peerhub.js', 'js/vendor/jsQR.js', 'js/vendor/qrcode.mjs'
 ];
 
 self.addEventListener('install', e => {
