@@ -166,6 +166,13 @@ export function initUI() {
   const tipsScrim = $('tipsScrim'); if (tipsScrim) tipsScrim.onclick = () => tipsModal.classList.remove('open');
   const tipsClose = $('tipsClose'); if (tipsClose) tipsClose.onclick = () => tipsModal.classList.remove('open');
 
+  // Hilfe & Anleitung
+  const helpModal = $('helpModal');
+  const helpOpenBtn = $('helpOpenBtn');
+  if (helpOpenBtn && helpModal) helpOpenBtn.onclick = () => { closeSettings(); helpModal.classList.add('open'); };
+  const helpScrim = $('helpScrim'); if (helpScrim) helpScrim.onclick = () => helpModal.classList.remove('open');
+  const helpClose = $('helpClose'); if (helpClose) helpClose.onclick = () => helpModal.classList.remove('open');
+
   // Timing-Modal — close/save verdrahten (open erfolgt über exportiertes openTimingModal)
   const timingModal = $('timingModal');
   const closeTimingModal = () => timingModal && timingModal.classList.remove('open');
