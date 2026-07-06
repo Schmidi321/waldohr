@@ -2,7 +2,7 @@
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment, bearingDeg, haversineKm } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, updatePeerMarker, getMicDeviceId } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, updatePeerMarker, getMicDeviceId, addFixMarker, setManualPosHandler, showManualPos } from './ui.js';
 import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, fetchMoonTimes, fetchTodayHours, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
 import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
@@ -106,8 +106,34 @@ const setLoc = (state, detail) => {
 
 // Standort-Erfassung: läuft unabhängig vom Mikro, sobald die App startet (nicht erst beim
 // Lauschen) — Karte & Kompass-Richtung sollen auch ohne aktives Mikro die Position kennen.
+// Manuell auf der Karte gesetzte eigene Position (Stufe 4): überschreibt GPS für die gemeinsame
+// Ruf-Ortung, solange man steht — der GPS-Fehler der Empfänger dominiert dort die Peilung.
+let manualPos = null;
+// Die für Ortung/Kompass/AR maßgebliche eigene Position: manuell gesetzt hat Vorrang, sonst GPS.
+function myPos() { return manualPos || geo.pos; }
+
 const geo = {
-  watchId: null, pos: null,
+  watchId: null, pos: null, rawPos: null, accuracy: null,
+  _buf: [],  // jüngste Rohfixes {lat,lng,acc,t} zur Mittelung im Stand
+  // GPS-Mittelung: Fotografen stehen meist still — dann schwankt der reine GPS-Punkt trotzdem um
+  // mehrere Meter. Solange die letzten Fixes eng beieinander liegen (Stand), wird accuracy-gewichtet
+  // gemittelt (ruhigerer, genauerer Punkt). Bewegt man sich (neuer Fix weit weg vom Mittel), wird
+  // der Puffer verworfen und dem neuen Punkt sofort gefolgt — kein "Nachziehen".
+  _averaged(lat, lng, acc) {
+    const now = Date.now();
+    const cur = { lat, lng, acc: acc || 20, t: now };
+    // Mittelpunkt der bisherigen Fixes zum Vergleich
+    if (this._buf.length) {
+      let sl = 0, sn = 0; for (const f of this._buf) { sl += f.lat; sn += f.lng; }
+      const c = { lat: sl / this._buf.length, lng: sn / this._buf.length };
+      if (haversineKm(c, cur) * 1000 > 20) this._buf = []; // deutlich bewegt -> neu anfangen
+    }
+    this._buf.push(cur);
+    this._buf = this._buf.filter(f => now - f.t < 60000).slice(-40);
+    let wsLat = 0, wsLng = 0, wsum = 0;
+    for (const f of this._buf) { const w = 1 / Math.max(25, f.acc * f.acc); wsLat += f.lat * w; wsLng += f.lng * w; wsum += w; }
+    return { lat: wsLat / wsum, lng: wsLng / wsum };
+  },
   start() {
     if (!('geolocation' in navigator)) { setLoc('off', 'kein GPS'); return; }
     if (this.watchId != null) return;
@@ -115,9 +141,15 @@ const geo = {
     this.watchId = navigator.geolocation.watchPosition(
       p => {
         const had = !!this.pos;
-        this.pos = { lat: p.coords.latitude, lng: p.coords.longitude };
-        setLoc('active', 'Standort ±' + Math.round(p.coords.accuracy) + ' m');
-        setLivePos(this.pos);   // live fürs Kompass-Feature, ohne vollen Re-Render
+        this.rawPos = { lat: p.coords.latitude, lng: p.coords.longitude };
+        this.accuracy = p.coords.accuracy;
+        this.pos = this._averaged(this.rawPos.lat, this.rawPos.lng, p.coords.accuracy);
+        const nAvg = this._buf.length;
+        setLoc('active', 'Standort ±' + Math.round(p.coords.accuracy) + ' m' + (nAvg > 3 ? ' · ⌀' + nAvg : ''));
+        // Läuft man deutlich vom manuell gesetzten Punkt weg, ist dieser veraltet -> automatisch lösen.
+        if (manualPos && haversineKm(manualPos, this.rawPos) * 1000 > 30) { manualPos = null; showManualPos(null); showInfoToast('📍 Manuelle Position gelöst', 'Du hast dich bewegt — es zählt wieder das echte GPS.', '📍'); }
+        setLivePos(myPos());   // live fürs Kompass-Feature, ohne vollen Re-Render
+        if (locate.isActive() && myPos()) locate.setLocalPos(myPos());
         if (!had) refresh();   // erster Fix: "Heute hier" sofort aktualisieren
       },
       e => { console.warn('geo', e); setLoc('off', e.code === 1 ? 'GPS verweigert' : 'kein GPS'); },
@@ -128,7 +160,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v101';
+const APP_VERSION = 'v102';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -153,6 +185,15 @@ async function boot() {
   initOrni();
   routeTracker.init(geo);
   routeTracker.onUpdate = pts => updateRouteMap(pts);
+  // Manuelle Positions-Korrektur von der Karte (Stufe 4): pos=null hebt sie wieder auf.
+  setManualPosHandler(pos => {
+    manualPos = pos;
+    setLivePos(myPos());
+    if (locate.isActive() && myPos()) locate.setLocalPos(myPos());
+    if (pos) showInfoToast('📍 Position gesetzt', 'Deine Position wurde manuell gesetzt — genauer für die gemeinsame Ortung. Bewegst du dich, gilt wieder GPS.', '📍');
+    else showInfoToast('📍 GPS aktiv', 'Manuelle Position aufgehoben — es zählt wieder das echte GPS.', '📍');
+    refresh();
+  });
   try { await seedIfEmpty(); } catch (e) { console.warn('seed', e); }
   try { await migrateGeo(); } catch (e) { console.warn('migrateGeo', e); }
   try { const n = await cleanupFakeGeo(); if (n) console.info(n + ' Fund(e) hatten eine falsche Fake-Position (Bug) — Koordinaten entfernt.'); } catch (e) { console.warn('cleanupFakeGeo', e); }
@@ -262,14 +303,14 @@ async function onWindow(samples, sampleRate, endMs) {
     key: r.key, species: r.name, sci: r.sci, rarity: r.rarity, confidence: r.confidence,
     ts: Date.now(), source: r.source || 'mic'
   };
-  if (geo.pos) { det.lat = geo.pos.lat; det.lng = geo.pos.lng; }
+  { const mp = myPos(); if (mp) { det.lat = mp.lat; det.lng = mp.lng; } }
   if (compassHeading !== null) det.heading = compassHeading;
   try { const w = await fetchWeather(geo.pos?.lat, geo.pos?.lng); if (w) det.weather = w; } catch {}
   try { det.id = await addDetection(det); } catch (e) { console.warn('store', e); }
   liveAdd(det);
   maybeAutoRecord(det, samples, sampleRate);
   if (locate.isActive()) {
-    if (geo.pos) locate.setLocalPos(geo.pos);
+    if (myPos()) locate.setLocalPos(myPos());
     locate.reportDetection(det, win); // mit Roh-Fenster -> Partner kann präzise kreuzkorrelieren
   }
   refresh();
@@ -1992,11 +2033,11 @@ function closeCalibPrompt() {
 }
 function onCalibEvent(ev) {
   if (ev.kind === 'prep') {
-    _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">🎯</div><div style="font-size:17px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:8px">Feinabgleich</div><div style="font-size:13px;color:var(--ink);line-height:1.5">Alle Handys <b>flach nebeneinander</b> legen. Das Mikrofon startet automatisch — gleich wird <b>1× geklatscht</b>.</div>');
+    _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">🎯</div><div style="font-size:17px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:8px">Feinabgleich</div><div style="font-size:13px;color:var(--ink);line-height:1.5">Alle Handys <b>flach nebeneinander</b> legen. Das Mikrofon startet automatisch — gleich ertönt ein kurzer <b>Kalibrier-Ton</b>.</div>');
   } else if (ev.kind === 'count') {
-    _calibPromptBox('<div style="font-size:15px;color:var(--muted);margin-bottom:6px">Gleich klatschen …</div><div style="font-size:72px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif;line-height:1">' + (ev.n || '') + '</div>');
+    _calibPromptBox('<div style="font-size:15px;color:var(--muted);margin-bottom:6px">Gleich ertönt der Ton …</div><div style="font-size:72px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif;line-height:1">' + (ev.n || '') + '</div>');
   } else if (ev.kind === 'clap') {
-    _calibPromptBox('<div style="font-size:44px;margin-bottom:8px">👏</div><div style="font-size:22px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif">JETZT klatschen!</div>');
+    _calibPromptBox('<div style="font-size:44px;margin-bottom:8px">🔊</div><div style="font-size:20px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif">Kalibrier-Ton…</div><div style="font-size:12px;color:var(--muted);margin-top:6px">Handys ruhig nebeneinander liegen lassen</div>');
   } else if (ev.kind === 'done') {
     _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">✅</div><div style="font-size:16px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:6px">Feinabgleich fertig</div><div style="font-size:12px;color:var(--muted);line-height:1.5">Die gemeinsame Ruf-Ortung ist jetzt deutlich genauer.</div>');
     if (_calibPromptTimer) clearTimeout(_calibPromptTimer);
@@ -2060,8 +2101,10 @@ function showLocateResult(r) {
 function showFixResult(r) {
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   document.getElementById('_locResultOv')?.remove();
-  const my = geo.pos;
+  const my = myPos();
   const arData = { ...r, myPos: my || null };
+  // 3-Geräte-Fix zusätzlich als Marker auf die Fundkarte legen (Stufe 4)
+  addFixMarker({ lat: r.lat, lng: r.lng, uncertM: r.uncertM, species: r.species });
   let distLine = 'Eigene GPS-Position fehlt — Richtung/Entfernung nicht anzeigbar.';
   if (my) {
     const dM = Math.round(haversineKm(my, r) * 1000);
@@ -2447,7 +2490,7 @@ function initPairing() {
       filetransfer.attach(onFileReceived, onFileProgress);
       if (chatList) chatList.innerHTML = '';
     }
-    if (geo.pos) locate.setLocalPos(geo.pos); // damit auch ein NEU dazugekoppeltes Gerät die eigene Position bekommt
+    if (myPos()) locate.setLocalPos(myPos()); // damit auch ein NEU dazugekoppeltes Gerät die eigene Position bekommt
     refreshPeerChip();
     renderPeerList();
 

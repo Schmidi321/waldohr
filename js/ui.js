@@ -803,6 +803,11 @@ function loadLeaflet() {
 let mapInst = null, markersLayer = null, userMarker = null, lastMapDets = [], mapCenteredOnLive = false;
 const peerMarkers = new Map(); // peerId -> { marker, lastAnimPos }
 const peerPositions = new Map(); // peerId -> {lat,lng}
+// Stufe 4: manuelle Positions-Korrektur + Ortungs-Marker der 3-Geräte-Fixes
+let _manualPosHandler = null, _manualMode = false, _manualMarker = null;
+let fixLayer = null;
+const _fixes = []; // {lat,lng,uncertM,species,ts} — jüngste 3-Geräte-Ortungen
+export function setManualPosHandler(fn) { _manualPosHandler = fn; }
 export async function renderMap(dets) {
   lastMapDets = dets;
   const mapEl = document.getElementById('map');
@@ -830,9 +835,20 @@ export async function renderMap(dets) {
       maxZoom: 19, attribution: '© OpenStreetMap-Mitwirkende'
     }).addTo(mapInst);
     markersLayer = L.layerGroup().addTo(mapInst);
+    fixLayer = L.layerGroup().addTo(mapInst);
     if (livePos) mapCenteredOnLive = true;
     else if (recentGeo.length > 1) mapInst.fitBounds(recentGeo.map(d => [d.lat, d.lng]), { padding: [28, 28], maxZoom: 16 });
+    _setupManualPosControl(L);
+    // Im Positions-setzen-Modus setzt ein Tippen auf die Karte die eigene Position (Stufe 4).
+    mapInst.on('click', e => {
+      if (!_manualMode) return;
+      _manualMode = false;
+      const pos = { lat: e.latlng.lat, lng: e.latlng.lng };
+      showManualPos(pos);
+      if (_manualPosHandler) _manualPosHandler(pos);
+    });
   }
+  _renderFixes();
 
   markersLayer.clearLayers();
   // Funde von Arten aus der Beobachtungsliste heben sich farblich ab — unabhängig von ihrer Seltenheit.
@@ -912,6 +928,77 @@ function updateUserMarker() {
   } else {
     _glideMarker(userMarker, _lastUserPos, livePos);
     _lastUserPos = livePos;
+  }
+}
+
+// ---- Stufe 4: manuelle Positions-Korrektur ----
+// Eigener Leaflet-Control-Button: aktiviert den Setz-Modus; das nächste Tippen auf die Karte legt
+// die eigene Position fest (überschreibt den GPS-Fehler, der die gemeinsame Peilung dominiert).
+let _manualBtnEl = null;
+function _setupManualPosControl(L) {
+  const Ctl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd() {
+      const el = L.DomUtil.create('button', 'map-manual-btn');
+      el.type = 'button';
+      el.title = 'Eigene Position manuell setzen';
+      el.innerHTML = '📍';
+      L.DomEvent.disableClickPropagation(el);
+      el.onclick = () => {
+        // Ist bereits eine manuelle Position gesetzt -> Klick hebt sie auf (zurück zu GPS).
+        if (_manualMarker) { showManualPos(null); if (_manualPosHandler) _manualPosHandler(null); return; }
+        _manualMode = !_manualMode;
+        _updateManualBtn();
+      };
+      _manualBtnEl = el;
+      return el;
+    },
+  });
+  mapInst.addControl(new Ctl());
+  _updateManualBtn();
+}
+function _updateManualBtn() {
+  if (!_manualBtnEl) return;
+  _manualBtnEl.classList.toggle('arming', _manualMode);
+  _manualBtnEl.classList.toggle('set', !!_manualMarker);
+  _manualBtnEl.title = _manualMarker ? 'Manuelle Position — tippen zum Aufheben (zurück zu GPS)'
+    : _manualMode ? 'Jetzt auf die Karte tippen…' : 'Eigene Position manuell setzen';
+}
+// Von app.js aufgerufen, wenn die manuelle Position gesetzt/aufgehoben wurde — Marker aktualisieren.
+export function showManualPos(pos) {
+  if (!mapInst || !window.L) { _manualMode = false; return; }
+  const L = window.L;
+  if (_manualMarker) { _manualMarker.remove(); _manualMarker = null; }
+  if (pos) {
+    const icon = L.divIcon({ className: 'manual-pos-marker', html: '📍', iconSize: [30, 30], iconAnchor: [15, 28] });
+    _manualMarker = L.marker([pos.lat, pos.lng], { icon, interactive: false, zIndexOffset: 1100 }).addTo(mapInst);
+  }
+  _updateManualBtn();
+}
+
+// ---- Stufe 4: Ortungs-Marker der 3-Geräte-Fixes ----
+export function addFixMarker(fix) {
+  if (!fix || typeof fix.lat !== 'number' || typeof fix.lng !== 'number') return;
+  _fixes.push({ lat: fix.lat, lng: fix.lng, uncertM: fix.uncertM || 40, species: fix.species || 'Fund', ts: Date.now() });
+  while (_fixes.length > 12) _fixes.shift();
+  _renderFixes();
+}
+function _renderFixes() {
+  if (!mapInst || !window.L || !fixLayer) return;
+  const L = window.L;
+  fixLayer.clearLayers();
+  const now = Date.now();
+  for (const f of _fixes) {
+    if (now - f.ts > 30 * 60000) continue; // älter als 30 min ausblenden
+    L.circle([f.lat, f.lng], { radius: Math.max(10, f.uncertM), color: '#f0abfc', weight: 1.5, fillColor: '#f0abfc', fillOpacity: .12 }).addTo(fixLayer);
+    const icon = L.divIcon({ className: 'fix-marker', html: '🎯', iconSize: [26, 26], iconAnchor: [13, 13] });
+    const m = L.marker([f.lat, f.lng], { icon, zIndexOffset: 900 }).addTo(fixLayer);
+    const pop = document.createElement('div');
+    pop.className = 'map-pin-popup';
+    const ico = document.createElement('span'); ico.className = 'mp-ico'; ico.textContent = '🎯';
+    const nm = document.createElement('span'); nm.className = 'mp-name'; nm.textContent = f.species + ' · ±' + Math.round(f.uncertM) + ' m';
+    pop.append(ico, nm);
+    m.bindPopup(pop, { closeButton: false, offset: [0, -4], className: 'map-pin-popup-wrap' });
   }
 }
 

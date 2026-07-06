@@ -429,6 +429,30 @@ function _collectSnippet(fromId, msg) {
 export function calibrationBias(peerId) { return _calibBias.get(peerId) ?? null; }
 export function micRecentlyActive() { return Date.now() - _lastWindowAt < 3000; }
 
+// Kurzer, lauter Frequenz-Sweep 1,5 → 6 kHz (~180 ms) über einen eigenen AudioContext. Liegt gut
+// im Vogelruf-Band und im Empfindlichkeitsbereich der Handy-Mikrofone; die Hüllkurve vermeidet
+// Knackser. Nur für die Kalibrierung, unabhängig von der Mikrofon-Engine.
+function _playChirp() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const start = () => {
+      const t0 = ctx.currentTime + 0.04;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1500, t0);
+      osc.frequency.exponentialRampToValueAtTime(6000, t0 + 0.18);
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.9, t0 + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.19);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t0); osc.stop(t0 + 0.21);
+      osc.onended = () => { try { ctx.close(); } catch {} };
+    };
+    if (ctx.state === 'suspended') ctx.resume().then(start).catch(start); else start();
+  } catch (e) { console.warn('chirp', e); }
+}
+
 // Geführter Feinabgleich, von der Zentrale aus mit EINEM Knopfdruck für ALLE Partner:
 //  1. Partner-Popups öffnen (calibPrep) — dort startet das Mikrofon automatisch.
 //  2. Eigenes Mikrofon sicherstellen, kurz warmlaufen lassen.
@@ -458,9 +482,15 @@ export async function startCalibration(onStatus) {
     await new Promise(r => setTimeout(r, 800));
   }
   _calibErrReason = null;
-  const at = Date.now() + 250; // gemeinsamer Klatsch-Zeitpunkt, minimal in der Zukunft
+  const at = Date.now() + 250; // gemeinsamer Ton-Zeitpunkt, minimal in der Zukunft
   for (const p of peers) hub.sendTo(p.id, { type: 'calib', at, relay: false });
-  onStatus?.({ phase: 'clap', text: '👏 JETZT 1× laut klatschen!' });
+  onStatus?.({ phase: 'clap', text: '🔊 Kalibrier-Ton…' });
+  // Chirp-Kalibrierung (Stufe 4): statt eines menschlichen Klatschers spielt die Zentrale einen
+  // kurzen, breitbandigen Frequenz-Sweep ab. Alle Handys liegen nebeneinander und hören denselben
+  // Ton — die scharfe Autokorrelation eines Chirps liefert einen deutlich saubereren Peak als ein
+  // Klatschen und braucht keine menschliche Aktion im richtigen Moment. Ein zusätzliches Klatschen
+  // stört nicht (die Korrelation nimmt den stärksten breitbandigen Transienten im Fenster).
+  _playChirp();
 
   // Eigenes Fenster um den Klatsch-Zeitpunkt abwarten
   const win = await new Promise(res => {

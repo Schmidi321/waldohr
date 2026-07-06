@@ -750,9 +750,11 @@
                   <path d="M120 60 Q150 44 180 60" fill="none" stroke="#ecfdf5" stroke-width="1.5" opacity=".5" stroke-dasharray="3 3"/>
                   <path d="M120 78 Q150 94 180 78" fill="none" stroke="#ecfdf5" stroke-width="1.5" opacity=".5" stroke-dasharray="3 3"/>
                 </svg>
-                <figcaption>Handys direkt <b>nebeneinander</b> halten und <b>einmal laut klatschen</b>. Der Klatscher erreicht beide gleichzeitig — daraus lernt die App den Geräte-Zeitversatz und rechnet ihn später heraus.</figcaption>
+                <figcaption>Handys direkt <b>nebeneinander</b> legen. Die App spielt einen kurzen <b>Kalibrier-Ton</b> ab, den alle gleichzeitig hören — daraus lernt sie den Geräte-Zeitversatz und rechnet ihn später heraus.</figcaption>
               </figure>
-              <p>Nur auf der <b>Zentrale</b> (das Handy, mit dem sich die anderen gekoppelt haben) auf <span class="hl">🎯 Feinabgleich starten</span> tippen. Auf den anderen Handys geht automatisch ein Popup auf und das Lauschen schaltet sich selbst ein — die App zählt runter und ihr klatscht <b>alle gemeinsam einmal</b>. Ohne diesen Schritt ist besonders die 3-Handy-Ortung meist zu ungenau.</p>
+              <p>Nur auf der <b>Zentrale</b> (das Handy, mit dem sich die anderen gekoppelt haben) auf <span class="hl">🎯 Feinabgleich starten</span> tippen. Auf den anderen Handys geht automatisch ein Popup auf und das Lauschen schaltet sich selbst ein — die App zählt runter und spielt dann <b>einen Kalibrier-Ton</b> ab, den alle Geräte aufnehmen. Ohne diesen Schritt ist besonders die 3-Handy-Ortung meist zu ungenau.</p>
+              <div class="help-note">📍 <b>Position genauer machen:</b> Auf der <span class="hl">Karte</span> gibt es oben rechts einen 📍-Knopf — antippen, dann auf die Karte tippen, um deinen genauen Standpunkt zu setzen. Das ist präziser als GPS und verbessert die Peilung spürbar (hebt sich automatisch auf, sobald du dich bewegst). Die App mittelt außerdem im Stand mehrere GPS-Messungen für einen ruhigeren Punkt.</div>
+              <div class="help-note">🎯 Ein erfolgreicher 3-Handy-Fund erscheint auch als <b>Marker auf der Fundkarte</b> — mit einem Kreis für die Unsicherheit.</div>
 
               <p style="color:var(--lime);font-weight:600;margin-top:6px">Schritt 2 — auseinandergehen</p>
               <figure class="help-fig">
@@ -1025,7 +1027,7 @@
           <div id="pairPeerList" class="pair-peer-list"></div>
           <button type="button" class="btn ghost" id="pairAddDeviceBtn" style="width:100%;margin-bottom:10px">➕ Weiteres Handy koppeln</button>
           <button type="button" class="btn ghost" id="pairCalibBtn" style="width:100%;margin-bottom:6px">🎯 Feinabgleich starten (für alle Handys)</button>
-          <div style="font-size:11px;color:var(--faint);text-align:center;margin-bottom:6px">Alle Handys nebeneinander — startet das Lauschen automatisch, dann 1× gemeinsam klatschen.</div>
+          <div style="font-size:11px;color:var(--faint);text-align:center;margin-bottom:6px">Alle Handys nebeneinander legen — startet das Lauschen automatisch und spielt einen kurzen Kalibrier-Ton ab.</div>
           <div id="pairCalibStatus" style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:14px" hidden></div>
           <button type="button" class="btn ghost" id="pairOpenChatBtn" style="width:100%;margin-bottom:10px">💬 Nachrichten öffnen</button>
           <button type="button" class="btn ghost" id="pairSessionReportBtn" style="width:100%">📋 Gemeinsamen Bericht erstellen</button>

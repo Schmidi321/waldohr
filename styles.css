@@ -252,6 +252,13 @@ body.mic-ready .orb{opacity:.72}
 .map-pin-popup{display:flex;align-items:center;gap:7px;cursor:pointer;font-family:'Outfit',sans-serif}
 .map-pin-popup .mp-ico{font-size:16px}
 .map-pin-popup .mp-name{font-size:13px;font-weight:600;color:var(--ink)}
+/* Stufe 4: Positions-setzen-Button + manuelle/Fix-Marker */
+.map-manual-btn{width:34px;height:34px;border-radius:9px;border:1px solid var(--stroke);background:#0e2a1f;color:#fff;font-size:17px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+.map-manual-btn.arming{background:#a3e635;border-color:#a3e635;animation:manualPulse 1s ease-in-out infinite}
+.map-manual-btn.set{background:#1e4732;border-color:#a3e635}
+@keyframes manualPulse{0%,100%{box-shadow:0 0 0 0 #a3e63577}50%{box-shadow:0 0 0 7px #a3e63500}}
+.manual-pos-marker{font-size:26px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.6));text-align:center}
+.fix-marker{font-size:22px;filter:drop-shadow(0 0 6px #f0abfcaa);text-align:center}
 .maplegend{display:flex;gap:14px;justify-content:center;margin-top:12px;font-size:11px;color:var(--muted)}
 .maplegend span{display:flex;align-items:center;gap:6px}
 .maplegend i{width:9px;height:9px;border-radius:50%}
