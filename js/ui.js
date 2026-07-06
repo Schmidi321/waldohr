@@ -169,9 +169,29 @@ export function initUI() {
   // Hilfe & Anleitung
   const helpModal = $('helpModal');
   const helpOpenBtn = $('helpOpenBtn');
-  if (helpOpenBtn && helpModal) helpOpenBtn.onclick = () => { closeSettings(); helpModal.classList.add('open'); };
-  const helpScrim = $('helpScrim'); if (helpScrim) helpScrim.onclick = () => helpModal.classList.remove('open');
-  const helpClose = $('helpClose'); if (helpClose) helpClose.onclick = () => helpModal.classList.remove('open');
+  const closeHelp = () => { if (helpModal) helpModal.classList.remove('open'); };
+  if (helpOpenBtn && helpModal) helpOpenBtn.onclick = () => {
+    closeSettings();
+    // Immer eingeklappt starten (alle <details> zu), damit die Abschnitts-Übersicht sichtbar ist,
+    // und wieder nach oben scrollen — sonst zeigt das Sheet die Scroll-Position vom letzten Mal.
+    helpModal.querySelectorAll('.help-sec[open]').forEach(d => d.removeAttribute('open'));
+    helpModal.classList.add('open');
+    const sheet = helpModal.querySelector('.sheet'); if (sheet) sheet.scrollTop = 0;
+  };
+  const helpScrim = $('helpScrim'); if (helpScrim) helpScrim.onclick = closeHelp;
+  const helpClose = $('helpClose'); if (helpClose) helpClose.onclick = closeHelp;
+  // Beim Aufklappen den Kopf des Abschnitts an den oberen Rand holen, damit nicht der halbe
+  // Inhalt oberhalb der Sichtgrenze verschwindet (das Sheet selbst ist der Scroll-Container).
+  if (helpModal) {
+    helpModal.querySelectorAll('.help-sec').forEach(sec => {
+      sec.addEventListener('toggle', () => {
+        if (!sec.open) return;
+        const sheet = helpModal.querySelector('.sheet');
+        const sum = sec.querySelector('summary');
+        if (sheet && sum) sheet.scrollTo({ top: sec.offsetTop - sum.offsetHeight - 4, behavior: 'smooth' });
+      });
+    });
+  }
 
   // Timing-Modal — close/save verdrahten (open erfolgt über exportiertes openTimingModal)
   const timingModal = $('timingModal');

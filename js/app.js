@@ -128,7 +128,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v99';
+const APP_VERSION = 'v100';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -2515,22 +2515,31 @@ function initPairing() {
   // Tele kann bei sehr kleinen/dichten Codes schärfer sein. Labels sind erst NACH einer erteilten
   // Kamera-Erlaubnis aussagekräftig, darum wird hier erst nach dem ersten Stream aufgezählt.
   let currentScanOnDecoded = null, currentScanStatusEl = null;
+  // Zeigt ALLE Rückkamera-Objektive zur Auswahl — wichtig, wenn eine Linse (z. B. die
+  // Hauptkamera) defekt ist oder schlecht fokussiert und der QR-Code darüber nicht scharf wird.
+  // Bewusst NICHT auf sauber als Ultra/Normal/Tele erkannte Objektive beschränkt (die Labels
+  // fehlen auf vielen Geräten): sobald es mehr als eine Rückkamera gibt, werden alle gelistet,
+  // mit sprechendem Namen wo möglich, sonst „Kamera 1/2/3". Labels sind erst nach erteilter
+  // Kamera-Erlaubnis gefüllt, darum erst nach dem ersten Stream aufzählen.
   async function _populateScanCamSelect() {
     if (!scanCamSelect) return;
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
       const back = all.filter(d => d.kind === 'videoinput' && !/front|facetime|user|selfie/i.test(d.label));
-      const ultraWide = back.find(d => /ultra/i.test(d.label));
-      const wide = back.find(d => !/ultra|telephoto|tele|[23]\.?\d?x\b/i.test(d.label)) || back[0];
-      const tele = back.find(d => /telephoto|tele|[23]\.?\d?x\b/i.test(d.label) && d !== wide);
-      const chosen = [ultraWide, wide, tele].filter(Boolean);
-      if (chosen.length < 2) { scanCamSelect.hidden = true; return; }
+      // Nur eine (oder unbenannte einzelne) Kamera: keine Auswahl nötig.
+      if (back.length < 2) { scanCamSelect.hidden = true; return; }
       const prevValue = scanCamSelect.value;
-      scanCamSelect.innerHTML = chosen.map(d => {
-        const name = /ultra/i.test(d.label) ? '📷 Ultra-Weit (0.5×)' : /telephoto|tele|[23]\.?\d?x\b/i.test(d.label) ? '🔭 Tele' : '📷 Normal (1×)';
+      let generic = 0;
+      scanCamSelect.innerHTML = back.map(d => {
+        let name;
+        if (/ultra/i.test(d.label)) name = '📷 Ultra-Weit';
+        else if (/telephoto|tele|[3-9](\.\d)?x\b/i.test(d.label)) name = '🔭 Tele';
+        else if (/macro/i.test(d.label)) name = '🌸 Makro';
+        else if (/wide|haupt|main|back|rück|rear/i.test(d.label)) name = '📷 Haupt';
+        else name = '📷 Kamera ' + (++generic);
         return `<option value="${d.deviceId}">${name}</option>`;
       }).join('');
-      if (prevValue && chosen.some(d => d.deviceId === prevValue)) scanCamSelect.value = prevValue;
+      if (prevValue && back.some(d => d.deviceId === prevValue)) scanCamSelect.value = prevValue;
       scanCamSelect.hidden = false;
     } catch (e) { console.warn('scan cam enumerate', e); }
   }

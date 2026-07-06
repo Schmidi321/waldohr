@@ -391,9 +391,11 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .tiprow b{display:block;font-size:13px;color:var(--lime);margin-bottom:3px}
 .tiprow span{display:block;font-size:12px;color:var(--muted);line-height:1.5}
 
-/* Hilfe / Anleitung — aufklappbare Abschnitte */
-.help-list{display:flex;flex-direction:column;gap:8px;max-height:66vh;overflow-y:auto;scrollbar-width:none;margin:4px 0 2px}
-.help-list::-webkit-scrollbar{display:none}
+/* Hilfe / Anleitung — aufklappbare Abschnitte.
+   KEIN eigener Scroll-Container: das umgebende .sheet scrollt bereits (max-height 88%).
+   Ein zweiter, verschachtelter Scrollbereich hätte den aufgeklappten Inhalt mittendrin
+   abgeschnitten, statt das Sheet wachsen und komplett scrollen zu lassen. */
+.help-list{display:flex;flex-direction:column;gap:8px;margin:4px 0 2px}
 .help-sec{background:var(--glass);border:1px solid var(--stroke);border-radius:14px;overflow:hidden}
 .help-sec>summary{list-style:none;cursor:pointer;padding:13px 14px;font-family:'Outfit',sans-serif;font-weight:600;font-size:14px;color:var(--ink);display:flex;align-items:center;gap:9px;user-select:none}
 .help-sec>summary::-webkit-details-marker{display:none}
@@ -535,7 +537,8 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .cam-shutter.video{background:var(--rose)}
 .cam-shutter.recording{background:var(--rose);animation:recpulse 1.2s ease-in-out infinite}
 .cam-shutter.recording::after{content:'';position:absolute;inset:20%;border-radius:4px;background:#fff}
-.cam-device-select{flex:1;max-width:120px;padding:7px 10px;border-radius:10px;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.2);color:#fff;font-size:11px;backdrop-filter:blur(8px);cursor:pointer;appearance:none;text-overflow:ellipsis}
+.cam-device-select{flex:1;max-width:150px;padding:8px 26px 8px 11px;border-radius:10px;background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.32);color:#fff;font-size:12px;font-weight:600;backdrop-filter:blur(8px);cursor:pointer;appearance:none;text-overflow:ellipsis;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center}
 .cam-device-select::-ms-expand{display:none}
 .cam-meter{position:absolute;bottom:110px;left:50%;transform:translateX(-50%);width:200px;height:36px;border-radius:8px;background:rgba(0,0,0,.3);pointer-events:none}
 #camVideo2.cam-pip{position:absolute;top:calc(60px + env(safe-area-inset-top));right:12px;width:110px;height:82px;object-fit:cover;border-radius:10px;border:2px solid rgba(255,255,255,.3);z-index:5;pointer-events:none}
