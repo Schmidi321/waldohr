@@ -1,7 +1,7 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
-import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment } from './db.js';
+import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment, bearingDeg, haversineKm } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, updatePeerMarker, getMicDeviceId } from './ui.js';
 import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, fetchMoonTimes, fetchTodayHours, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
 import { routeTracker } from './route.js';
@@ -128,7 +128,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v97';
+const APP_VERSION = 'v98';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1523,7 +1523,12 @@ const clipBtn = document.getElementById('clipBtn');
 if (clipBtn && !window.MediaRecorder) clipBtn.style.display = 'none';
 if (clipBtn) clipBtn.onclick = () => recorder.toggle();
 const photoFab = document.getElementById('photoFab');
-if (photoFab) photoFab.onclick = () => openCamera(capture => _saveCapture({ ...capture, label: null, key: null }));
+// Galerie beim Öffnen der Kamera schließen (lag sonst sichtbar unter/über dem Kamera-Fenster)
+// und nach der Aufnahme wieder öffnen — dann ist das neue Foto direkt zu sehen.
+if (photoFab) photoFab.onclick = () => {
+  closeGallery();
+  openCamera(capture => { _saveCapture({ ...capture, label: null, key: null }); openGallery(); });
+};
 const galleryModal = document.getElementById('galleryModal');
 const galleryBtn = document.getElementById('galleryBtn');
 const galleryClose = document.getElementById('galleryClose');
@@ -1970,7 +1975,12 @@ function _compassSvg(r) {
 }
 
 function showLocateResult(r) {
+  // Der 3-Geräte-Fix hat ein eigenes, einfacheres Popup (eindeutige Position statt Seiten-Deutung)
+  if (r.method === 'fix') { showFixResult(r); return; }
+  // Nur ein Ortungs-Popup gleichzeitig — ein später eintreffender Fix ersetzt das paarweise Ergebnis
+  document.getElementById('_locResultOv')?.remove();
   const ov = document.createElement('div');
+  ov.id = '_locResultOv';
   ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
   const partnerLabel = hub.peerCount() > 1 ? 'Partner ' + r.peerId : 'dein Partner';
   // Ohne direkten Uhren-Abgleich (z.B. Speiche-zu-Speiche im Stern-Modell, über die Zentrale
@@ -2009,6 +2019,44 @@ function showLocateResult(r) {
   if (arBtn) arBtn.onclick = () => { close(); ar.openAR(r); };
   // Mit AR-Option länger stehen lassen — der Griff zur Kamera braucht einen Moment
   setTimeout(close, ar.canShowAR(r) ? 25000 : 14000);
+}
+
+// 3-Geräte-Fix: eindeutige Position (Hyperbel-Schnitt auf der Zentrale, js/locate.js) — zeigt
+// Entfernung + Himmelsrichtung von der eigenen Position und bietet die AR-Peilung mit EINER Zone
+// samt Entfernung an. Artname kann vom Partner-Gerät stammen -> escapen (fremder Input).
+function showFixResult(r) {
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  document.getElementById('_locResultOv')?.remove();
+  const my = geo.pos;
+  const arData = { ...r, myPos: my || null };
+  let distLine = 'Eigene GPS-Position fehlt — Richtung/Entfernung nicht anzeigbar.';
+  if (my) {
+    const dM = Math.round(haversineKm(my, r) * 1000);
+    const b = Math.round(bearingDeg(my, r));
+    const dirs = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
+    const rangeTxt = !(r.rangeMinM && r.rangeMaxM) ? '~' + dM + ' m'
+      : r.rangeMaxM >= 450 ? 'mind. ' + r.rangeMinM + ' m'
+      : r.rangeMaxM > r.rangeMinM * 1.3 ? '~' + r.rangeMinM + '–' + r.rangeMaxM + ' m'
+      : '~' + dM + ' m';
+    distLine = 'Richtung ' + dirs[Math.round(b / 45) % 8] + ' (' + b + '° · auf ±' + (r.dirSpreadDeg || 15) + '° sicher) · Entfernung ' + rangeTxt;
+  }
+  const ov = document.createElement('div');
+  ov.id = '_locResultOv';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
+  ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:26px 26px 20px;text-align:center;max-width:290px;width:88%">
+    <div style="font-size:12px;color:var(--lime);font-weight:700;letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px">🎯 Eindeutig geortet · 3 Handys</div>
+    <div style="font-size:19px;font-weight:700;color:var(--ink);font-family:'Outfit',sans-serif;margin-bottom:6px">${esc(r.species)}</div>
+    <div style="font-size:13px;color:var(--ink);line-height:1.5">${distLine}</div>
+    ${r.calibrated ? '' : '<div style="font-size:11px;color:var(--faint);margin-top:8px">Ohne 🎯 Feinabgleich ist die Position etwas gröber.</div>'}
+    ${ar.canShowAR(arData) ? '<button id="_fixAr" style="width:100%;margin-top:14px;padding:11px;border-radius:14px;background:linear-gradient(140deg,var(--lime),var(--emerald));color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:\'Outfit\',sans-serif">📷 AR-Peilung — hinschauen</button>' : ''}
+    <button id="_fixClose" style="width:100%;margin-top:8px;padding:11px;border-radius:14px;background:var(--glass-strong,rgba(255,255,255,.08));color:var(--ink);font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
+  </div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#_fixClose').onclick = close;
+  const arBtn = ov.querySelector('#_fixAr');
+  if (arBtn) arBtn.onclick = () => { close(); ar.openAR(arData); };
+  setTimeout(close, 25000);
 }
 
 // Gemeinsamer Session-Bericht: führt die eigenen Funde seit Sessionbeginn mit denen des Partners
@@ -2154,7 +2202,34 @@ function initPairing() {
     const n = hub.peerCount();
     setPairChip(n > 0, n > 0 ? pairStatusText() : null);
     updateMiniChips();
+    // Messenger-Schnellzugriff in der Topbar nur zeigen, solange gekoppelt
+    const cq = document.getElementById('chatQuickBtn');
+    if (cq) cq.hidden = n === 0;
+    if (n === 0) closeChatModal();
   }
+
+  // ---- Messenger-Popup: Chat lebt in einem eigenen Fenster (Topbar-Icon 💬 mit Ungelesen-Badge,
+  // zusätzlich erreichbar über das Kopplungs-Fenster) statt im Kopplungs-Fenster selbst ----
+  const chatModal = document.getElementById('chatModal');
+  const chatBadge = document.getElementById('chatBadge');
+  let chatUnread = 0;
+  function chatBadgeSet(n) {
+    chatUnread = n;
+    if (chatBadge) { chatBadge.hidden = n === 0; chatBadge.textContent = n > 9 ? '9+' : String(n); }
+  }
+  function openChatModal() {
+    if (!chatModal) return;
+    chatModal.classList.add('open');
+    chatBadgeSet(0);
+    const list = document.getElementById('pairChatList');
+    if (list) list.scrollTop = list.scrollHeight;
+    setTimeout(() => document.getElementById('pairChatInput')?.focus(), 250);
+  }
+  function closeChatModal() { chatModal?.classList.remove('open'); }
+  document.getElementById('chatQuickBtn')?.addEventListener('click', openChatModal);
+  document.getElementById('pairOpenChatBtn')?.addEventListener('click', () => { modal.classList.remove('open'); openChatModal(); });
+  document.getElementById('chatCloseBtn')?.addEventListener('click', closeChatModal);
+  document.getElementById('chatScrim')?.addEventListener('click', closeChatModal);
   function renderPeerList() {
     const el = document.getElementById('pairPeerList');
     if (!el) return;
@@ -2242,11 +2317,12 @@ function initPairing() {
 
   function onChatMessage(msg) {
     appendChatBubble(msg);
-    // Wenn das Kopplungs-Fenster gerade nicht offen ist, trotzdem kurz benachrichtigen.
-    if (!modal.classList.contains('open')) {
+    // Wenn das Messenger-Fenster gerade nicht offen ist: Toast (tippen öffnet den Chat) + Badge.
+    if (!chatModal || !chatModal.classList.contains('open')) {
+      chatBadgeSet(chatUnread + 1);
       const preview = msg.kind === 'voice' ? '🎙️ Sprachnachricht (' + (msg.durationSec || 0) + 's)' : msg.text;
       const title = hub.peerCount() > 1 ? '💬 Nachricht von Partner ' + msg.from : '💬 Nachricht vom Partner';
-      showInfoToast(title, preview, '💬');
+      showInfoToast(title, preview, '💬', openChatModal, 'Antworten');
     }
   }
 

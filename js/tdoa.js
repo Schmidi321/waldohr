@@ -96,6 +96,85 @@ function fft(re, im, inverse) {
   }
 }
 
+// ---- 2D-Ortung aus mehreren Laufzeitdifferenzen (ab 3 Geräten) ----
+//
+// stations: [{x,y}] Empfänger-Positionen in Metern (lokales ebenes Koordinatensystem),
+// tdoas: [{i,j,dtMs}] gemessene Differenzen "Ankunft bei Station i minus Ankunft bei Station j".
+// Jede Messung definiert eine Hyperbel; gesucht ist der Punkt mit minimaler Summe der quadrierten
+// Residuen. Bewusst eine robuste zweistufige Gittersuche statt Gauß-Newton: keine Startwert-/
+// Konvergenzprobleme bei verrauschten Messungen, und die Zellen nahe am Optimum liefern gratis
+// eine ehrliche Unsicherheits-Angabe (uncertM). sigmaMs = angenommene Messunsicherheit; Zellen
+// mit Residuum <= min + (2*sigma)² pro Messung zählen zur Unsicherheits-Zone.
+export function solve2D(stations, tdoas, opts = {}) {
+  if (!stations || stations.length < 3 || !tdoas || tdoas.length < 2) return null;
+  const sigmaMs = opts.sigmaMs ?? 20;
+  const cx = stations.reduce((a, s) => a + s.x, 0) / stations.length;
+  const cy = stations.reduce((a, s) => a + s.y, 0) / stations.length;
+  let maxBase = 0;
+  for (let a = 0; a < stations.length; a++) {
+    for (let b = a + 1; b < stations.length; b++) {
+      maxBase = Math.max(maxBase, Math.hypot(stations[a].x - stations[b].x, stations[a].y - stations[b].y));
+    }
+  }
+  const R = Math.max(4 * maxBase, 300); // Suchradius um den Schwerpunkt
+
+  const err = (x, y) => {
+    let s = 0;
+    for (const t of tdoas) {
+      const di = Math.hypot(x - stations[t.i].x, y - stations[t.i].y);
+      const dj = Math.hypot(x - stations[t.j].x, y - stations[t.j].y);
+      const e = (di - dj) / 343 * 1000 - t.dtMs;
+      s += e * e;
+    }
+    return s;
+  };
+
+  const scan = (x0, y0, half, step) => {
+    let best = { e: Infinity, x: x0, y: y0 };
+    for (let y = y0 - half; y <= y0 + half; y += step) {
+      for (let x = x0 - half; x <= x0 + half; x += step) {
+        const e = err(x, y);
+        if (e < best.e) best = { e, x, y };
+      }
+    }
+    return best;
+  };
+
+  const coarseStep = Math.max(4, R / 60);
+  const coarse = scan(cx, cy, R, coarseStep);
+  const fine = scan(coarse.x, coarse.y, coarseStep * 4, Math.max(0.5, coarseStep / 10));
+
+  // Unsicherheits-Zone: alle Zellen, deren Residuum noch mit der Messunsicherheit vereinbar ist.
+  // WICHTIG: bei kleinen Empfänger-Dreiecken und entfernter Quelle schneiden sich die Hyperbeln
+  // sehr flach -> die Zone ist ein langes, schmales Tal ENTLANG der Blickrichtung. Die RICHTUNG
+  // (von Station 0 aus gesehen) ist dann trotzdem gut bestimmt, nur die Entfernung nicht — darum
+  // werden Richtungs- und Entfernungs-Unsicherheit getrennt ausgewiesen, statt beides in einen
+  // nutzlos großen Radius zu stopfen.
+  const tol = fine.e + tdoas.length * Math.pow(2 * sigmaMs, 2);
+  const bestBearing = Math.atan2(fine.x - stations[0].x, fine.y - stations[0].y);
+  const bestRange = Math.hypot(fine.x - stations[0].x, fine.y - stations[0].y);
+  let uncertM = 0, dirSpread = 0, rangeMin = bestRange, rangeMax = bestRange;
+  const uStep = Math.max(2, R / 60);
+  for (let y = cy - R; y <= cy + R; y += uStep) {
+    for (let x = cx - R; x <= cx + R; x += uStep) {
+      if (err(x, y) > tol) continue;
+      uncertM = Math.max(uncertM, Math.hypot(x - fine.x, y - fine.y));
+      const b = Math.atan2(x - stations[0].x, y - stations[0].y);
+      let db = Math.abs(b - bestBearing) * 180 / Math.PI;
+      if (db > 180) db = 360 - db;
+      dirSpread = Math.max(dirSpread, db);
+      const rg = Math.hypot(x - stations[0].x, y - stations[0].y);
+      rangeMin = Math.min(rangeMin, rg); rangeMax = Math.max(rangeMax, rg);
+    }
+  }
+
+  return {
+    x: fine.x, y: fine.y, residual: Math.sqrt(fine.e / tdoas.length),
+    uncertM: Math.round(uncertM), dirSpreadDeg: Math.round(dirSpread),
+    rangeMinM: Math.round(rangeMin), rangeMaxM: Math.round(rangeMax),
+  };
+}
+
 // GCC-PHAT: liefert die Verschiebung lagMs, um die Signal b gegenüber Signal a verzögert ist —
 // d.h. ein Ereignis an Position pA in a und pB in b ergibt lagMs = (pA - pB) / rate * 1000.
 // opts.centerMs/halfMs schränken die Peaksuche auf den physikalisch möglichen Bereich ein (bekannte

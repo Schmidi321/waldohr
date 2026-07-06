@@ -9,6 +9,8 @@
 // Pfeilrichtung. Eine Entfernung gibt es mit zwei Geräten prinzipiell nicht — nur "näher bei
 // dir/beim Partner" aus dem Vorzeichen der Laufzeitdifferenz.
 
+import { bearingDeg, haversineKm } from './db.js';
+
 const SOUND_SPEED_MPS = 343;
 const FOV_DEG = 60; // angenommenes horizontales Kamera-Sichtfeld (typisch 55-70°)
 
@@ -162,6 +164,23 @@ function _render() {
 // cos(alpha) = c*dt / Basislinie, alpha = Winkel zur Achse "ich -> Partner"; Kandidaten sind
 // bearingToPeer ± alpha (Spiegelung an der Verbindungslinie).
 function _candidatesFrom(r) {
+  // 3-Geräte-Fix: eindeutige Position bekannt -> EINE Zone mit Richtung + Entfernung von der
+  // eigenen Position aus. Zonenbreite aus der Orts-Unsicherheit auf die Entfernung projiziert.
+  if (r.method === 'fix') {
+    if (!r.myPos || typeof r.lat !== 'number' || typeof r.lng !== 'number') return null;
+    const distM = Math.max(5, Math.round(haversineKm(r.myPos, r) * 1000));
+    const bearing = (bearingDeg(r.myPos, r) + 360) % 360;
+    // Zonenbreite aus der Richtungs-Unsicherheit des Fixes (Näherung: von der Zentrale aus
+    // berechnet, die Geräte stehen nah beieinander im Vergleich zur Quelle)
+    const halfWidth = Math.max(8, Math.min(45, (r.dirSpreadDeg || 15) + 4));
+    // Entfernung ehrlich: reicht die Unsicherheits-Zone bis an den Suchrand, ist nach oben
+    // nichts belastbar -> "mind. X m" statt einer erfundenen Obergrenze.
+    const rangeTxt = !(r.rangeMinM && r.rangeMaxM) ? '~' + distM + ' m'
+      : r.rangeMaxM >= 450 ? 'mind. ' + r.rangeMinM + ' m'
+      : r.rangeMaxM > r.rangeMinM * 1.3 ? '~' + r.rangeMinM + '–' + r.rangeMaxM + ' m'
+      : '~' + distM + ' m';
+    return [{ bearing, halfWidthDeg: halfWidth, label: rangeTxt, distM }];
+  }
   if (r.bearingToPeer == null || r.baselineM == null || r.baselineM < 2 || typeof r.deltaSignedMs !== 'number') return null;
   const cosA = Math.max(-1, Math.min(1, (SOUND_SPEED_MPS * (r.deltaSignedMs / 1000)) / r.baselineM));
   const alpha = Math.acos(cosA) * 180 / Math.PI;
@@ -176,7 +195,7 @@ function _candidatesFrom(r) {
 }
 
 export function canShowAR(r) {
-  return !!(r && r.method === 'corr' && _candidatesFrom(r));
+  return !!(r && (r.method === 'corr' || r.method === 'fix') && _candidatesFrom(r));
 }
 
 export function openAR(r) {
@@ -187,8 +206,13 @@ export function openAR(r) {
     species: r.species, candidates,
     bearingToPeer: r.bearingToPeer, baselineM: r.baselineM,
   };
-  const whoTxt = r.firstHeard === 'me' ? 'vermutlich näher an DIR'
+  const isFix = r.method === 'fix';
+  const whoTxt = isFix ? 'eindeutig geortet (3 Handys)'
+    : r.firstHeard === 'me' ? 'vermutlich näher an DIR'
     : r.firstHeard === 'peer' ? 'vermutlich näher am PARTNER' : 'etwa mittig zwischen euch';
+  const hintTxt = isFix
+    ? 'Schwenke das Handy: die grüne Zone zeigt Richtung und ungefähre Entfernung zum Ruf.'
+    : 'Schwenke das Handy: die grünen Zonen zeigen, aus welcher Richtung der Ruf kam.' + (candidates.length > 1 ? ' Zwei Zonen, weil zwei Mikrofone die Spiegelung nicht auflösen können — ein drittes Handy würde sie eindeutig machen.' : '') + (r.calibrated ? '' : ' Tipp: der 🎯 Feinabgleich macht die Zonen schmaler.');
 
   _el = document.createElement('div');
   _el.id = 'arOverlay';
@@ -199,8 +223,8 @@ export function openAR(r) {
     <button id="arClose" aria-label="Schließen" style="position:absolute;top:calc(10px + env(safe-area-inset-top));right:12px;z-index:2;width:42px;height:42px;border-radius:50%;border:1px solid rgba(255,255,255,.25);background:rgba(4,19,13,.55);color:#ecfdf5;font-size:20px;backdrop-filter:blur(8px)">✕</button>
     <div style="position:absolute;left:0;right:0;bottom:calc(14px + env(safe-area-inset-bottom));z-index:2;text-align:center;padding:0 18px">
       <div style="display:inline-block;background:rgba(4,19,13,.62);border:1px solid rgba(163,230,53,.25);border-radius:16px;padding:10px 16px;backdrop-filter:blur(8px)">
-        <div style="font-family:Outfit,sans-serif;font-weight:700;font-size:15px;color:#a3e635">🐦 ${r.species} — ${whoTxt}</div>
-        <div style="font-size:11px;color:rgba(236,253,245,.72);margin-top:4px;line-height:1.45">Schwenke das Handy: die grünen Zonen zeigen, aus welcher Richtung der Ruf kam.${candidates.length > 1 ? ' Zwei Zonen, weil zwei Mikrofone die Spiegelung nicht auflösen können — ein drittes Handy würde sie eindeutig machen.' : ''}${r.calibrated ? '' : ' Tipp: der 🎯 Feinabgleich macht die Zonen schmaler.'}</div>
+        <div style="font-family:Outfit,sans-serif;font-weight:700;font-size:15px;color:#a3e635">🐦 ${String(r.species).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))} — ${whoTxt}</div>
+        <div style="font-size:11px;color:rgba(236,253,245,.72);margin-top:4px;line-height:1.45">${hintTxt}</div>
       </div>
     </div>
     <button id="arCompassBtn" hidden style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:3;padding:12px 22px;border-radius:16px;border:none;background:#a3e635;color:#04130d;font-weight:700;font-family:Outfit,sans-serif;font-size:14px">🧭 Kompass aktivieren</button>`;

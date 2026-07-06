@@ -14,7 +14,7 @@
 // + Peilung (aus GPS, siehe getPeerGeoInfo), aber keine "wer hat zuerst gehört"-Feinauswertung.
 import { bearingDeg, haversineKm } from './db.js';
 import * as hub from './peerhub.js';
-import { gccPhat, encodeSnippet, decodeSnippet, bytesToB64, b64ToBytes, resampleLinear, CORR_RATE } from './tdoa.js';
+import { gccPhat, encodeSnippet, decodeSnippet, bytesToB64, b64ToBytes, resampleLinear, CORR_RATE, solve2D } from './tdoa.js';
 
 const SOUND_SPEED_MPS = 343; // Schallgeschwindigkeit in Luft, ~20°C
 const MATCH_WINDOW_MS = 4000; // wie weit zeitlich zwei Erkennungen noch als "derselbe Ruf" gelten
@@ -40,6 +40,8 @@ const _pendingSnips = new Map(); // "peer:key:ts" -> {hdr,parts,got,resolve,time
 const _lastCorrAt = new Map();   // "peer:key" -> ts der letzten Korrelation (Drossel)
 let _calibWaiter = null;         // wartet auf das erste Fenster, das den Klatsch-Zeitraum abdeckt
 let _calibErrReason = null;      // Fehlergrund vom Partner während einer laufenden Kalibrierung
+const _recentTdoa = new Map();   // key -> [{peerId,tdoaMs,calibrated,ts,peerPos}] — Sammelbecken für den 3-Geräte-Fix
+const _lastFixAt = new Map();    // key -> ts (Drossel für Fix-Popups)
 
 // Von app.js EINMAL beim Start aufgerufen (nicht pro Verbindung). onPeerPos(peerId, pos|null)
 // wird bei jedem Positions-Update bzw. beim Trennen eines Partners aufgerufen. onCalibEvent
@@ -167,6 +169,21 @@ function _onMessage(msg, fromId) {
     return;
   }
   if (msg.type === 'calibErr') { _calibErrReason = msg.reason || 'unbekannt'; return; }
+  if (msg.type === 'fix2d') {
+    // 3-Geräte-Fix von der Zentrale. Partner-Strings sind fremder Input -> nur validierte Felder
+    // übernehmen; die Anzeige (app.js) escaped den Artnamen zusätzlich.
+    if (typeof msg.lat !== 'number' || typeof msg.lng !== 'number' || Math.abs(msg.lat) > 90 || Math.abs(msg.lng) > 180) return;
+    if (_onResult) {
+      _onResult({
+        method: 'fix', key: String(msg.key || ''), species: String(msg.species || 'Unbekannt').slice(0, 60),
+        lat: msg.lat, lng: msg.lng, uncertM: Math.min(Math.max(Math.round(msg.uncertM) || 50, 10), 500),
+        dirSpreadDeg: Math.min(Math.max(Math.round(msg.dirSpreadDeg) || 15, 6), 45),
+        rangeMinM: Math.max(Math.round(msg.rangeMinM) || 0, 0), rangeMaxM: Math.min(Math.max(Math.round(msg.rangeMaxM) || 0, 0), 2000),
+        calibrated: !!msg.calibrated, nPhones: 3, peerId: fromId,
+      });
+    }
+    return;
+  }
   if (msg.type === 'detection') { _handlePeerDetection(msg, fromId); }
 }
 
@@ -205,12 +222,65 @@ function _handlePeerDetection(msg, fromId) {
   if (match.win && msg.snip && Date.now() - (_lastCorrAt.get(throttleKey) || 0) > CORR_THROTTLE_MS) {
     _lastCorrAt.set(throttleKey, Date.now());
     _preciseTdoa(fromId, msg, match).then(p => {
-      if (p) _emitResult(match, fromId, p.tdoaMs, { method: 'corr', corrConf: p.confidence, calibrated: p.calibrated });
+      if (p) {
+        _emitResult(match, fromId, p.tdoaMs, { method: 'corr', corrConf: p.confidence, calibrated: p.calibrated });
+        _collectForFix(fromId, match, p);
+      }
       else _emitResult(match, fromId, match.ts - remoteTsLocal, { method: 'clock' });
     });
     return;
   }
   _emitResult(match, fromId, match.ts - remoteTsLocal, { method: 'clock' });
+}
+
+// ---- 3-Geräte-Fix: hat die Zentrale für DENSELBEN Ruf präzise Laufzeitdifferenzen zu zwei
+// verschiedenen Partnern, schneiden sich die beiden Hyperbeln in einem Punkt — daraus wird eine
+// echte 2D-Position (js/tdoa.js solve2D) berechnet und an alle Partner verteilt. Läuft bewusst
+// nur auf der Zentrale: nur sie hat den direkten Uhren-Abgleich zu allen Beteiligten. ----
+function _collectForFix(fromId, match, p) {
+  const peerPos = _peerPos.get(fromId);
+  if (!_myPos || !peerPos || !hub.isHost()) return;
+  const now = Date.now();
+  const list = (_recentTdoa.get(match.key) || []).filter(e => now - e.ts < 8000 && e.peerId !== fromId);
+  list.push({ peerId: fromId, tdoaMs: p.tdoaMs, calibrated: p.calibrated, ts: now, peerPos: { ...peerPos } });
+  _recentTdoa.set(match.key, list);
+  if (list.length < 2) return;
+  if (now - (_lastFixAt.get(match.key) || 0) < 20000) return;
+
+  // Lokales ebenes Koordinatensystem (Meter) um die eigene Position
+  const lat0 = _myPos.lat, lng0 = _myPos.lng;
+  const mPerLng = 111320 * Math.cos(lat0 * Math.PI / 180), mPerLat = 110540;
+  const toXY = pos => ({ x: (pos.lng - lng0) * mPerLng, y: (pos.lat - lat0) * mPerLat });
+  const used = list.slice(-2); // die zwei frischesten Partner
+  const stations = [{ x: 0, y: 0 }, toXY(used[0].peerPos), toXY(used[1].peerPos)];
+  const allCalib = used.every(e => e.calibrated);
+  // Konvention: tdoaMs = Ankunft bei MIR minus Ankunft beim Partner -> i=0 (ich), j=Partner
+  // sigmaMs = realistische TDOA-Messunsicherheit: kalibriert bleiben nur Korrelations- und
+  // Uhrenrest-Fehler (~6 ms), unkalibriert dominiert die unbekannte Mikrofonlatenz-Differenz.
+  const sol = solve2D(stations, [
+    { i: 0, j: 1, dtMs: used[0].tdoaMs },
+    { i: 0, j: 2, dtMs: used[1].tdoaMs },
+  ], { sigmaMs: allCalib ? 6 : 45 });
+  // Gate auf RICHTUNGS-Genauigkeit statt absoluten Radius: bei entfernter Quelle ist die
+  // Entfernung geometriebedingt immer unscharf (flacher Hyperbel-Schnitt), die Richtung aber
+  // brauchbar — und genau die zählt für Fotografen. Der feste Zuschlag deckt den GPS-Fehler der
+  // Empfänger-Positionen ab (verschiebt die Peilung, ist im Residuum unsichtbar). Inkonsistente
+  // Messungen (Residuum) raus; unkalibriert scheitert das Gate fast immer -> dann bleibt es
+  // ehrlich bei den paarweisen Richtungszonen.
+  const GPS_DIR_DEG = 12;
+  if (!sol || sol.dirSpreadDeg + GPS_DIR_DEG > 40 || sol.residual > (allCalib ? 45 : 180)) return;
+  _lastFixAt.set(match.key, now);
+  _recentTdoa.delete(match.key);
+
+  const fix = {
+    key: match.key, species: match.species,
+    lat: lat0 + sol.y / mPerLat, lng: lng0 + sol.x / mPerLng,
+    uncertM: Math.max(sol.uncertM, 15), dirSpreadDeg: Math.min(sol.dirSpreadDeg + GPS_DIR_DEG, 40),
+    rangeMinM: sol.rangeMinM, rangeMaxM: sol.rangeMaxM,
+    calibrated: allCalib, nPhones: 3,
+  };
+  hub.broadcast({ type: 'fix2d', ...fix, relay: false });
+  if (_onResult) _onResult({ method: 'fix', ...fix, peerId: null });
 }
 
 // deltaMs > 0: ich habe SPÄTER gehört als der Partner -> Partner ist näher. Die Schwelle für eine
