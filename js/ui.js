@@ -805,9 +805,11 @@ const peerMarkers = new Map(); // peerId -> { marker, lastAnimPos }
 const peerPositions = new Map(); // peerId -> {lat,lng}
 // Stufe 4: manuelle Positions-Korrektur + Ortungs-Marker der 3-Geräte-Fixes
 let _manualPosHandler = null, _manualMode = false, _manualMarker = null;
-let fixLayer = null;
-const _fixes = []; // {lat,lng,uncertM,species,ts} — jüngste 3-Geräte-Ortungen
+let fixLayer = null, _fixArHandler = null;
+const _fixes = []; // {lat,lng,uncertM,species,ts,...} — jüngste Mehr-Handy-Ortungen
 export function setManualPosHandler(fn) { _manualPosHandler = fn; }
+// Antippen eines 🎯-Fix-Popups öffnet darüber die AR-Peilung (app.js registriert den Handler).
+export function setFixArHandler(fn) { _fixArHandler = fn; }
 export async function renderMap(dets) {
   lastMapDets = dets;
   const mapEl = document.getElementById('map');
@@ -976,10 +978,16 @@ export function showManualPos(pos) {
   _updateManualBtn();
 }
 
-// ---- Stufe 4: Ortungs-Marker der 3-Geräte-Fixes ----
+// ---- Stufe 4: Ortungs-Marker der Mehr-Handy-Fixes ----
+// Trägt alle Fix-Daten mit, damit die AR-Peilung später direkt vom Marker aus geöffnet werden
+// kann (Popup antippen) — das Ergebnis-Popup selbst ist ja nach ~25 s wieder weg.
 export function addFixMarker(fix) {
   if (!fix || typeof fix.lat !== 'number' || typeof fix.lng !== 'number') return;
-  _fixes.push({ lat: fix.lat, lng: fix.lng, uncertM: fix.uncertM || 40, species: fix.species || 'Fund', ts: Date.now() });
+  _fixes.push({
+    lat: fix.lat, lng: fix.lng, uncertM: fix.uncertM || 40, species: fix.species || 'Fund', ts: Date.now(),
+    dirSpreadDeg: fix.dirSpreadDeg, rangeMinM: fix.rangeMinM, rangeMaxM: fix.rangeMaxM,
+    calibrated: !!fix.calibrated, nPhones: fix.nPhones || 3,
+  });
   while (_fixes.length > 12) _fixes.shift();
   _renderFixes();
 }
@@ -996,8 +1004,10 @@ function _renderFixes() {
     const pop = document.createElement('div');
     pop.className = 'map-pin-popup';
     const ico = document.createElement('span'); ico.className = 'mp-ico'; ico.textContent = '🎯';
-    const nm = document.createElement('span'); nm.className = 'mp-name'; nm.textContent = f.species + ' · ±' + Math.round(f.uncertM) + ' m';
+    const nm = document.createElement('span'); nm.className = 'mp-name';
+    nm.textContent = f.species + ' · ±' + Math.round(f.uncertM) + ' m' + (_fixArHandler ? ' · 📷 AR' : '');
     pop.append(ico, nm);
+    if (_fixArHandler) pop.onclick = () => _fixArHandler(f);
     m.bindPopup(pop, { closeButton: false, offset: [0, -4], className: 'map-pin-popup-wrap' });
   }
 }

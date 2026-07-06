@@ -14,7 +14,7 @@
 // + Peilung (aus GPS, siehe getPeerGeoInfo), aber keine "wer hat zuerst gehört"-Feinauswertung.
 import { bearingDeg, haversineKm } from './db.js';
 import * as hub from './peerhub.js';
-import { gccPhat, encodeSnippet, decodeSnippet, bytesToB64, b64ToBytes, resampleLinear, CORR_RATE, solve2D } from './tdoa.js';
+import { gccPhatAsync, encodeSnippet, decodeSnippet, bytesToB64, b64ToBytes, resampleLinear, CORR_RATE, solve2D, playChirp } from './tdoa.js';
 
 const SOUND_SPEED_MPS = 343; // Schallgeschwindigkeit in Luft, ~20°C
 const MATCH_WINDOW_MS = 4000; // wie weit zeitlich zwei Erkennungen noch als "derselbe Ruf" gelten
@@ -41,6 +41,7 @@ const _lastCorrAt = new Map();   // "peer:key" -> ts der letzten Korrelation (Dr
 let _calibWaiter = null;         // wartet auf das erste Fenster, das den Klatsch-Zeitraum abdeckt
 let _calibErrReason = null;      // Fehlergrund vom Partner während einer laufenden Kalibrierung
 let _micController = null;       // von app.js gesetzt: schaltet das eigene Mikrofon bei Bedarf ein
+let _resyncTimer = null;         // periodischer Uhren-Re-Sync (Drift-Kompensation)
 
 // app.js reicht hier eine Funktion herein, die das Mikrofon startet (falls aus) und true liefert,
 // sobald es läuft — damit die Kalibrierung das Lauschen auf allen Handys selbst anschalten kann,
@@ -78,12 +79,14 @@ export function attach(onResult, onPeerPos, onCalibEvent) {
   _unsubMsg = hub.onMessage((msg, fromId) => _onMessage(msg, fromId));
   _unsubPeerList = hub.onPeerListChange(() => _syncNewPeers());
   _syncNewPeers();
+  _resyncTimer = setInterval(_resyncAll, 60000);
 }
 
 export function detach() {
   if (_unsubMsg) _unsubMsg();
   if (_unsubPeerList) _unsubPeerList();
   _unsubMsg = null; _unsubPeerList = null;
+  if (_resyncTimer) { clearInterval(_resyncTimer); _resyncTimer = null; }
   _active = false;
   _peerPos.clear(); _clockOffsetMs.clear(); _syncedPeers.clear();
   for (const p of _pendingSnips.values()) { clearTimeout(p.timer); p.resolve(null); }
@@ -140,38 +143,64 @@ export function getAllPeerGeoInfo() {
 
 function _syncNewPeers() {
   for (const { id } of hub.peerList()) {
-    if (!_syncedPeers.has(id)) { _syncedPeers.add(id); _syncClock(id); }
+    if (!_syncedPeers.has(id)) { _syncedPeers.add(id); _syncClock(id, 5); }
+  }
+}
+
+// Periodischer Re-Sync ALLER Partner: Quarzuhren driften 10–50 ppm — nach einer halben Stunde
+// im Feld wäre der einmalige Offset vom Koppeln um Dutzende Millisekunden weg und würde jede
+// Laufzeitmessung (und still den Feinabgleich) vergiften. Alle 60 s mit 3 Runden nachziehen.
+function _resyncAll() {
+  for (const { id } of hub.peerList()) {
+    if (_clockOffsetMs.has(id) && !_syncBusy.has(id)) _syncClock(id, 3);
   }
 }
 
 // ---- Uhren-Abgleich: NTP-ähnliches Ping-Pong, nimmt den Durchlauf mit geringster Laufzeit ----
 // relay:false -> läuft NIE über die Zentrale weiter (siehe js/peerhub.js), ist nur zwischen genau
 // diesen zwei direkt verbundenen Geräten aussagekräftig.
-async function _syncClock(peerId) {
-  let best = null;
-  for (let i = 0; i < 5; i++) {
-    if (!isActive()) break;
-    const t0 = Date.now();
-    const result = await new Promise(res => {
-      const unsub = hub.onMessage((msg, fromId) => {
-        if (fromId !== peerId || msg.type !== 'pong' || msg.t0 !== t0) return;
-        unsub();
-        const t2 = Date.now(), rtt = t2 - t0;
-        res({ offset: msg.t1 - (t0 + rtt / 2), rtt });
+const _syncBusy = new Set();
+async function _syncClock(peerId, rounds) {
+  if (_syncBusy.has(peerId)) return;
+  _syncBusy.add(peerId);
+  try {
+    let best = null;
+    for (let i = 0; i < rounds; i++) {
+      if (!isActive()) break;
+      const t0 = Date.now();
+      const result = await new Promise(res => {
+        const unsub = hub.onMessage((msg, fromId) => {
+          if (fromId !== peerId || msg.type !== 'pong' || msg.t0 !== t0) return;
+          unsub();
+          const t2 = Date.now(), rtt = t2 - t0;
+          res({ offset: msg.t1 - (t0 + rtt / 2), rtt });
+        });
+        hub.sendTo(peerId, { type: 'ping', t0, relay: false });
+        setTimeout(() => { unsub(); res(null); }, 2000);
       });
-      hub.sendTo(peerId, { type: 'ping', t0, relay: false });
-      setTimeout(() => { unsub(); res(null); }, 2000);
-    });
-    if (result && (!best || result.rtt < best.rtt)) best = result;
-    await new Promise(r => setTimeout(r, 150));
-  }
-  if (best) _clockOffsetMs.set(peerId, best.offset);
+      if (result && (!best || result.rtt < best.rtt)) best = result;
+      await new Promise(r => setTimeout(r, 150));
+    }
+    // Miese Verbindung (hoher RTT) -> alten Offset behalten statt einen schlechteren einzubauen.
+    if (!best || best.rtt > 400) return;
+    const old = _clockOffsetMs.get(peerId);
+    _clockOffsetMs.set(peerId, best.offset);
+    // Kalibrier-Bias konsistent halten: der rohe TDOA enthält +offset, d.h. ändert sich der
+    // Offset um δ, wandert der Roh-TDOA um +δ mit — der beim Feinabgleich gemessene Bias muss
+    // denselben Schritt machen, sonst wäre die Kalibrierung nach jedem Re-Sync wertlos.
+    if (old != null && _calibBias.has(peerId)) {
+      _calibBias.set(peerId, _calibBias.get(peerId) + (best.offset - old));
+    }
+  } finally { _syncBusy.delete(peerId); }
 }
 
 function _onMessage(msg, fromId) {
   if (!_active) return;
   if (msg.type === 'ping') { hub.sendTo(fromId, { type: 'pong', t0: msg.t0, t1: Date.now(), relay: false }); return; }
   if (msg.type === 'pos') {
+    // Fremder Input: nur endliche, plausible Koordinaten übernehmen — sonst vergiftet ein
+    // fehlerhaftes (oder bösartiges) Gerät alle Basislinien-/Fix-Berechnungen mit NaN.
+    if (!Number.isFinite(msg.lat) || !Number.isFinite(msg.lng) || Math.abs(msg.lat) > 90 || Math.abs(msg.lng) > 180) return;
     _peerPos.set(fromId, { lat: msg.lat, lng: msg.lng });
     if (_onPeerPos) _onPeerPos(fromId, _peerPos.get(fromId));
     return;
@@ -185,7 +214,9 @@ function _onMessage(msg, fromId) {
     return;
   }
   if (msg.type === 'calibCount') {
-    if (_onCalibEvent) _onCalibEvent({ kind: 'count', n: msg.n, peerId: fromId });
+    // n landet in der UI in innerHTML -> hier hart auf eine kleine Ganzzahl zwingen (fremder Input!)
+    const n = Math.max(1, Math.min(9, Math.round(Number(msg.n)) || 1));
+    if (_onCalibEvent) _onCalibEvent({ kind: 'count', n, peerId: fromId });
     return;
   }
   if (msg.type === 'calibEnd') {
@@ -211,7 +242,7 @@ function _onMessage(msg, fromId) {
         lat: msg.lat, lng: msg.lng, uncertM: Math.min(Math.max(Math.round(msg.uncertM) || 50, 10), 500),
         dirSpreadDeg: Math.min(Math.max(Math.round(msg.dirSpreadDeg) || 15, 6), 45),
         rangeMinM: Math.max(Math.round(msg.rangeMinM) || 0, 0), rangeMaxM: Math.min(Math.max(Math.round(msg.rangeMaxM) || 0, 0), 2000),
-        calibrated: !!msg.calibrated, nPhones: 3, peerId: fromId,
+        calibrated: !!msg.calibrated, nPhones: Math.max(3, Math.min(6, Math.round(msg.nPhones) || 3)), peerId: fromId,
       });
     }
     return;
@@ -231,7 +262,16 @@ export function reportDetection(det, win) {
 }
 
 function _handlePeerDetection(msg, fromId) {
-  const match = _recentLocal.find(d => d.key === msg.key);
+  // Bei sich wiederholenden Rufen liegen mehrere eigene Fenster derselben Art im Puffer — das
+  // ZEITLICH NÄCHSTE zum Partner-Zeitstempel nehmen (maximale Signal-Überlappung), nicht das
+  // älteste, das .find() liefern würde.
+  const offsetGuess = _clockOffsetMs.get(fromId) ?? 0;
+  let match = null, bestDt = Infinity;
+  for (const d of _recentLocal) {
+    if (d.key !== msg.key) continue;
+    const dt = Math.abs(d.ts - (msg.ts - offsetGuess));
+    if (dt < bestDt) { bestDt = dt; match = d; }
+  }
   if (!match) return;
 
   // Ohne Uhren-Abgleich mit genau diesem Gerät (z.B. Speiche-zu-Speiche im Stern-Modell, über die
@@ -283,16 +323,17 @@ function _collectForFix(fromId, match, p) {
   const lat0 = _myPos.lat, lng0 = _myPos.lng;
   const mPerLng = 111320 * Math.cos(lat0 * Math.PI / 180), mPerLat = 110540;
   const toXY = pos => ({ x: (pos.lng - lng0) * mPerLng, y: (pos.lat - lat0) * mPerLat });
-  const used = list.slice(-2); // die zwei frischesten Partner
-  const stations = [{ x: 0, y: 0 }, toXY(used[0].peerPos), toXY(used[1].peerPos)];
+  // ALLE frischen Partner-Messungen nutzen (bis zu 3 -> 4 Stationen): jede zusätzliche Hyperbel
+  // überbestimmt das System und drückt Richtungs- UND Entfernungs-Unsicherheit deutlich.
+  const used = list.slice(-3);
+  const stations = [{ x: 0, y: 0 }, ...used.map(e => toXY(e.peerPos))];
   const allCalib = used.every(e => e.calibrated);
   // Konvention: tdoaMs = Ankunft bei MIR minus Ankunft beim Partner -> i=0 (ich), j=Partner
   // sigmaMs = realistische TDOA-Messunsicherheit: kalibriert bleiben nur Korrelations- und
   // Uhrenrest-Fehler (~6 ms), unkalibriert dominiert die unbekannte Mikrofonlatenz-Differenz.
-  const sol = solve2D(stations, [
-    { i: 0, j: 1, dtMs: used[0].tdoaMs },
-    { i: 0, j: 2, dtMs: used[1].tdoaMs },
-  ], { sigmaMs: allCalib ? 6 : 45 });
+  const sol = solve2D(stations,
+    used.map((e, idx) => ({ i: 0, j: idx + 1, dtMs: e.tdoaMs })),
+    { sigmaMs: allCalib ? 6 : 45 });
   // Gate auf RICHTUNGS-Genauigkeit statt absoluten Radius: bei entfernter Quelle ist die
   // Entfernung geometriebedingt immer unscharf (flacher Hyperbel-Schnitt), die Richtung aber
   // brauchbar — und genau die zählt für Fotografen. Der feste Zuschlag deckt den GPS-Fehler der
@@ -309,7 +350,7 @@ function _collectForFix(fromId, match, p) {
     lat: lat0 + sol.y / mPerLat, lng: lng0 + sol.x / mPerLng,
     uncertM: Math.max(sol.uncertM, 15), dirSpreadDeg: Math.min(sol.dirSpreadDeg + GPS_DIR_DEG, 40),
     rangeMinM: sol.rangeMinM, rangeMaxM: sol.rangeMaxM,
-    calibrated: allCalib, nPhones: 3,
+    calibrated: allCalib, nPhones: stations.length,
   };
   hub.broadcast({ type: 'fix2d', ...fix, relay: false });
   if (_onResult) _onResult({ method: 'fix', ...fix, peerId: null });
@@ -364,12 +405,14 @@ async function _preciseTdoa(fromId, msg, match) {
     const peerPos = _peerPos.get(fromId);
     const baselineM = (_myPos && peerPos) ? haversineKm(_myPos, peerPos) * 1000 : null;
     const maxTdoaMs = baselineM ? Math.min(baselineM / SOUND_SPEED_MPS * 1000 + 250, 1200) : 1200;
-    const { lagMs, confidence } = gccPhat(local16, snip.samples, CORR_RATE, { centerMs: eR - eL, halfMs: maxTdoaMs });
-    if (confidence < CORR_MIN_CONF) return null;
-    let tdoaMs = (eL - eR) + lagMs;
+    // Im Worker rechnen: blockiert weder UI noch die Mikrofon-Verarbeitung (beide Puffer sind
+    // Einweg-Kopien und werden transferiert).
+    const corr = await gccPhatAsync(local16, snip.samples, CORR_RATE, { centerMs: eR - eL, halfMs: maxTdoaMs });
+    if (!corr || corr.confidence < CORR_MIN_CONF) return null;
+    let tdoaMs = (eL - eR) + corr.lagMs;
     const bias = _calibBias.get(fromId);
     if (bias != null) tdoaMs -= bias;
-    return { tdoaMs, confidence, calibrated: bias != null };
+    return { tdoaMs, confidence: corr.confidence, calibrated: bias != null };
   } catch (e) { console.warn('locate corr', e); return null; }
 }
 
@@ -429,43 +472,6 @@ function _collectSnippet(fromId, msg) {
 export function calibrationBias(peerId) { return _calibBias.get(peerId) ?? null; }
 export function micRecentlyActive() { return Date.now() - _lastWindowAt < 3000; }
 
-// Lauter, obertonreicher Frequenz-Sweep 1,2 → 5 kHz (~240 ms) über einen eigenen AudioContext.
-// Bewusst SÄGEZAHN statt reinem Sinus: die Obertöne machen den Ton auf den kleinen, im Mittel-/
-// Hochton effizienten Handy-Lautsprechern deutlich lauter und breitbandiger (besserer Korrelations-
-// peak). Ein DynamicsCompressor + kräftiger Ausgangs-Gain ziehen die Lautheit ans Maximum, ohne
-// hart zu übersteuern. Das Band liegt gut im Empfindlichkeitsbereich der Mikrofone; die Hüllkurve
-// vermeidet Knackser. Nur für die Kalibrierung, unabhängig von der Mikrofon-Engine.
-function _playChirp() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const start = () => {
-      const t0 = ctx.currentTime + 0.04, dur = 0.24;
-      const osc = ctx.createOscillator();
-      const osc2 = ctx.createOscillator(); // eine Oktave tiefer für mehr „Körper"/Pegel
-      const gain = ctx.createGain();
-      const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -18; comp.knee.value = 6; comp.ratio.value = 12; comp.attack.value = 0.002; comp.release.value = 0.1;
-      // Makeup-Gain nach dem Kompressor: nutzt den Headroom, den der Kompressor freiräumt, aus —
-      // hebt den Pegel wieder nahe Vollaussteuerung (deutlich lauter, ohne hartes Clipping).
-      const makeup = ctx.createGain(); makeup.gain.value = 1.5;
-      osc.type = 'sawtooth'; osc2.type = 'sawtooth';
-      osc.frequency.setValueAtTime(1200, t0);
-      osc.frequency.exponentialRampToValueAtTime(5000, t0 + dur - 0.02);
-      osc2.frequency.setValueAtTime(600, t0);
-      osc2.frequency.exponentialRampToValueAtTime(2500, t0 + dur - 0.02);
-      gain.gain.setValueAtTime(0.0001, t0);
-      gain.gain.exponentialRampToValueAtTime(1.0, t0 + 0.012);
-      gain.gain.setValueAtTime(1.0, t0 + dur - 0.05);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-      osc.connect(gain); osc2.connect(gain);
-      gain.connect(comp); comp.connect(makeup); makeup.connect(ctx.destination);
-      osc.start(t0); osc2.start(t0); osc.stop(t0 + dur + 0.02); osc2.stop(t0 + dur + 0.02);
-      osc.onended = () => { try { ctx.close(); } catch {} };
-    };
-    if (ctx.state === 'suspended') ctx.resume().then(start).catch(start); else start();
-  } catch (e) { console.warn('chirp', e); }
-}
-
 // Geführter Feinabgleich, von der Zentrale aus mit EINEM Knopfdruck für ALLE Partner:
 //  1. Partner-Popups öffnen (calibPrep) — dort startet das Mikrofon automatisch.
 //  2. Eigenes Mikrofon sicherstellen, kurz warmlaufen lassen.
@@ -499,11 +505,11 @@ export async function startCalibration(onStatus) {
   for (const p of peers) hub.sendTo(p.id, { type: 'calib', at, relay: false });
   onStatus?.({ phase: 'clap', text: '🔊 Kalibrier-Ton…' });
   // Chirp-Kalibrierung (Stufe 4): statt eines menschlichen Klatschers spielt die Zentrale einen
-  // kurzen, breitbandigen Frequenz-Sweep ab. Alle Handys liegen nebeneinander und hören denselben
-  // Ton — die scharfe Autokorrelation eines Chirps liefert einen deutlich saubereren Peak als ein
-  // Klatschen und braucht keine menschliche Aktion im richtigen Moment. Ein zusätzliches Klatschen
-  // stört nicht (die Korrelation nimmt den stärksten breitbandigen Transienten im Fenster).
-  _playChirp();
+  // kurzen, breitbandigen Frequenz-Sweep ab (js/tdoa.js playChirp). Alle Handys liegen nebeneinander
+  // und hören denselben Ton — die scharfe Autokorrelation eines Chirps liefert einen deutlich
+  // saubereren Peak als ein Klatschen und braucht keine menschliche Aktion im richtigen Moment.
+  // Ein zusätzliches Klatschen stört nicht (die Korrelation nimmt den stärksten Transienten).
+  playChirp();
 
   // Eigenes Fenster um den Klatsch-Zeitpunkt abwarten
   const win = await new Promise(res => {
@@ -547,10 +553,10 @@ async function _correlateClap(peerId, label, at, win) {
   if (offset == null) return { ok: false, reason: 'sync', label };
   const eL = win.endMs, eR = snip.endMs - offset;
   const local16 = resampleLinear(win.samples, win.rate, CORR_RATE);
-  // Klatschen ist breitbandig — Band nach unten öffnen, Suchfenster eng (Geräte liegen nebeneinander)
-  const { lagMs, confidence } = gccPhat(local16, snip.samples, CORR_RATE, { centerMs: eR - eL, halfMs: 500, bandLo: 700 });
-  if (confidence < 1.4) return { ok: false, reason: 'conf', label };
-  const bias = (eL - eR) + lagMs;
+  // Chirp/Klatschen ist breitbandig — Band nach unten öffnen, Suchfenster eng (Geräte nebeneinander)
+  const corr = await gccPhatAsync(local16, snip.samples, CORR_RATE, { centerMs: eR - eL, halfMs: 500, bandLo: 700 });
+  if (!corr || corr.confidence < 1.4) return { ok: false, reason: 'conf', label };
+  const bias = (eL - eR) + corr.lagMs;
   if (Math.abs(bias) > 450) return { ok: false, reason: 'bias', label };
   _calibBias.set(peerId, bias);
   hub.sendTo(peerId, { type: 'calibDone', bias: -bias, relay: false }); // Vorzeichen aus Partnersicht gespiegelt

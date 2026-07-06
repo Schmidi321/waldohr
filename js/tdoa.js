@@ -185,6 +185,10 @@ export function gccPhat(a, b, rate, opts = {}) {
   const centerMs = opts.centerMs ?? 0;
   const halfMs = Math.min(Math.abs(opts.halfMs ?? 1200), 2500);
   const bandLo = opts.bandLo ?? 900, bandHi = opts.bandHi ?? 7500;
+  return _gccPhatImpl(a, b, rate, centerMs, halfMs, bandLo, bandHi);
+}
+
+function _gccPhatImpl(a, b, rate, centerMs, halfMs, bandLo, bandHi) {
   let n = 1;
   while (n < a.length + b.length) n <<= 1;
 
@@ -230,4 +234,100 @@ export function gccPhat(a, b, rate, opts = {}) {
   const lag = bestLag + (Math.abs(frac) < 1 ? frac : 0);
 
   return { lagMs: lag * 1000 / rate, confidence: best / second, peak: best };
+}
+
+// ---- GCC-PHAT im Web Worker ----
+//
+// Warum: die Korrelation rechnet 100–400 ms — und der Hauptthread verarbeitet gleichzeitig das
+// Mikrofon (ScriptProcessor läuft dort!). Eine blockierende Korrelation kann also genau die
+// Audio-Fenster zerhacken, die als Nächstes gemessen werden sollen. Der Worker wird inline aus
+// einem Blob gebaut (keine eigene Datei -> kein zusätzlicher Service-Worker-Cache-Eintrag, läuft
+// auch offline); die Sample-Puffer werden transferiert statt kopiert. Fällt der Worker aus
+// (exotische Browser, CSP), rechnet gccPhatAsync einmalig synchron weiter wie bisher.
+let _worker = null; // null = noch nicht versucht, false = nicht verfügbar
+let _wNextId = 0;
+const _wPending = new Map();
+
+function _getWorker() {
+  if (_worker !== null) return _worker;
+  try {
+    const src = fft.toString() + '\n' + _gccPhatImpl.toString() + '\n' +
+      'self.onmessage = e => {' +
+      '  const d = e.data;' +
+      '  try {' +
+      '    const res = _gccPhatImpl(new Float32Array(d.a), new Float32Array(d.b), d.rate, d.centerMs, d.halfMs, d.bandLo, d.bandHi);' +
+      '    self.postMessage({ id: d.id, res });' +
+      '  } catch (err) { self.postMessage({ id: d.id, err: String(err) }); }' +
+      '};';
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    _worker = new Worker(url);
+    // URL bewusst NICHT sofort revoken: das Blob-Skript wird asynchron geladen, ein sofortiges
+    // revokeObjectURL kann es in manchen Browsern wegziehen. Ein URL pro Session ist kein Leck.
+    _worker.onmessage = e => {
+      const p = _wPending.get(e.data.id);
+      if (!p) return;
+      _wPending.delete(e.data.id);
+      if (e.data.err) p.reject(new Error(e.data.err)); else p.resolve(e.data.res);
+    };
+    _worker.onerror = () => {
+      for (const p of _wPending.values()) p.reject(new Error('worker error'));
+      _wPending.clear();
+      try { _worker.terminate(); } catch {}
+      _worker = false; // künftige Aufrufe: synchroner Fallback
+    };
+  } catch { _worker = false; }
+  return _worker;
+}
+
+// Asynchrone Variante von gccPhat. WICHTIG: transferiert die Puffer von a und b in den Worker —
+// der Aufrufer darf beide Arrays danach nicht mehr verwenden. Liefert null bei Worker-Fehlern
+// mitten im Flug (selten; Puffer sind dann bereits transferiert, kein Sync-Fallback möglich).
+export function gccPhatAsync(a, b, rate, opts = {}) {
+  const centerMs = opts.centerMs ?? 0;
+  const halfMs = Math.min(Math.abs(opts.halfMs ?? 1200), 2500);
+  const bandLo = opts.bandLo ?? 900, bandHi = opts.bandHi ?? 7500;
+  const w = _getWorker();
+  if (!w) return Promise.resolve(_gccPhatImpl(a, b, rate, centerMs, halfMs, bandLo, bandHi));
+  return new Promise((resolve, reject) => {
+    const id = ++_wNextId;
+    _wPending.set(id, { resolve, reject });
+    try {
+      w.postMessage({ id, a: a.buffer, b: b.buffer, rate, centerMs, halfMs, bandLo, bandHi }, [a.buffer, b.buffer]);
+    } catch (e) { _wPending.delete(id); reject(e); }
+  }).catch(e => { console.warn('gccPhatAsync', e); return null; });
+}
+
+// ---- Kalibrier-Ton (Chirp) ----
+// Lauter, obertonreicher Frequenz-Sweep 1,2 → 5 kHz (~240 ms) über einen eigenen AudioContext.
+// Bewusst SÄGEZAHN statt reinem Sinus: die Obertöne machen den Ton auf den kleinen, im Mittel-/
+// Hochton effizienten Handy-Lautsprechern deutlich lauter und breitbandiger (besserer Korrelations-
+// peak). DynamicsCompressor + Makeup-Gain ziehen die Lautheit ans Maximum ohne hartes Clipping;
+// die Hüllkurve vermeidet Knackser. Nur für die Kalibrierung, unabhängig von der Mikrofon-Engine.
+export function playChirp() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const start = () => {
+      const t0 = ctx.currentTime + 0.04, dur = 0.24;
+      const osc = ctx.createOscillator();
+      const osc2 = ctx.createOscillator(); // eine Oktave tiefer für mehr „Körper"/Pegel
+      const gain = ctx.createGain();
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -18; comp.knee.value = 6; comp.ratio.value = 12; comp.attack.value = 0.002; comp.release.value = 0.1;
+      const makeup = ctx.createGain(); makeup.gain.value = 1.5;
+      osc.type = 'sawtooth'; osc2.type = 'sawtooth';
+      osc.frequency.setValueAtTime(1200, t0);
+      osc.frequency.exponentialRampToValueAtTime(5000, t0 + dur - 0.02);
+      osc2.frequency.setValueAtTime(600, t0);
+      osc2.frequency.exponentialRampToValueAtTime(2500, t0 + dur - 0.02);
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(1.0, t0 + 0.012);
+      gain.gain.setValueAtTime(1.0, t0 + dur - 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(gain); osc2.connect(gain);
+      gain.connect(comp); comp.connect(makeup); makeup.connect(ctx.destination);
+      osc.start(t0); osc2.start(t0); osc.stop(t0 + dur + 0.02); osc2.stop(t0 + dur + 0.02);
+      osc.onended = () => { try { ctx.close(); } catch {} };
+    };
+    if (ctx.state === 'suspended') ctx.resume().then(start).catch(start); else start();
+  } catch (e) { console.warn('chirp', e); }
 }

@@ -2,7 +2,7 @@
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment, bearingDeg, haversineKm } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, updatePeerMarker, getMicDeviceId, addFixMarker, setManualPosHandler, showManualPos } from './ui.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, updatePeerMarker, getMicDeviceId, addFixMarker, setManualPosHandler, showManualPos, setFixArHandler } from './ui.js';
 import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, fetchMoonTimes, fetchTodayHours, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
 import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
@@ -160,7 +160,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v103';
+const APP_VERSION = 'v104';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -185,6 +185,12 @@ async function boot() {
   initOrni();
   routeTracker.init(geo);
   routeTracker.onUpdate = pts => updateRouteMap(pts);
+  // 🎯-Karten-Marker antippen -> AR-Peilung dorthin öffnen (mit frischer eigener Position).
+  setFixArHandler(f => {
+    const data = { method: 'fix', species: f.species, lat: f.lat, lng: f.lng, uncertM: f.uncertM, dirSpreadDeg: f.dirSpreadDeg, rangeMinM: f.rangeMinM, rangeMaxM: f.rangeMaxM, calibrated: f.calibrated, nPhones: f.nPhones, myPos: myPos() };
+    if (ar.canShowAR(data)) ar.openAR(data);
+    else showInfoToast('🎯 Keine Peilung möglich', 'Eigene GPS-Position fehlt — Standort aktivieren.', '🎯');
+  });
   // Manuelle Positions-Korrektur von der Karte (Stufe 4): pos=null hebt sie wieder auf.
   setManualPosHandler(pos => {
     manualPos = pos;
@@ -2015,6 +2021,28 @@ function _compassSvg(r) {
   </svg>`;
 }
 
+// ---- Letzte Ortung merken (AR-Wiedereinstieg) ----
+// Das Ergebnis-Popup verschwindet nach ~25 s — wer es verpasst, kommt über den
+// "Letzte Ortung"-Button im Kopplungs-Fenster oder den 🎯-Karten-Marker wieder an die AR-Peilung.
+let _lastArResult = null;
+function _storeArResult(r) {
+  if (!ar.canShowAR(r)) return;
+  _lastArResult = { r, ts: Date.now() };
+  const b = document.getElementById('pairArBtn');
+  if (b) b.hidden = false;
+}
+function _openLastAr() {
+  if (!_lastArResult) return;
+  if (Date.now() - _lastArResult.ts > 10 * 60000) {
+    showInfoToast('🎯 Ortung veraltet', 'Die letzte Ortung ist älter als 10 Minuten — der Vogel ist vermutlich weitergezogen.', '🎯');
+    return;
+  }
+  // Eigene Position frisch einsetzen (man ist evtl. weitergegangen; bei Fix-Ergebnissen zählt sie)
+  const r = { ..._lastArResult.r, myPos: myPos() || _lastArResult.r.myPos };
+  if (ar.canShowAR(r)) ar.openAR(r);
+}
+document.getElementById('pairArBtn')?.addEventListener('click', _openLastAr);
+
 // ---- Partner-seitiges Feinabgleich-Popup ----
 // Auf den Handys, die NICHT den Feinabgleich gestartet haben: großes, klares Popup mit
 // Klatsch-Aufforderung. Das Mikrofon startet locate.js selbst (setMicController), hier nur die UI.
@@ -2087,6 +2115,7 @@ function showLocateResult(r) {
     <button id="_locResultClose" style="width:100%;margin-top:${ar.canShowAR(r) ? '8' : '14'}px;padding:11px;border-radius:14px;background:${ar.canShowAR(r) ? 'var(--glass-strong,rgba(255,255,255,.08))' : 'var(--lime)'};color:${ar.canShowAR(r) ? 'var(--ink)' : '#04130d'};font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
   </div>`;
   document.body.appendChild(ov);
+  _storeArResult(r);
   const close = () => ov.remove();
   ov.querySelector('#_locResultClose').onclick = close;
   const arBtn = ov.querySelector('#_locResultAr');
@@ -2103,8 +2132,10 @@ function showFixResult(r) {
   document.getElementById('_locResultOv')?.remove();
   const my = myPos();
   const arData = { ...r, myPos: my || null };
-  // 3-Geräte-Fix zusätzlich als Marker auf die Fundkarte legen (Stufe 4)
-  addFixMarker({ lat: r.lat, lng: r.lng, uncertM: r.uncertM, species: r.species });
+  _storeArResult(arData);
+  // Fix zusätzlich als Marker auf die Fundkarte legen (Stufe 4) — mit allen Daten, damit die
+  // AR-Peilung später direkt vom Karten-Marker aus geöffnet werden kann.
+  addFixMarker({ lat: r.lat, lng: r.lng, uncertM: r.uncertM, species: r.species, dirSpreadDeg: r.dirSpreadDeg, rangeMinM: r.rangeMinM, rangeMaxM: r.rangeMaxM, calibrated: r.calibrated, nPhones: r.nPhones });
   let distLine = 'Eigene GPS-Position fehlt — Richtung/Entfernung nicht anzeigbar.';
   if (my) {
     const dM = Math.round(haversineKm(my, r) * 1000);
@@ -2120,7 +2151,7 @@ function showFixResult(r) {
   ov.id = '_locResultOv';
   ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
   ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:26px 26px 20px;text-align:center;max-width:290px;width:88%">
-    <div style="font-size:12px;color:var(--lime);font-weight:700;letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px">🎯 Eindeutig geortet · 3 Handys</div>
+    <div style="font-size:12px;color:var(--lime);font-weight:700;letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px">🎯 Eindeutig geortet · ${r.nPhones || 3} Handys</div>
     <div style="font-size:19px;font-weight:700;color:var(--ink);font-family:'Outfit',sans-serif;margin-bottom:6px">${esc(r.species)}</div>
     <div style="font-size:13px;color:var(--ink);line-height:1.5">${distLine}</div>
     ${r.calibrated ? '' : '<div style="font-size:11px;color:var(--faint);margin-top:8px">Ohne 🎯 Feinabgleich ist die Position etwas gröber.</div>'}

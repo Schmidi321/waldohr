@@ -207,7 +207,7 @@ export function openAR(r) {
     bearingToPeer: r.bearingToPeer, baselineM: r.baselineM,
   };
   const isFix = r.method === 'fix';
-  const whoTxt = isFix ? 'eindeutig geortet (3 Handys)'
+  const whoTxt = isFix ? 'eindeutig geortet (' + (r.nPhones || 3) + ' Handys)'
     : r.firstHeard === 'me' ? 'vermutlich näher an DIR'
     : r.firstHeard === 'peer' ? 'vermutlich näher am PARTNER' : 'etwa mittig zwischen euch';
   const hintTxt = isFix
