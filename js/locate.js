@@ -429,24 +429,37 @@ function _collectSnippet(fromId, msg) {
 export function calibrationBias(peerId) { return _calibBias.get(peerId) ?? null; }
 export function micRecentlyActive() { return Date.now() - _lastWindowAt < 3000; }
 
-// Kurzer, lauter Frequenz-Sweep 1,5 → 6 kHz (~180 ms) über einen eigenen AudioContext. Liegt gut
-// im Vogelruf-Band und im Empfindlichkeitsbereich der Handy-Mikrofone; die Hüllkurve vermeidet
-// Knackser. Nur für die Kalibrierung, unabhängig von der Mikrofon-Engine.
+// Lauter, obertonreicher Frequenz-Sweep 1,2 → 5 kHz (~240 ms) über einen eigenen AudioContext.
+// Bewusst SÄGEZAHN statt reinem Sinus: die Obertöne machen den Ton auf den kleinen, im Mittel-/
+// Hochton effizienten Handy-Lautsprechern deutlich lauter und breitbandiger (besserer Korrelations-
+// peak). Ein DynamicsCompressor + kräftiger Ausgangs-Gain ziehen die Lautheit ans Maximum, ohne
+// hart zu übersteuern. Das Band liegt gut im Empfindlichkeitsbereich der Mikrofone; die Hüllkurve
+// vermeidet Knackser. Nur für die Kalibrierung, unabhängig von der Mikrofon-Engine.
 function _playChirp() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const start = () => {
-      const t0 = ctx.currentTime + 0.04;
+      const t0 = ctx.currentTime + 0.04, dur = 0.24;
       const osc = ctx.createOscillator();
+      const osc2 = ctx.createOscillator(); // eine Oktave tiefer für mehr „Körper"/Pegel
       const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(1500, t0);
-      osc.frequency.exponentialRampToValueAtTime(6000, t0 + 0.18);
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -18; comp.knee.value = 6; comp.ratio.value = 12; comp.attack.value = 0.002; comp.release.value = 0.1;
+      // Makeup-Gain nach dem Kompressor: nutzt den Headroom, den der Kompressor freiräumt, aus —
+      // hebt den Pegel wieder nahe Vollaussteuerung (deutlich lauter, ohne hartes Clipping).
+      const makeup = ctx.createGain(); makeup.gain.value = 1.5;
+      osc.type = 'sawtooth'; osc2.type = 'sawtooth';
+      osc.frequency.setValueAtTime(1200, t0);
+      osc.frequency.exponentialRampToValueAtTime(5000, t0 + dur - 0.02);
+      osc2.frequency.setValueAtTime(600, t0);
+      osc2.frequency.exponentialRampToValueAtTime(2500, t0 + dur - 0.02);
       gain.gain.setValueAtTime(0.0001, t0);
-      gain.gain.exponentialRampToValueAtTime(0.9, t0 + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.19);
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.start(t0); osc.stop(t0 + 0.21);
+      gain.gain.exponentialRampToValueAtTime(1.0, t0 + 0.012);
+      gain.gain.setValueAtTime(1.0, t0 + dur - 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(gain); osc2.connect(gain);
+      gain.connect(comp); comp.connect(makeup); makeup.connect(ctx.destination);
+      osc.start(t0); osc2.start(t0); osc.stop(t0 + dur + 0.02); osc2.stop(t0 + dur + 0.02);
       osc.onended = () => { try { ctx.close(); } catch {} };
     };
     if (ctx.state === 'suspended') ctx.resume().then(start).catch(start); else start();

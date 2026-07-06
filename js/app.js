@@ -160,7 +160,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v102';
+const APP_VERSION = 'v103';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -2033,7 +2033,7 @@ function closeCalibPrompt() {
 }
 function onCalibEvent(ev) {
   if (ev.kind === 'prep') {
-    _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">🎯</div><div style="font-size:17px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:8px">Feinabgleich</div><div style="font-size:13px;color:var(--ink);line-height:1.5">Alle Handys <b>flach nebeneinander</b> legen. Das Mikrofon startet automatisch — gleich ertönt ein kurzer <b>Kalibrier-Ton</b>.</div>');
+    _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">🎯</div><div style="font-size:17px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:8px">Feinabgleich</div><div style="font-size:13px;color:var(--ink);line-height:1.5">Alle Handys <b>flach nebeneinander</b> legen und die <b>Lautstärke aufdrehen</b>. Das Mikrofon startet automatisch — gleich ertönt ein kurzer <b>Kalibrier-Ton</b>.</div>');
   } else if (ev.kind === 'count') {
     _calibPromptBox('<div style="font-size:15px;color:var(--muted);margin-bottom:6px">Gleich ertönt der Ton …</div><div style="font-size:72px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif;line-height:1">' + (ev.n || '') + '</div>');
   } else if (ev.kind === 'clap') {
