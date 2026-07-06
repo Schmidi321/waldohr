@@ -127,7 +127,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v94';
+const APP_VERSION = 'v95';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -246,7 +246,11 @@ function updateServerStatusChip() {
   else { chip.classList.add('loc-searching'); chip.title = 'Verbinde mit BirdNET-Server…'; }
 }
 
-async function onWindow(samples, sampleRate) {
+async function onWindow(samples, sampleRate, endMs) {
+  // Rohe Fenster IMMER an die gemeinsame Ruf-Ortung füttern (auch ohne aktive Erkennung) — die
+  // Klatsch-Kalibrierung braucht Audio unabhängig davon, ob gerade klassifiziert wird.
+  const win = { samples, sampleRate, rate: sampleRate, endMs: endMs || Date.now() };
+  if (locate.isActive()) locate.feedWindow(win);
   if (!rec || !detectionActive) return;
   if (rec.setGeo) rec.setGeo(geo.pos);   // Standort für bessere Treffer (Server-Modus)
   let r = null;
@@ -265,7 +269,7 @@ async function onWindow(samples, sampleRate) {
   maybeAutoRecord(det, samples, sampleRate);
   if (locate.isActive()) {
     if (geo.pos) locate.setLocalPos(geo.pos);
-    locate.reportDetection(det);
+    locate.reportDetection(det, win); // mit Roh-Fenster -> Partner kann präzise kreuzkorrelieren
   }
   refresh();
 }
@@ -1979,12 +1983,21 @@ function showLocateResult(r) {
   const compassBlock = hasGeo
     ? `${_compassSvg(r)}<div style="font-size:11px;color:var(--faint);margin-top:2px">Nur die Seite (näher an dir/Partner) ist zuverlässig — eine genaue Pfeilrichtung würde mehr Präzision vortäuschen, als zwei Mikrofone hergeben. ${r.sideHint || ''}</div>`
     : `<div style="font-size:12px;color:var(--muted);margin-top:10px">Kein GPS bei einem der Geräte — keine Peilung möglich.</div>`;
-  const deltaLine = r.deltaMs != null ? 'gemeinsam geortet — Zeitversatz ' + r.deltaMs + ' ms' : 'gemeinsam geortet mit ' + partnerLabel;
+  // Qualität der Messung transparent machen: audio-korreliert (Kreuzkorrelation der rohen
+  // Wellenformen) ist auf Millisekunden genau, die reinen Fenster-Zeitstempel nur sehr grob.
+  const quality = r.method === 'corr'
+    ? (r.calibrated ? 'audio-korreliert + feinabgeglichen' : 'audio-korreliert')
+    : 'grob, nur Fenster-Zeitstempel';
+  const deltaLine = r.deltaMs != null ? 'gemeinsam geortet — Zeitversatz ' + r.deltaMs + ' ms (' + quality + ')' : 'gemeinsam geortet mit ' + partnerLabel;
+  const calibHint = r.method === 'corr' && !r.calibrated
+    ? '<div style="font-size:11px;color:var(--faint);margin-top:8px">Tipp: 🎯 Audio-Feinabgleich im Kopplungs-Fenster (Handys nebeneinander + klatschen) macht die "wer ist näher"-Aussage nochmal deutlich verlässlicher.</div>'
+    : '';
   ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:26px 26px 20px;text-align:center;max-width:280px;width:88%">
     <div style="font-size:18px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;margin-bottom:4px">${r.species}</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:10px">${deltaLine}</div>
     <div style="font-size:13px;color:var(--ink);line-height:1.4">${whoLine}</div>
     ${r.firstHeard != null ? compassBlock : ''}
+    ${calibHint}
     <button id="_locResultClose" style="width:100%;margin-top:14px;padding:11px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
   </div>`;
   document.body.appendChild(ov);
@@ -2313,7 +2326,10 @@ function initPairing() {
 
     if (!modulesAttached) {
       modulesAttached = true;
-      locate.attach(showLocateResult, updatePeerMarker);
+      locate.attach(showLocateResult, updatePeerMarker, ev => {
+        if (ev.kind === 'ping') showInfoToast('🎯 Feinabgleich', 'Partner startet den Audio-Feinabgleich — Handys nebeneinander halten und 1× klatschen!', '🎯');
+        else if (ev.kind === 'done') showInfoToast('🎯 Feinabgleich abgeschlossen', 'Die gemeinsame Ruf-Ortung ist jetzt deutlich genauer.', '✅');
+      });
       chat.attach(onChatMessage);
       session.attach();
       session.startSession();
@@ -2544,6 +2560,25 @@ function initPairing() {
       sessionReportBtn.disabled = false;
       sessionReportBtn.textContent = orig;
     }
+  };
+
+  // ---- Audio-Feinabgleich (Klatsch-Kalibrierung, js/locate.js) ----
+  // Misst den systematischen Zeitversatz zwischen beiden Geräten (Uhrrest + Mikrofonlatenz-
+  // Differenz), solange die Handys noch nebeneinander liegen — macht die spätere gemeinsame
+  // Ruf-Ortung von "grob" zu "wenige Millisekunden".
+  const calibBtn = document.getElementById('pairCalibBtn');
+  const calibStatusEl = document.getElementById('pairCalibStatus');
+  function setCalibStatus(s) {
+    if (!calibStatusEl) return;
+    calibStatusEl.hidden = false;
+    calibStatusEl.textContent = s.text;
+    calibStatusEl.style.color = s.phase === 'ok' ? 'var(--lime)' : s.phase === 'err' ? '#f87171' : 'var(--muted)';
+  }
+  if (calibBtn) calibBtn.onclick = async () => {
+    if (!audio.running) { setCalibStatus({ phase: 'err', text: 'Erst den Lauschmodus starten (Mikrofon an) — auf beiden Handys.' }); return; }
+    calibBtn.disabled = true;
+    try { await locate.startCalibration(setCalibStatus); }
+    finally { calibBtn.disabled = false; }
   };
 
   // ---- Foto/Video direkt an alle gekoppelten Handys (ganz ohne Internet, über den Datenkanal) ----

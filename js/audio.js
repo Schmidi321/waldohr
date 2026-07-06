@@ -9,6 +9,7 @@ export class AudioEngine {
     this.onWindow = null;
     this._ring = null; this._w = 0; this._count = 0; this._lastEmit = 0;
     this._need = 0; this._hop = 0;
+    this._anchors = []; // Date.now() minus AudioContext-Zeit, Median = stabiler Uhr-Anker
   }
 
   async start(deviceId) {
@@ -39,9 +40,10 @@ export class AudioEngine {
     this._hop  = Math.floor(this.sampleRate * 1.5);  // alle 1,5 s ein Treffer-Check
     this._ring = new Float32Array(this._need);
     this._w = 0; this._count = 0; this._lastEmit = 0;
+    this._anchors = [];
 
     this.proc = this.ctx.createScriptProcessor(4096, 1, 1);
-    this.proc.onaudioprocess = e => this._push(e.inputBuffer.getChannelData(0));
+    this.proc.onaudioprocess = e => this._push(e.inputBuffer.getChannelData(0), e.playbackTime);
     // ScriptProcessor muss in die Verarbeitungskette; über Gain 0 -> kein hörbares Echo
     this.sink = this.ctx.createGain(); this.sink.gain.value = 0;
     src.connect(this.proc); this.proc.connect(this.sink); this.sink.connect(this.ctx.destination);
@@ -49,23 +51,38 @@ export class AudioEngine {
     this.running = true;
   }
 
-  _push(inp) {
+  // playbackTime bindet den Puffer deterministisch an die AudioContext-Uhr (kein Callback-Jitter);
+  // der Median über mehrere Aufrufe bildet daraus einen stabilen Anker zur Systemzeit. Damit
+  // bekommen die 3s-Fenster einen End-Zeitstempel, der für die gemeinsame Ruf-Ortung (js/locate.js,
+  // Kreuzkorrelation zwischen zwei Handys) genau genug ist — ein nacktes Date.now() beim Emit wäre
+  // um die ScriptProcessor-Puffergröße (85 ms bei 48 kHz) verrauscht.
+  _push(inp, playbackTime) {
+    const pt = (typeof playbackTime === 'number' && playbackTime > 0)
+      ? playbackTime : (this.ctx ? this.ctx.currentTime : 0);
+    this._anchors.push(Date.now() - pt * 1000);
+    if (this._anchors.length > 25) this._anchors.shift();
     for (let i = 0; i < inp.length; i++) {
       this._ring[this._w] = inp[i];
       this._w = (this._w + 1) % this._need;
       this._count++;
       if (this._count >= this._need && this._count - this._lastEmit >= this._hop) {
         this._lastEmit = this._count;
-        this._emit();
+        this._emit(pt + (i + 1) / this.sampleRate);
       }
     }
   }
 
-  _emit() {
+  _anchorMs() {
+    if (!this._anchors.length) return Date.now();
+    const s = [...this._anchors].sort((a, b) => a - b);
+    return s[s.length >> 1];
+  }
+
+  _emit(endCtxTime) {
     if (!this.onWindow) return;
     const out = new Float32Array(this._need);
     for (let i = 0; i < this._need; i++) out[i] = this._ring[(this._w + i) % this._need];
-    this.onWindow(out, this.sampleRate);
+    this.onWindow(out, this.sampleRate, this._anchorMs() + endCtxTime * 1000);
   }
 
   stop() {
