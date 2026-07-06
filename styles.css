@@ -228,6 +228,11 @@ body.mic-ready .orb{opacity:.72}
   body{display:flex;align-items:center;justify-content:center;padding:32px}
   .phone{width:420px;min-height:auto;height:min(880px,92dvh);border-radius:42px;padding:12px;border:1px solid var(--stroke);box-shadow:var(--shadow),0 0 0 10px #02080699, inset 0 1px 0 rgba(255,255,255,.06)}
   .screen-wrap{min-height:0;height:100%;border-radius:32px}
+  /* Im Desktop-Mockup soll das Modal INNERHALB des Handy-Rahmens bleiben, nicht das ganze
+     Browserfenster füllen — dort ist die .screen-wrap exakt so hoch wie der Rahmen, also kein
+     Überhang, und absolute + 88% ist korrekt. */
+  .modal{position:absolute}
+  .sheet{max-height:88%}
 }
 .nav button{flex:1;background:none;border:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;color:var(--faint);font-size:10px;font-family:inherit;font-weight:500;transition:.25s}
 .nav button svg{width:22px;height:22px}
@@ -318,10 +323,16 @@ body.mic-ready .orb{opacity:.72}
 @keyframes growy{from{transform:scaleY(0)}to{transform:scaleY(1)}}
 .axis{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin-top:8px}
 
-.modal{position:absolute;inset:0;z-index:800;display:none;align-items:flex-end}
+/* position:fixed statt absolute: auf echten Handys ist die .screen-wrap durch Safe-Area/
+   Adressleiste manchmal etwas höher als der sichtbare Viewport. Ein absolut positioniertes,
+   unten angedocktes Sheet hing dann mit seiner Unterkante UNTER die sichtbare Kante — der
+   interne Scroll konnte den letzten Teil (Schließen-Knopf, Abschnitts-Ende) nie hereinholen.
+   fixed + max-height in dvh bindet das Sheet an den sichtbaren Viewport, der interne Scroll
+   deckt beliebig langen Inhalt ab. Im Desktop-Mockup (>=640px) wieder absolute, s. Media-Query. */
+.modal{position:fixed;inset:0;z-index:800;display:none;align-items:flex-end}
 .modal.open{display:flex;animation:fade .3s}
 .modal .scrim{position:absolute;inset:0;background:#020806b0;backdrop-filter:blur(3px)}
-.sheet{position:relative;width:100%;background:linear-gradient(180deg,#0a3527,#051a13);border-top-left-radius:30px;border-top-right-radius:30px;border:1px solid var(--stroke);border-bottom:none;padding:14px 20px 28px;max-height:88%;overflow-y:auto;animation:up .4s cubic-bezier(.2,.8,.2,1)}
+.sheet{position:relative;width:100%;background:linear-gradient(180deg,#0a3527,#051a13);border-top-left-radius:30px;border-top-right-radius:30px;border:1px solid var(--stroke);border-bottom:none;padding:14px 20px 28px;max-height:88dvh;overflow-y:auto;overscroll-behavior:contain;animation:up .4s cubic-bezier(.2,.8,.2,1)}
 @keyframes up{from{transform:translateY(100%)}to{transform:none}}
 .sheet .grab{width:42px;height:5px;border-radius:5px;background:var(--stroke-strong);margin:0 auto 16px}
 .sheet .hero{display:flex;gap:14px;align-items:center;margin-bottom:16px}

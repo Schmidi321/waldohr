@@ -40,6 +40,24 @@ const _pendingSnips = new Map(); // "peer:key:ts" -> {hdr,parts,got,resolve,time
 const _lastCorrAt = new Map();   // "peer:key" -> ts der letzten Korrelation (Drossel)
 let _calibWaiter = null;         // wartet auf das erste Fenster, das den Klatsch-Zeitraum abdeckt
 let _calibErrReason = null;      // Fehlergrund vom Partner während einer laufenden Kalibrierung
+let _micController = null;       // von app.js gesetzt: schaltet das eigene Mikrofon bei Bedarf ein
+
+// app.js reicht hier eine Funktion herein, die das Mikrofon startet (falls aus) und true liefert,
+// sobald es läuft — damit die Kalibrierung das Lauschen auf allen Handys selbst anschalten kann,
+// statt es vom Nutzer vorauszusetzen.
+export function setMicController(fn) { _micController = fn; }
+
+async function _ensureMicOn() {
+  if (micRecentlyActive()) return true;
+  if (!_micController) return false;
+  try { await _micController(); } catch { return false; }
+  // Auf das erste echte Audio-Fenster warten (Mikrofon-Warmlauf), max. ~2,5 s
+  for (let i = 0; i < 25; i++) {
+    if (micRecentlyActive()) return true;
+    await new Promise(r => setTimeout(r, 100));
+  }
+  return micRecentlyActive();
+}
 const _recentTdoa = new Map();   // key -> [{peerId,tdoaMs,calibrated,ts,peerPos}] — Sammelbecken für den 3-Geräte-Fix
 const _lastFixAt = new Map();    // key -> ts (Drossel für Fix-Popups)
 
@@ -160,7 +178,21 @@ function _onMessage(msg, fromId) {
   }
   if (msg.type === 'snipReq') { _serveSnippet(fromId, msg); return; }
   if (msg.type === 'snipHdr' || msg.type === 'snipChunk') { _collectSnippet(fromId, msg); return; }
-  if (msg.type === 'calib') { _serveCalib(fromId, msg); return; }
+  // Zentrale startet den geführten Feinabgleich -> Popup öffnen + eigenes Mikrofon anschalten.
+  if (msg.type === 'calibPrep') {
+    if (_onCalibEvent) _onCalibEvent({ kind: 'prep', peerId: fromId });
+    _ensureMicOn();
+    return;
+  }
+  if (msg.type === 'calibCount') {
+    if (_onCalibEvent) _onCalibEvent({ kind: 'count', n: msg.n, peerId: fromId });
+    return;
+  }
+  if (msg.type === 'calibEnd') {
+    if (_onCalibEvent) _onCalibEvent({ kind: 'end', peerId: fromId });
+    return;
+  }
+  if (msg.type === 'calib') { _serveCalib(fromId, msg); if (_onCalibEvent) _onCalibEvent({ kind: 'clap', peerId: fromId }); return; }
   if (msg.type === 'calibDone') {
     if (typeof msg.bias === 'number' && Math.abs(msg.bias) < 500) {
       _calibBias.set(fromId, msg.bias);
@@ -397,50 +429,89 @@ function _collectSnippet(fromId, msg) {
 export function calibrationBias(peerId) { return _calibBias.get(peerId) ?? null; }
 export function micRecentlyActive() { return Date.now() - _lastWindowAt < 3000; }
 
+// Geführter Feinabgleich, von der Zentrale aus mit EINEM Knopfdruck für ALLE Partner:
+//  1. Partner-Popups öffnen (calibPrep) — dort startet das Mikrofon automatisch.
+//  2. Eigenes Mikrofon sicherstellen, kurz warmlaufen lassen.
+//  3. 3-2-1-Countdown auf allen Geräten, dann EIN gemeinsamer Klatscher.
+//  4. Alle Partner-Schnipsel um denselben Klatsch-Zeitpunkt holen und je den Bias bestimmen.
+// So muss der Nutzer nur einmal klatschen (Geräte liegen zusammen) und nichts vorab einschalten.
 export async function startCalibration(onStatus) {
   const peers = hub.peerList().filter(p => _clockOffsetMs.get(p.id) != null);
-  if (!peers.length) { onStatus?.({ phase: 'err', text: 'Kein direkt verbundener Partner mit Uhren-Abgleich.' }); return false; }
-  if (!micRecentlyActive()) { onStatus?.({ phase: 'err', text: 'Eigenes Mikrofon ist aus — erst den Lauschmodus starten.' }); return false; }
-  let okAll = true;
-  for (const peer of peers) {
-    okAll = (await _calibrateWith(peer.id, peer.label, onStatus)) && okAll;
-  }
-  return okAll;
-}
+  if (!peers.length) { onStatus?.({ phase: 'err', text: 'Kein direkt verbundener Partner mit Uhren-Abgleich — erst koppeln und kurz warten.' }); return false; }
 
-async function _calibrateWith(peerId, label, onStatus) {
+  // 1. Partner vorbereiten (Popup + Mikro an)
+  for (const p of peers) hub.sendTo(p.id, { type: 'calibPrep', relay: false });
+  onStatus?.({ phase: 'prep', text: 'Alle Handys flach nebeneinander legen…' });
+
+  // 2. Eigenes Mikrofon anschalten + warmlaufen
+  if (!(await _ensureMicOn())) {
+    for (const p of peers) hub.sendTo(p.id, { type: 'calibEnd', relay: false });
+    onStatus?.({ phase: 'err', text: 'Eigenes Mikrofon ließ sich nicht starten.' });
+    return false;
+  }
+  await new Promise(r => setTimeout(r, 800)); // Partner-Mikros ebenfalls warmlaufen lassen
+
+  // 3. Countdown auf allen Geräten
+  for (let n = 3; n >= 1; n--) {
+    onStatus?.({ phase: 'count', text: 'Gleich klatschen … ' + n });
+    for (const p of peers) hub.sendTo(p.id, { type: 'calibCount', n, relay: false });
+    await new Promise(r => setTimeout(r, 800));
+  }
   _calibErrReason = null;
-  const at = Date.now() + 1200;
-  hub.sendTo(peerId, { type: 'calib', at, relay: false });
-  onStatus?.({ phase: 'clap', text: 'Handys nebeneinander — jetzt 1× laut klatschen! 👏' });
+  const at = Date.now() + 250; // gemeinsamer Klatsch-Zeitpunkt, minimal in der Zukunft
+  for (const p of peers) hub.sendTo(p.id, { type: 'calib', at, relay: false });
+  onStatus?.({ phase: 'clap', text: '👏 JETZT 1× laut klatschen!' });
+
+  // Eigenes Fenster um den Klatsch-Zeitpunkt abwarten
   const win = await new Promise(res => {
-    if (_calibWaiter) { res(null); return; } // es läuft schon eine Kalibrierung
+    if (_calibWaiter) { res(null); return; }
     const timer = setTimeout(() => { _calibWaiter = null; res(null); }, 9000);
     _calibWaiter = { untilMs: at + 2400, timer, resolve: res };
   });
   if (!win) {
-    onStatus?.({ phase: 'err', text: _calibErrReason === 'mic' ? 'Partner-Mikrofon ist aus — dort den Lauschmodus starten.' : 'Kein Audio-Fenster erhalten — läuft das Mikrofon?' });
+    for (const p of peers) hub.sendTo(p.id, { type: 'calibEnd', relay: false });
+    onStatus?.({ phase: 'err', text: 'Kein eigenes Audio-Fenster erhalten — nochmal versuchen.' });
     return false;
   }
+
+  // 4. Je Partner den Klatscher vergleichen
   onStatus?.({ phase: 'work', text: 'Vergleiche die Aufnahmen…' });
-  const snip = await _requestSnippet(peerId, { key: '_calib', ts: at });
-  if (_calibErrReason || !snip) {
-    onStatus?.({ phase: 'err', text: _calibErrReason === 'mic' ? 'Partner-Mikrofon ist aus — dort den Lauschmodus starten.' : 'Partner-Aufnahme nicht erhalten — nochmal versuchen.' });
-    return false;
+  const results = [];
+  for (const peer of peers) results.push(await _correlateClap(peer.id, peer.label, at, win));
+  for (const p of peers) hub.sendTo(p.id, { type: 'calibEnd', relay: false });
+
+  const okCount = results.filter(r => r.ok).length;
+  if (okCount === peers.length) {
+    onStatus?.({ phase: 'ok', text: '✅ Feinabgleich fertig — ' + okCount + ' Partner abgeglichen. Die Ortung ist jetzt deutlich genauer.' });
+    return true;
   }
+  if (okCount > 0) {
+    onStatus?.({ phase: 'ok', text: '✅ ' + okCount + ' von ' + peers.length + ' Partnern abgeglichen. Für den Rest nochmal versuchen (näher zusammen, lauter klatschen).' });
+    return true;
+  }
+  const why = results[0]?.reason;
+  onStatus?.({ phase: 'err', text: why === 'mic' ? 'Partner-Mikrofon war nicht bereit — nochmal versuchen.' : why === 'conf' ? 'Klatschen nicht klar erkannt — Handys näher zusammen, lauter klatschen.' : 'Feinabgleich nicht geklappt — nochmal versuchen.' });
+  return false;
+}
+
+// Ein bereits aufgenommener eigener Klatsch-Ausschnitt (win) wird mit dem Partner-Ausschnitt um
+// denselben Zeitpunkt (at) verglichen -> systematischer Versatz (Bias) dieses Gerätepaars.
+async function _correlateClap(peerId, label, at, win) {
+  _calibErrReason = null;
+  const snip = await _requestSnippet(peerId, { key: '_calib', ts: at });
+  if (_calibErrReason || !snip) return { ok: false, reason: _calibErrReason || 'nosnip', label };
   const offset = _clockOffsetMs.get(peerId);
-  if (offset == null) { onStatus?.({ phase: 'err', text: 'Uhren-Abgleich fehlt.' }); return false; }
+  if (offset == null) return { ok: false, reason: 'sync', label };
   const eL = win.endMs, eR = snip.endMs - offset;
   const local16 = resampleLinear(win.samples, win.rate, CORR_RATE);
   // Klatschen ist breitbandig — Band nach unten öffnen, Suchfenster eng (Geräte liegen nebeneinander)
   const { lagMs, confidence } = gccPhat(local16, snip.samples, CORR_RATE, { centerMs: eR - eL, halfMs: 500, bandLo: 700 });
-  if (confidence < 1.4) { onStatus?.({ phase: 'err', text: 'Klatschen nicht eindeutig erkannt — näher an die Handys, nochmal.' }); return false; }
+  if (confidence < 1.4) return { ok: false, reason: 'conf', label };
   const bias = (eL - eR) + lagMs;
-  if (Math.abs(bias) > 450) { onStatus?.({ phase: 'err', text: 'Abgleich unplausibel (' + Math.round(bias) + ' ms) — nochmal versuchen.' }); return false; }
+  if (Math.abs(bias) > 450) return { ok: false, reason: 'bias', label };
   _calibBias.set(peerId, bias);
-  hub.sendTo(peerId, { type: 'calibDone', bias: -bias, relay: false }); // Vorzeichen: aus Partnersicht gespiegelt
-  onStatus?.({ phase: 'ok', text: '✅ Feinabgleich mit ' + label + ': Versatz ' + Math.round(bias) + ' ms ausgeglichen — Ortung ist jetzt deutlich genauer.' });
-  return true;
+  hub.sendTo(peerId, { type: 'calibDone', bias: -bias, relay: false }); // Vorzeichen aus Partnersicht gespiegelt
+  return { ok: true, bias: Math.round(bias), label };
 }
 
 // Partnerseite der Kalibrierung: auf Anforderung das Fenster rund um den Klatsch-Zeitpunkt

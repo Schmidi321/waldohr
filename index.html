@@ -752,7 +752,7 @@
                 </svg>
                 <figcaption>Handys direkt <b>nebeneinander</b> halten und <b>einmal laut klatschen</b>. Der Klatscher erreicht beide gleichzeitig — daraus lernt die App den Geräte-Zeitversatz und rechnet ihn später heraus.</figcaption>
               </figure>
-              <p>Im Kopplungs-Fenster auf <span class="hl">🎯 Audio-Feinabgleich</span> tippen (Mikrofon muss auf beiden Handys laufen). Ohne diesen Schritt ist besonders die 3-Handy-Ortung meist zu ungenau.</p>
+              <p>Nur auf der <b>Zentrale</b> (das Handy, mit dem sich die anderen gekoppelt haben) auf <span class="hl">🎯 Feinabgleich starten</span> tippen. Auf den anderen Handys geht automatisch ein Popup auf und das Lauschen schaltet sich selbst ein — die App zählt runter und ihr klatscht <b>alle gemeinsam einmal</b>. Ohne diesen Schritt ist besonders die 3-Handy-Ortung meist zu ungenau.</p>
 
               <p style="color:var(--lime);font-weight:600;margin-top:6px">Schritt 2 — auseinandergehen</p>
               <figure class="help-fig">
@@ -1024,7 +1024,8 @@
           </div>
           <div id="pairPeerList" class="pair-peer-list"></div>
           <button type="button" class="btn ghost" id="pairAddDeviceBtn" style="width:100%;margin-bottom:10px">➕ Weiteres Handy koppeln</button>
-          <button type="button" class="btn ghost" id="pairCalibBtn" style="width:100%;margin-bottom:6px">🎯 Audio-Feinabgleich (nebeneinander + klatschen)</button>
+          <button type="button" class="btn ghost" id="pairCalibBtn" style="width:100%;margin-bottom:6px">🎯 Feinabgleich starten (für alle Handys)</button>
+          <div style="font-size:11px;color:var(--faint);text-align:center;margin-bottom:6px">Alle Handys nebeneinander — startet das Lauschen automatisch, dann 1× gemeinsam klatschen.</div>
           <div id="pairCalibStatus" style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:14px" hidden></div>
           <button type="button" class="btn ghost" id="pairOpenChatBtn" style="width:100%;margin-bottom:10px">💬 Nachrichten öffnen</button>
           <button type="button" class="btn ghost" id="pairSessionReportBtn" style="width:100%">📋 Gemeinsamen Bericht erstellen</button>

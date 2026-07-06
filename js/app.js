@@ -128,7 +128,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v100';
+const APP_VERSION = 'v101';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1974,6 +1974,39 @@ function _compassSvg(r) {
   </svg>`;
 }
 
+// ---- Partner-seitiges Feinabgleich-Popup ----
+// Auf den Handys, die NICHT den Feinabgleich gestartet haben: großes, klares Popup mit
+// Klatsch-Aufforderung. Das Mikrofon startet locate.js selbst (setMicController), hier nur die UI.
+let _calibPromptEl = null, _calibPromptTimer = null;
+function _calibPromptBox(html) {
+  if (!_calibPromptEl) {
+    _calibPromptEl = document.createElement('div');
+    _calibPromptEl.style.cssText = 'position:fixed;inset:0;z-index:350;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.78);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
+    document.body.appendChild(_calibPromptEl);
+  }
+  _calibPromptEl.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:28px 24px;text-align:center;max-width:290px;width:88%">${html}</div>`;
+}
+function closeCalibPrompt() {
+  if (_calibPromptTimer) { clearTimeout(_calibPromptTimer); _calibPromptTimer = null; }
+  if (_calibPromptEl) { _calibPromptEl.remove(); _calibPromptEl = null; }
+}
+function onCalibEvent(ev) {
+  if (ev.kind === 'prep') {
+    _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">🎯</div><div style="font-size:17px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:8px">Feinabgleich</div><div style="font-size:13px;color:var(--ink);line-height:1.5">Alle Handys <b>flach nebeneinander</b> legen. Das Mikrofon startet automatisch — gleich wird <b>1× geklatscht</b>.</div>');
+  } else if (ev.kind === 'count') {
+    _calibPromptBox('<div style="font-size:15px;color:var(--muted);margin-bottom:6px">Gleich klatschen …</div><div style="font-size:72px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif;line-height:1">' + (ev.n || '') + '</div>');
+  } else if (ev.kind === 'clap') {
+    _calibPromptBox('<div style="font-size:44px;margin-bottom:8px">👏</div><div style="font-size:22px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif">JETZT klatschen!</div>');
+  } else if (ev.kind === 'done') {
+    _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">✅</div><div style="font-size:16px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:6px">Feinabgleich fertig</div><div style="font-size:12px;color:var(--muted);line-height:1.5">Die gemeinsame Ruf-Ortung ist jetzt deutlich genauer.</div>');
+    if (_calibPromptTimer) clearTimeout(_calibPromptTimer);
+    _calibPromptTimer = setTimeout(closeCalibPrompt, 2500);
+  } else if (ev.kind === 'end') {
+    // Ende ohne vorheriges 'done' = nicht erfolgreich abgeschlossen -> kurz stehen lassen, dann zu.
+    if (_calibPromptEl && !_calibPromptTimer) _calibPromptTimer = setTimeout(closeCalibPrompt, 1500);
+  }
+}
+
 function showLocateResult(r) {
   // Der 3-Geräte-Fix hat ein eigenes, einfacheres Popup (eindeutige Position statt Seiten-Deutung)
   if (r.method === 'fix') { showFixResult(r); return; }
@@ -2407,10 +2440,7 @@ function initPairing() {
 
     if (!modulesAttached) {
       modulesAttached = true;
-      locate.attach(showLocateResult, updatePeerMarker, ev => {
-        if (ev.kind === 'ping') showInfoToast('🎯 Feinabgleich', 'Partner startet den Audio-Feinabgleich — Handys nebeneinander halten und 1× klatschen!', '🎯');
-        else if (ev.kind === 'done') showInfoToast('🎯 Feinabgleich abgeschlossen', 'Die gemeinsame Ruf-Ortung ist jetzt deutlich genauer.', '✅');
-      });
+      locate.attach(showLocateResult, updatePeerMarker, onCalibEvent);
       chat.attach(onChatMessage);
       session.attach();
       session.startSession();
@@ -2653,9 +2683,11 @@ function initPairing() {
   };
 
   // ---- Audio-Feinabgleich (Klatsch-Kalibrierung, js/locate.js) ----
-  // Misst den systematischen Zeitversatz zwischen beiden Geräten (Uhrrest + Mikrofonlatenz-
-  // Differenz), solange die Handys noch nebeneinander liegen — macht die spätere gemeinsame
-  // Ruf-Ortung von "grob" zu "wenige Millisekunden".
+  // Misst den systematischen Zeitversatz zwischen den Geräten (Uhrrest + Mikrofonlatenz-Differenz),
+  // solange die Handys noch nebeneinander liegen — macht die spätere gemeinsame Ruf-Ortung von
+  // "grob" zu "wenige Millisekunden". Geführter Ablauf: EIN Knopfdruck auf der Zentrale, die
+  // Partner-Handys öffnen automatisch ein Popup, schalten ihr Mikrofon selbst an, und es wird
+  // nur EINMAL gemeinsam geklatscht.
   const calibBtn = document.getElementById('pairCalibBtn');
   const calibStatusEl = document.getElementById('pairCalibStatus');
   function setCalibStatus(s) {
@@ -2664,11 +2696,24 @@ function initPairing() {
     calibStatusEl.textContent = s.text;
     calibStatusEl.style.color = s.phase === 'ok' ? 'var(--lime)' : s.phase === 'err' ? '#f87171' : 'var(--muted)';
   }
+  // Mikrofon-Controller für locate.js: schaltet das Lauschen bei Bedarf selbst an.
+  locate.setMicController(async () => {
+    if (audio.running) return true;
+    tryFullscreen();
+    try {
+      await audio.start(getMicDeviceId());
+      geo.start(); detectionActive = true; setUI('mic');
+      if (recBtn) recBtn.classList.add('rec-on');
+      startDauerUeberwachung();
+    } catch (e) { console.warn('calib mic', e); return false; }
+    return audio.running;
+  });
   if (calibBtn) calibBtn.onclick = async () => {
-    if (!audio.running) { setCalibStatus({ phase: 'err', text: 'Erst den Lauschmodus starten (Mikrofon an) — auf beiden Handys.' }); return; }
     calibBtn.disabled = true;
+    const orig = calibBtn.textContent;
+    calibBtn.textContent = 'Feinabgleich läuft…';
     try { await locate.startCalibration(setCalibStatus); }
-    finally { calibBtn.disabled = false; }
+    finally { calibBtn.disabled = false; calibBtn.textContent = orig; }
   };
 
   // ---- Foto/Video direkt an alle gekoppelten Handys (ganz ohne Internet, über den Datenkanal) ----
