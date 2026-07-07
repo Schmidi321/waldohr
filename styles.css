@@ -65,8 +65,15 @@ h1,h2,h3,.brand,.big{font-family:'Outfit',sans-serif}
 .chip.loc-active,.chip.loc-searching,.chip.loc-off{padding:7px 9px;font-size:10px;font-weight:600;letter-spacing:.3px;gap:4px}
 /* Mini-Symbol für den Kopplungsstatus auf den Tabs außer "Lauschen" — dort reicht das reine Icon,
    den Text/die Signalstärke gibt's nur auf dem Lauschen-Tab bzw. per Tap zurück ins Kopplungs-Fenster. */
-.pair-mini-chip{width:32px;height:32px;flex-shrink:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--glass);border:1px solid var(--stroke);color:var(--lime);cursor:pointer;padding:0}
+.pair-mini-chip{position:relative;width:32px;height:32px;flex-shrink:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--glass);border:1px solid var(--stroke);color:var(--lime);cursor:pointer;padding:0}
 .pair-mini-chip[hidden]{display:none}
+/* Rollen-Abzeichen auf dem Kopplungs-Icon: ★ = diese Zentrale, Zahl = eigene Partner-Nummer als
+   Speiche — macht auf einen Blick klar, wer man in der Kopplung ist, ohne Platz für Text zu brauchen. */
+.role-badge{position:absolute;top:-3px;right:-3px;min-width:15px;height:15px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;line-height:1;padding:0 3px;pointer-events:none;border:1.5px solid var(--bg,#04130d);background:#1e4732;color:var(--lime)}
+.role-badge[hidden]{display:none}
+.role-badge.host{background:#fbbf24;color:#04130d}
+/* Schwache Verbindung (hoher Ping) -> Icon dezent rose einfärben statt Signalbalken zu zeigen. */
+#pairStatusChip.sig-bad,.pair-mini-chip.sig-bad{color:var(--rose,#fb7185)!important}
 .chip.loc-active{color:var(--lime)}
 .chip.loc-active svg{color:var(--lime)}
 .chip.loc-searching{color:var(--amber)}

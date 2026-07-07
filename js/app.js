@@ -89,6 +89,32 @@ async function playFotoAlarm(vibrateOnly) {
   } catch (e) { console.warn('alarm audio', e); }
 }
 
+// Akustisches Signal bei Verbindungsabbruch zum Partner — beim Fotografieren ist der Blick oft
+// nicht am Handy, ein reiner Toast würde dann leicht übersehen. full=true (letzte/einzige
+// Verbindung weg, Ortung/Chat/Feinabgleich stehen) bekommt ein deutlicheres Signal als der
+// Verlust eines von mehreren Partnern im Stern-Modell (dort läuft die Kopplung ja weiter).
+// Absteigende Töne (Gegenteil des aufsteigenden Erfolgs-Jingles oben) signalisieren "etwas fehlt".
+async function playDisconnectTone(full) {
+  try { if ('vibrate' in navigator) navigator.vibrate(full ? [200, 100, 200, 100, 400] : [150]); } catch {}
+  warmAlarmCtx();
+  if (!alarmCtx) return;
+  try {
+    if (alarmCtx.state === 'suspended') await alarmCtx.resume();
+    const t = alarmCtx.currentTime;
+    const notes = full ? [[783.99, 0], [587.33, .18], [392.0, .36]] : [[587.33, 0], [440.0, .14]];
+    notes.forEach(([freq, delay]) => {
+      const osc = alarmCtx.createOscillator();
+      const gain = alarmCtx.createGain();
+      osc.type = 'triangle'; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, t + delay);
+      gain.gain.linearRampToValueAtTime(0.3, t + delay + 0.02);
+      gain.gain.linearRampToValueAtTime(0, t + delay + 0.22);
+      osc.connect(gain); gain.connect(alarmCtx.destination);
+      osc.start(t + delay); osc.stop(t + delay + 0.25);
+    });
+  } catch (e) { console.warn('disconnect tone', e); }
+}
+
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
 
@@ -160,7 +186,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v104';
+const APP_VERSION = 'v105';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -2277,18 +2303,29 @@ function initPairing() {
   // mehreren gekoppelten Geräten (Stern-Modell) zeigt der Text die Anzahl, das Signal-Icon das
   // schwächste Glied unter allen gleichzeitigen Verbindungen.
   const pairChip = document.getElementById('pairStatusChip');
-  const pairChipTxt = document.getElementById('pairStatusTxt');
-  const pairSignalIco = document.getElementById('pairSignalIco');
-  function setPairChip(visible, text) {
+  const pairChipBadge = document.getElementById('pairStatusBadge');
+  // Kleines Rollen-Abzeichen (★ = du bist die Zentrale, Zahl = deine Partner-Nummer als Speiche)
+  // auf dem Icon selbst — Nutzer-Wunsch: Host und eigene Nummer müssen auf einen Blick erkennbar
+  // sein, ohne dass das Icon dafür groß mit Text wird. Wird auf dem Haupt-Icon UND allen
+  // Mini-Icons der anderen Tabs angewendet (updateMiniChips ruft dieselbe Funktion auf).
+  function _applyRoleBadge(badgeEl) {
+    if (!badgeEl) return;
+    if (hub.isHost()) { badgeEl.hidden = false; badgeEl.textContent = '★'; badgeEl.classList.add('host'); return; }
+    const myId = hub.myAssignedId();
+    if (myId != null) { badgeEl.hidden = false; badgeEl.textContent = String(myId); badgeEl.classList.remove('host'); return; }
+    badgeEl.hidden = true; badgeEl.classList.remove('host');
+  }
+  function setPairChip(visible, title) {
     if (!pairChip) return;
     pairChip.hidden = !visible;
-    pairChip.classList.toggle('loc-off', !visible);
-    if (text && pairChipTxt) pairChipTxt.textContent = text;
+    if (title) pairChip.title = title;
+    _applyRoleBadge(pairChipBadge);
   }
+  // Signalqualität nur noch als dezente Warnfarbe (schwache Verbindung -> rose) statt Signalbalken
+  // — Details (Ping in ms) stehen weiterhin im Kopplungs-Fenster, das Icon bleibt aufgeräumt.
   function updatePairSignal(level) {
-    if (!pairSignalIco) return;
-    const bars = pairSignalIco.querySelectorAll('rect');
-    bars.forEach((bar, i) => { bar.style.opacity = level != null && i < level ? '1' : '.35'; });
+    if (pairChip) pairChip.classList.toggle('sig-bad', level === 1);
+    document.querySelectorAll('.pair-mini-chip').forEach(c => c.classList.toggle('sig-bad', level === 1));
   }
   function updatePeerSignal(peerId, level) {
     peerSignalLevels.set(peerId, level);
@@ -2367,7 +2404,11 @@ function initPairing() {
     const chips = document.querySelectorAll('.pair-mini-chip');
     const connected = hub.peerCount() > 0;
     const title = connected ? pairStatusText() : '';
-    chips.forEach(chip => { chip.hidden = !connected; chip.title = title; });
+    chips.forEach(chip => {
+      chip.hidden = !connected;
+      chip.title = title;
+      _applyRoleBadge(chip.querySelector('.role-badge'));
+    });
   }
   document.querySelectorAll('.pair-mini-chip').forEach(chip => { chip.onclick = () => openBtn.click(); });
   hub.onTopoChange(() => { refreshPeerChip(); renderPeerList(); });
@@ -2566,8 +2607,10 @@ function initPairing() {
       chat.detach();
       session.detach();
       filetransfer.detach();
+      playDisconnectTone(true);
       showInfoToast('📡 Verbindung zum Partner verloren', 'Nicht automatisch behebbar — bitte neu koppeln.', '📡', () => openBtn.click(), 'Neu koppeln');
     } else {
+      playDisconnectTone(false);
       showInfoToast('📡 Partner ' + peerId + ' getrennt', connections.size + ' Verbindung' + (connections.size === 1 ? '' : 'en') + ' noch aktiv.', '📡');
     }
   }
