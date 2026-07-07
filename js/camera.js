@@ -29,16 +29,21 @@ async function _enumerateDevices() {
     const mics = all.filter(d => d.kind === 'audioinput');
     const camSel = document.getElementById('camCamSelect');
     if (camSel && allCams.length) {
-      // Nur Rückkameras (kein Frontkamera/Selfie)
+      // ALLE Rückkameras listen, sobald es mehr als eine gibt — nicht nur die sauber als
+      // Ultra/Normal/Tele erkannten (die Labels fehlen auf vielen Geräten, dann blieb die
+      // Auswahl unsichtbar). Gleiche Lektion wie bei der QR-Scan-Linsenwahl: eine defekte oder
+      // unscharfe Hauptlinse macht die Auswahl erst richtig wichtig.
       const back = allCams.filter(d => !d.label.toLowerCase().match(/front|facetime|user|selfie/));
-      const ultraWide = back.find(d => d.label.toLowerCase().match(/ultra/));
-      const wide = back.find(d => !d.label.toLowerCase().match(/ultra|telephoto|tele|[23]\.?[0-9]?x\b/)) || back[0];
-      const tele = back.find(d => d.label.toLowerCase().match(/telephoto|tele|[23]\.?[0-9]?x\b/) && d !== wide);
-      const chosen = [ultraWide, wide, tele].filter(Boolean);
-      if (!chosen.length) chosen.push(...allCams.slice(0, 3));
+      const chosen = back.length ? back : allCams.slice(0, 3);
+      let generic = 0;
       camSel.innerHTML = chosen.map(d => {
         const lbl = d.label.toLowerCase();
-        const name = lbl.match(/ultra/) ? '📷 Ultra-Weit (0.5×)' : lbl.match(/telephoto|tele|[23]\.?[0-9]?x\b/) ? '🔭 Tele' : '📷 Normal (1×)';
+        let name;
+        if (lbl.match(/ultra/)) name = '📷 Ultra-Weit';
+        else if (lbl.match(/telephoto|tele|[3-9](\.\d)?x\b/)) name = '🔭 Tele';
+        else if (lbl.match(/macro/)) name = '🌸 Makro';
+        else if (lbl.match(/wide|haupt|main|back|rück|rear/)) name = '📷 Haupt';
+        else name = '📷 Kamera ' + (++generic);
         return `<option value="${d.deviceId}">${name}</option>`;
       }).join('');
       camSel.style.display = chosen.length > 1 ? '' : 'none';
@@ -54,15 +59,24 @@ async function _enumerateDevices() {
 // ---- Zoom-Rendering ----
 function _isRecording() { return !!(_mr && _mr.state === 'recording'); }
 
+// Digital-Zoom-Obergrenze für Geräte OHNE Hardware-Zoom (v.a. iOS Safari, das caps.zoom nicht
+// anbietet): dort zoomt WaldOhr rein digital (CSS-Vorschau + Canvas-Crop in der Aufnahme).
+// 4× ist die Grenze, bei der ein 4K-Stream im Full-HD-Aufnahme-Canvas noch brauchbar scharf bleibt.
+const DIGITAL_MAX = 4;
+function _zoomRange() {
+  return _zoomSupported ? { min: _zoomMin, max: _zoomMax } : { min: 1, max: DIGITAL_MAX };
+}
+
 // Logischen Zoom setzen: Vorschau (CSS) und Slider sofort, framegenau, ohne die Kamera-Pipeline
 // anzufassen. Der sichtbare Digital-Faktor ist immer relativ zum aktuellen Hardware-Stand —
 // dadurch stimmen Vorschau und (Canvas-)Aufnahme exakt überein und nichts springt.
 function _renderZoom(v) {
-  _viewZoom = v;
+  const r = _zoomRange();
+  _viewZoom = Math.max(r.min, Math.min(r.max, v));
   const vid = document.getElementById('camVideo');
-  if (vid) vid.style.transform = `scale(${Math.max(1, v / (_hwZoom || 1))})`;
-  const sl = document.getElementById('camZoom'); if (sl) sl.value = v;
-  const zv = document.getElementById('camZoomVal'); if (zv) zv.textContent = v.toFixed(1) + '×';
+  if (vid) vid.style.transform = `scale(${Math.max(1, _viewZoom / (_hwZoom || 1))})`;
+  const sl = document.getElementById('camZoom'); if (sl) sl.value = _viewZoom;
+  const zv = document.getElementById('camZoomVal'); if (zv) zv.textContent = _viewZoom.toFixed(1) + '×';
 }
 
 // Hardware-Zoom tatsächlich nachführen. Jeder applyConstraints()-Aufruf ist auf vielen Handys
@@ -75,9 +89,20 @@ function _syncHwZoom(v) {
   _renderZoom(_viewZoom); // Digital-Anteil neu berechnen (schrumpft nach dem Sync auf ~1)
 }
 
-function _applyZoom(v) {
+// Gedrosselter Hardware-Sync fürs Slider-Ziehen/Pinchen: das input-Event feuert dutzendfach pro
+// Sekunde — jeder direkte applyConstraints-Aufruf wäre ein Mini-Ruckler in der VORSCHAU. Die
+// CSS-Vorschau läuft framegenau sofort (_renderZoom), die Hardware zieht erst nach, wenn der
+// Finger kurz ruht (trailing 180 ms).
+let _hwSyncTimer = null;
+function _syncHwZoomThrottled(v) {
+  if (_hwSyncTimer) clearTimeout(_hwSyncTimer);
+  _hwSyncTimer = setTimeout(() => { _hwSyncTimer = null; _syncHwZoom(_viewZoom); }, 180);
+}
+
+function _applyZoom(v, immediate) {
   _renderZoom(v);
-  _syncHwZoom(v);
+  if (immediate) _syncHwZoom(_viewZoom);
+  else _syncHwZoomThrottled(_viewZoom);
 }
 
 function _stopZoomAnim() {
@@ -123,14 +148,26 @@ function _flashBtn(id) {
   setTimeout(() => { el.style.background = ''; el.style.color = ''; }, 160);
 }
 
+// Zeichnet den AKTUELL SICHTBAREN Ausschnitt (inkl. Digital-Zoom-Anteil) auf den Canvas — Fotos,
+// Serienbilder und Zeitraffer-Frames entsprechen damit exakt der Vorschau. Vorher wurde immer der
+// volle Sensor-Frame gespeichert: wer digital gezoomt hatte (iOS generell, oder zwischen zwei
+// gedrosselten Hardware-Syncs), bekam ein UNgezoomtes Foto, das nicht zur Anzeige passte.
+// Der Canvas wird auf die Crop-Größe gesetzt (echte Pixel, kein künstliches Hochskalieren).
+function _drawZoomedFrame(cv, video) {
+  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+  const d = Math.max(1, _viewZoom / (_hwZoom || 1));
+  const sw = Math.round(vw / d / 2) * 2, sh = Math.round(vh / d / 2) * 2;
+  cv.width = sw; cv.height = sh;
+  cv.getContext('2d').drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, sw, sh);
+}
+
 function _captureFrameOnly() {
   const video = document.getElementById('camVideo');
   const cv = document.getElementById('camCanvas');
   if (!video || !cv) return Promise.resolve();
   _playShutter();
   return new Promise(resolve => {
-    cv.width = video.videoWidth || 1280; cv.height = video.videoHeight || 720;
-    cv.getContext('2d').drawImage(video, 0, 0, cv.width, cv.height);
+    _drawZoomedFrame(cv, video);
     cv.toBlob(blob => { if (blob && _onCapture) _onCapture({ blob, mime: 'image/jpeg', kind: 'photo' }); resolve(); }, 'image/jpeg', 0.92);
   });
 }
@@ -185,12 +222,15 @@ function _toggleInterval() {
 function _startZoomAnim() {
   _stopZoomAnim();
   if (_zoomDir === 'none') return;
-  const maxZ = _zoomSupported ? _zoomMax : 3;
-  const minZ = _zoomSupported ? _zoomMin : 1;
-  const dur = _zoomSpeed === 'fast' ? 7000 : 28000;
-  const from = _zoomDir === 'in' ? minZ : maxZ;
+  const { min: minZ, max: maxZ } = _zoomRange();
+  // Vom AKTUELLEN Zoom aus starten (kein Sprung ans Bereichs-Ende, wenn vorgezoomt wurde);
+  // die Dauer skaliert mit der verbleibenden Log-Strecke, damit das Tempo gleich bleibt —
+  // egal ob von 1× oder von 2,5× aus gezoomt wird.
+  const from = Math.max(minZ, Math.min(maxZ, _viewZoom));
   const to   = _zoomDir === 'in' ? maxZ : minZ;
-  if (from === to) return;
+  if (Math.abs(Math.log(to / from)) < 0.01) return;
+  const fullDur = _zoomSpeed === 'fast' ? 7000 : 28000;
+  const dur = fullDur * Math.abs(Math.log(to / from)) / Math.log(maxZ / minZ || 2);
   const t0 = performance.now();
   let _lastHwSync = 0;
   const tick = now => {
@@ -335,19 +375,20 @@ async function _startStream(camId, micId) {
   if (_videoTrack && _videoTrack.getCapabilities) {
     try {
       const caps = _videoTrack.getCapabilities();
-      if (caps.zoom) {
-        _zoomMin = caps.zoom.min; _zoomMax = caps.zoom.max; _zoomSupported = true;
-        if (zoomSlider) {
-          zoomSlider.min = _zoomMin; zoomSlider.max = _zoomMax;
-          zoomSlider.step = (_zoomMax - _zoomMin) / 50; zoomSlider.value = _zoomMin;
-        }
-      }
+      if (caps.zoom) { _zoomMin = caps.zoom.min; _zoomMax = caps.zoom.max; _zoomSupported = true; }
     } catch {}
+  }
+  // Ohne Hardware-Zoom (v.a. iOS Safari) läuft der Zoom rein digital (CSS-Vorschau + Canvas-Crop
+  // in Aufnahme/Fotos) — der Slider bleibt also IMMER verfügbar, nur die Spanne unterscheidet sich.
+  const r = _zoomRange();
+  if (zoomSlider) {
+    zoomSlider.min = r.min; zoomSlider.max = r.max;
+    zoomSlider.step = (r.max - r.min) / 50 || 0.1; zoomSlider.value = r.min;
   }
   // Frischer Stream startet ungezoomt — logisches Zoom-Modell darauf zurücksetzen.
   _hwZoom = _zoomMin || 1;
   _viewZoom = _hwZoom;
-  if (zoomWrap) zoomWrap.hidden = !_zoomSupported;
+  if (zoomWrap) zoomWrap.hidden = false;
   _setupMeter();
 }
 
@@ -392,9 +433,29 @@ function _stopMeter() {
   _audioCtx = null; _analyser = null; _meterFreqs = null;
 }
 
+// ---- Wake-Lock: Display anlassen, solange die Kamera offen ist ----
+// Beim Ansitz vergehen oft Minuten ohne Berührung — ginge das Display aus, würde eine laufende
+// Video-/Zeitraffer-Aufnahme mitten drin abbrechen. Re-Acquire nach Tab-Wechsel (der Browser
+// gibt den Lock beim Verstecken automatisch frei).
+let _wakeLock = null;
+async function _acquireWakeLock() {
+  try { if ('wakeLock' in navigator) _wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+}
+function _releaseWakeLock() {
+  try { _wakeLock?.release(); } catch {}
+  _wakeLock = null;
+}
+function _onVisibility() {
+  const modal = document.getElementById('cameraModal');
+  if (document.visibilityState === 'visible' && modal?.classList.contains('open')) _acquireWakeLock();
+}
+
 // ---- Aufräumen ----
 function _cleanup() {
-  _stopMeter(); _stopZoomAnim();
+  _stopMeter(); _stopZoomAnim(); _stopRecTimer();
+  _releaseWakeLock();
+  document.removeEventListener('visibilitychange', _onVisibility);
+  if (_hwSyncTimer) { clearTimeout(_hwSyncTimer); _hwSyncTimer = null; }
   _burstActive = false;
   if (_intervalTimer) { clearInterval(_intervalTimer); _intervalTimer = null; }
   if (_intervalCountdown) { _intervalCountdown.remove(); _intervalCountdown = null; } _intervalNext = 0;
@@ -461,9 +522,7 @@ async function _takePhoto() {
   const video = document.getElementById('camVideo');
   const cv    = document.getElementById('camCanvas');
   if (!video || !cv) return;
-  cv.width  = video.videoWidth  || 1280;
-  cv.height = video.videoHeight || 720;
-  cv.getContext('2d').drawImage(video, 0, 0, cv.width, cv.height);
+  _drawZoomedFrame(cv, video); // gespeichert wird exakt der sichtbare (gezoomte) Ausschnitt
   cv.toBlob(blob => {
     if (!blob) return;
     const cb = _onCapture; _close();
@@ -511,6 +570,24 @@ function _stopCanvasRecPipeline() {
   if (_recCanvasStream) { _recCanvasStream.getVideoTracks().forEach(t => t.stop()); _recCanvasStream = null; }
 }
 
+// Laufzeit-Anzeige während der Aufnahme ("⏺ 1:07") — Nutzer erwarten bei Video einen Timer.
+let _recTimerInt = null, _recT0 = 0;
+function _startRecTimer() {
+  const ind = document.getElementById('camRecIndicator');
+  _recT0 = Date.now();
+  const tick = () => {
+    if (!ind) return;
+    const s = Math.floor((Date.now() - _recT0) / 1000);
+    ind.textContent = '⏺ ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  };
+  tick();
+  _recTimerInt = setInterval(tick, 1000);
+}
+function _stopRecTimer() {
+  if (_recTimerInt) { clearInterval(_recTimerInt); _recTimerInt = null; }
+  const ind = document.getElementById('camRecIndicator'); if (ind) ind.textContent = '⏺ REC';
+}
+
 async function _toggleVideo() {
   if (_mr && _mr.state === 'recording') {
     _stopZoomAnim(); _mr.stop(); return;
@@ -518,10 +595,14 @@ async function _toggleVideo() {
   if (!_stream) return;
   // Hardware-Zoom einmalig aufs Minimum: voller Sensorausschnitt = maximale Digital-Reserve,
   // und der Pipeline-Ruckler davon passiert VOR dem Aufnahmestart statt mittendrin.
+  // Reihenfolge wichtig: erst die Hardware umstellen und den Inhaltswechsel abwarten, DANN das
+  // Zoom-Modell (_hwZoom) und die CSS-Vorschau umrechnen — sonst zeigt die Vorschau für einen
+  // Augenblick doppelt gezoomt (CSS-Faktor springt hoch, während der Track noch gezoomt liefert).
   if (_zoomSupported && _videoTrack && _hwZoom !== _zoomMin) {
-    try { _videoTrack.applyConstraints({ advanced: [{ zoom: _zoomMin }] }); _hwZoom = _zoomMin; } catch {}
-    _renderZoom(_viewZoom);
+    try { _videoTrack.applyConstraints({ advanced: [{ zoom: _zoomMin }] }); } catch {}
     await new Promise(r => setTimeout(r, 350));
+    _hwZoom = _zoomMin;
+    _renderZoom(_viewZoom);
   }
   _recCanvasStream = _startCanvasRecPipeline();
   const recStream = _recCanvasStream || _stream; // Fallback: altes Direkt-Recording (z.B. sehr alte Browser)
@@ -529,11 +610,20 @@ async function _toggleVideo() {
   for (const t of ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']) {
     if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { mime = t; break; }
   }
-  try { _mr = mime ? new MediaRecorder(recStream, { mimeType: mime }) : new MediaRecorder(recStream); }
-  catch (e) { console.warn('cam mr', e); _stopCanvasRecPipeline(); return; }
+  // Bitrate explizit setzen: die Browser-Defaults sind für Full-HD-Naturaufnahmen mit viel
+  // Blattwerk-Detail zu niedrig (Matsch beim Zoomen) — 8 MBit/s Video ist ein guter Kompromiss.
+  const opts = { videoBitsPerSecond: 8e6, audioBitsPerSecond: 128e3 };
+  if (mime) opts.mimeType = mime;
+  try { _mr = new MediaRecorder(recStream, opts); }
+  catch (e) {
+    console.warn('cam mr opts', e);
+    try { _mr = mime ? new MediaRecorder(recStream, { mimeType: mime }) : new MediaRecorder(recStream); }
+    catch (e2) { console.warn('cam mr', e2); _stopCanvasRecPipeline(); return; }
+  }
   _mrChunks = [];
   _mr.ondataavailable = e => { if (e.data?.size) _mrChunks.push(e.data); };
   _mr.onstop = () => {
+    _stopRecTimer();
     _stopCanvasRecPipeline();
     const blob = new Blob(_mrChunks, { type: mime || 'video/webm' });
     _mrChunks = [];
@@ -542,6 +632,7 @@ async function _toggleVideo() {
   };
   _mr.start();
   _startZoomAnim();
+  _startRecTimer();
   const ind = document.getElementById('camRecIndicator'); if (ind) ind.hidden = false;
   const cap = document.getElementById('camCapture'); if (cap) cap.classList.add('recording');
 }
@@ -567,8 +658,7 @@ function _captureLapseFrame() {
   const video = document.getElementById('camVideo');
   const cv = document.getElementById('camCanvas');
   if (!video || !cv) return;
-  cv.width = video.videoWidth || 1280; cv.height = video.videoHeight || 720;
-  cv.getContext('2d').drawImage(video, 0, 0, cv.width, cv.height);
+  _drawZoomedFrame(cv, video); // Zeitraffer-Frames folgen ebenfalls dem sichtbaren Zoom
   cv.toBlob(blob => {
     if (!blob) return;
     _lapseFrames.push(blob);
@@ -644,6 +734,8 @@ export function openCamera(onCapture) {
   _mode = 'photo';
   modal.classList.add('open');
   _updateModeUI();
+  _acquireWakeLock();
+  document.addEventListener('visibilitychange', _onVisibility);
 
   // Fadenkreuz-Einstellung merkt sich über Sitzungen hinweg (wie Auslöseton/Linkshänder-Modus).
   const crosshair = document.getElementById('camCrosshair');
@@ -674,31 +766,29 @@ export function openCamera(onCapture) {
       if (btn) btn.classList.toggle('active', !wrap.hidden);
     });
 
-    document.getElementById('camModePhoto')?.addEventListener('click', () => {
-      _mode = 'photo'; _updateModeUI();
+    // Während einer laufenden Videoaufnahme sind Moduswechsel, Kamera-Flip und Gerätewechsel
+    // gesperrt: sie würden den Stream neu starten bzw. die Bedienlogik wechseln und die Aufnahme
+    // stillschweigend zerstören (der Recorder hängt an den alten Tracks). Kurzes Aufblinken der
+    // REC-Anzeige als Feedback, warum nichts passiert.
+    function _guardRecording() {
+      if (!_isRecording()) return false;
+      const ind = document.getElementById('camRecIndicator');
+      if (ind) { ind.style.transform = 'scale(1.25)'; setTimeout(() => { ind.style.transform = ''; }, 200); }
+      return true;
+    }
+    const _setMode = m => {
+      if (_guardRecording()) return;
+      _mode = m; _updateModeUI();
       // Wenn vorher Dual war, normalen Stream neustarten
       if (_stream2) {
         _stream2.getTracks().forEach(t => t.stop()); _stream2 = null;
         const pip = document.getElementById('camVideo2');
         if (pip) { pip.srcObject = null; pip.hidden = true; }
       }
-    });
-    document.getElementById('camModeVideo')?.addEventListener('click', () => {
-      _mode = 'video'; _updateModeUI();
-      if (_stream2) {
-        _stream2.getTracks().forEach(t => t.stop()); _stream2 = null;
-        const pip = document.getElementById('camVideo2');
-        if (pip) { pip.srcObject = null; pip.hidden = true; }
-      }
-    });
-    document.getElementById('camModeLapse')?.addEventListener('click', () => {
-      _mode = 'lapse'; _updateModeUI();
-      if (_stream2) {
-        _stream2.getTracks().forEach(t => t.stop()); _stream2 = null;
-        const pip = document.getElementById('camVideo2');
-        if (pip) { pip.srcObject = null; pip.hidden = true; }
-      }
-    });
+    };
+    document.getElementById('camModePhoto')?.addEventListener('click', () => _setMode('photo'));
+    document.getElementById('camModeVideo')?.addEventListener('click', () => _setMode('video'));
+    document.getElementById('camModeLapse')?.addEventListener('click', () => _setMode('lapse'));
     [['1s', 'camLapse1s', 1], ['2s', 'camLapse2s', 2], ['5s', 'camLapse5s', 5], ['10s', 'camLapse10s', 10]].forEach(([, id, sec]) => {
       document.getElementById(id)?.addEventListener('click', () => {
         _lapseIntervalSec = sec;
@@ -713,15 +803,19 @@ export function openCamera(onCapture) {
     });
 
     document.getElementById('camFlip')?.addEventListener('click', async () => {
+      if (_guardRecording()) return;
       const micSel = document.getElementById('camMicSelect');
       _facingMode = _facingMode === 'environment' ? 'user' : 'environment';
       await _startStream(null, micSel?.value || null).catch(e => console.warn('flip', e));
     });
 
+    // input = kontinuierlich beim Ziehen (CSS-Vorschau sofort, Hardware gedrosselt nachziehen),
+    // change = Finger losgelassen (Hardware sofort final synchronisieren).
     document.getElementById('camZoom')?.addEventListener('input', function () {
-      // Während einer Aufnahme rein digital (Canvas-Kompositor), sonst Hardware-Zoom —
-      // _syncHwZoom entscheidet das selbst.
       _applyZoom(parseFloat(this.value));
+    });
+    document.getElementById('camZoom')?.addEventListener('change', function () {
+      _applyZoom(parseFloat(this.value), true);
     });
 
     // Auto-Zoom Richtung
@@ -765,8 +859,41 @@ export function openCamera(onCapture) {
 
     const camSel = document.getElementById('camCamSelect');
     const micSel = document.getElementById('camMicSelect');
-    camSel?.addEventListener('change', () => _startStream(camSel.value || null, micSel?.value || null).catch(console.warn));
-    micSel?.addEventListener('change', () => _startStream(camSel?.value || null, micSel.value || null).catch(console.warn));
+    camSel?.addEventListener('change', () => { if (_guardRecording()) return; _startStream(camSel.value || null, micSel?.value || null).catch(console.warn); });
+    micSel?.addEventListener('change', () => { if (_guardRecording()) return; _startStream(camSel?.value || null, micSel.value || null).catch(console.warn); });
+
+    // ---- Pinch-to-Zoom auf der Vorschau (Zwei-Finger-Geste wie in jeder Kamera-App) ----
+    // Läuft komplett über das Digital-Zoom-Modell: Vorschau framegenau per CSS, Hardware zieht
+    // gedrosselt nach (bzw. gar nicht während einer Aufnahme -> Canvas-Kompositor zoomt).
+    const wrap = document.querySelector('#cameraModal .cam-video-wrap');
+    if (wrap) {
+      const ptrs = new Map();
+      let pinchStartDist = 0, pinchStartZoom = 1;
+      const dist = () => {
+        const [a, b] = [...ptrs.values()];
+        return Math.hypot(a.x - b.x, a.y - b.y);
+      };
+      wrap.addEventListener('pointerdown', e => {
+        ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (ptrs.size === 2) { pinchStartDist = dist(); pinchStartZoom = _viewZoom; }
+      });
+      wrap.addEventListener('pointermove', e => {
+        if (!ptrs.has(e.pointerId)) return;
+        ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (ptrs.size === 2 && pinchStartDist > 0) {
+          e.preventDefault();
+          _applyZoom(pinchStartZoom * (dist() / pinchStartDist));
+        }
+      });
+      const endPtr = e => {
+        ptrs.delete(e.pointerId);
+        if (ptrs.size < 2 && pinchStartDist > 0) { pinchStartDist = 0; _applyZoom(_viewZoom, true); }
+      };
+      wrap.addEventListener('pointerup', endPtr);
+      wrap.addEventListener('pointercancel', endPtr);
+      wrap.addEventListener('pointerleave', endPtr);
+      wrap.style.touchAction = 'none'; // Browser-Pinch (Seiten-Zoom) auf der Vorschau unterbinden
+    }
   }
 
   _startStream(null, null)
