@@ -545,6 +545,9 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;bac
 .cam-ctrl-btn{width:40px;height:40px;border-radius:50%;background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.25);color:#fff;display:grid;place-items:center;cursor:pointer;flex:0 0 auto;backdrop-filter:blur(8px)}
 .cam-ctrl-btn:active{transform:scale(.9)}
 .cam-ctrl-btn.active{background:rgba(163,230,53,.28);border-color:rgba(163,230,53,.55);color:#a3e635}
+/* Kurzes Aufblitzen als "gespeichert!"-Feedback (z.B. Galerie-Icon nach einem Foto) */
+.cam-ctrl-btn.cam-flash{animation:camFlash .5s ease-out}
+@keyframes camFlash{0%{background:rgba(163,230,53,.9);border-color:#a3e635;color:#04130d;transform:scale(1.18)}100%{background:rgba(0,0,0,.45);border-color:rgba(255,255,255,.25);color:#fff;transform:scale(1)}}
 
 /* Fadenkreuz-Overlay: exakt mittig im Kamerabild, unabhängig vom Zoom (reines Overlay, kein
    Teil des Video-Streams) — dünne Linien, damit es beim Anvisieren nicht stört. */

@@ -186,7 +186,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v106';
+const APP_VERSION = 'v107';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -1596,11 +1596,13 @@ const clipBtn = document.getElementById('clipBtn');
 if (clipBtn && !window.MediaRecorder) clipBtn.style.display = 'none';
 if (clipBtn) clipBtn.onclick = () => recorder.toggle();
 const photoFab = document.getElementById('photoFab');
-// Galerie beim Öffnen der Kamera schließen (lag sonst sichtbar unter/über dem Kamera-Fenster)
-// und nach der Aufnahme wieder öffnen — dann ist das neue Foto direkt zu sehen.
+// Galerie beim Öffnen der Kamera schließen (lag sonst sichtbar unter/über dem Kamera-Fenster).
+// Nach dem Auslösen NICHT mehr automatisch zurück zur Galerie springen — die Kamera bleibt jetzt
+// bewusst offen (mehrere Fotos hintereinander ohne erneutes Öffnen), das Galerie-Icon in der
+// Kamera selbst blinkt kurz als Bestätigung und ist antippbar, um gezielt zurückzuspringen.
 if (photoFab) photoFab.onclick = () => {
   closeGallery();
-  openCamera(capture => { _saveCapture({ ...capture, label: null, key: null }); openGallery(); });
+  openCamera(capture => _saveCapture({ ...capture, label: null, key: null }), openGallery);
 };
 const galleryModal = document.getElementById('galleryModal');
 const galleryBtn = document.getElementById('galleryBtn');
@@ -1876,7 +1878,7 @@ if (photoInput) {
 }
 // Kamera-Knopf an Live-Zeile / Seltenheits-Toast → öffnet eigene Kamera-UI
 window.__waldohrCapturePhoto = (name, key) => {
-  openCamera(capture => _saveCapture({ ...capture, label: name || null, key: key || null }));
+  openCamera(capture => _saveCapture({ ...capture, label: name || null, key: key || null }), openGallery);
 };
 
 // ---- Wiedergabe über Lautsprecher statt Hörer ----
@@ -2668,25 +2670,39 @@ function initPairing() {
   // fehlen auf vielen Geräten): sobald es mehr als eine Rückkamera gibt, werden alle gelistet,
   // mit sprechendem Namen wo möglich, sonst „Kamera 1/2/3". Labels sind erst nach erteilter
   // Kamera-Erlaubnis gefüllt, darum erst nach dem ersten Stream aufzählen.
+  // Bucketet + dedupliziert wie camera.js' _dedupeLenses (getrennte Kopie, kein gemeinsames Util-
+  // Modul für dieses eine Duzend Zeilen): viele Android-Geräte melden dieselbe physische Linse
+  // mehrfach als eigenständiges enumerateDevices()-Objekt — ohne Dedup nach dem ANGEZEIGTEN Namen
+  // erschien z.B. "Hauptkamera" mehrfach identisch in der Auswahl.
+  function _dedupeLenses(devices) {
+    const seen = new Set();
+    let genericN = 0;
+    const out = [];
+    for (const d of devices) {
+      const lbl = (d.label || '').toLowerCase();
+      let name;
+      if (/ultra/.test(lbl)) name = '📷 Ultra-Weit';
+      else if (/telephoto|tele|[3-9](\.\d)?x\b/.test(lbl)) name = '🔭 Tele';
+      else if (/macro/.test(lbl)) name = '🌸 Makro';
+      else if (/wide|haupt|main|back|rück|rear/.test(lbl)) name = '📷 Haupt';
+      else { name = '📷 Kamera ' + (++genericN); out.push({ deviceId: d.deviceId, name }); continue; }
+      if (seen.has(name)) continue;
+      seen.add(name);
+      out.push({ deviceId: d.deviceId, name });
+    }
+    return out;
+  }
   async function _populateScanCamSelect() {
     if (!scanCamSelect) return;
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
       const back = all.filter(d => d.kind === 'videoinput' && !/front|facetime|user|selfie/i.test(d.label));
+      const chosen = _dedupeLenses(back);
       // Nur eine (oder unbenannte einzelne) Kamera: keine Auswahl nötig.
-      if (back.length < 2) { scanCamSelect.hidden = true; return; }
+      if (chosen.length < 2) { scanCamSelect.hidden = true; return; }
       const prevValue = scanCamSelect.value;
-      let generic = 0;
-      scanCamSelect.innerHTML = back.map(d => {
-        let name;
-        if (/ultra/i.test(d.label)) name = '📷 Ultra-Weit';
-        else if (/telephoto|tele|[3-9](\.\d)?x\b/i.test(d.label)) name = '🔭 Tele';
-        else if (/macro/i.test(d.label)) name = '🌸 Makro';
-        else if (/wide|haupt|main|back|rück|rear/i.test(d.label)) name = '📷 Haupt';
-        else name = '📷 Kamera ' + (++generic);
-        return `<option value="${d.deviceId}">${name}</option>`;
-      }).join('');
-      if (prevValue && back.some(d => d.deviceId === prevValue)) scanCamSelect.value = prevValue;
+      scanCamSelect.innerHTML = chosen.map(c => `<option value="${c.deviceId}">${c.name}</option>`).join('');
+      if (prevValue && chosen.some(c => c.deviceId === prevValue)) scanCamSelect.value = prevValue;
       scanCamSelect.hidden = false;
     } catch (e) { console.warn('scan cam enumerate', e); }
   }

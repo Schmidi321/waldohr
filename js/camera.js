@@ -7,7 +7,7 @@ let _mr = null, _mrChunks = [];
 let _mode = 'photo';
 let _zoomSupported = false, _zoomMin = 1, _zoomMax = 1;
 let _onCapture = null;
-let _zoomDir = 'none', _zoomSpeed = 'slow', _zoomAnimTimer = null;
+let _zoomDir = 'none', _zoomSpeed = 'slow';
 let _azDelayTimer = null, _intervalTimer = null, _burstActive = false;
 let _intervalCountdown = null, _intervalNext = 0;
 let _facingMode = 'environment';
@@ -19,7 +19,78 @@ let _lapseTimer = null, _lapseFrames = [], _lapseIntervalSec = 2;
 let _viewZoom = 1, _hwZoom = 1;
 // Canvas-Aufnahme-Pipeline: Videoaufnahmen zeichnen nicht den rohen Kamera-Track auf, sondern
 // einen Canvas-Kompositor mit framegenauem Digital-Zoom (s. _startCanvasRecPipeline).
-let _recDrawRaf = null, _recCanvasStream = null;
+let _recCanvasStream = null;
+
+// ---- Gemeinsame Animations-Schleife für Zoom-Fahrt UND Aufnahme-Zeichnen ----
+//
+// Früher zwei UNABHÄNGIGE requestAnimationFrame-Schleifen: eine animierte den Zoom-Wert (CSS-
+// Vorschau), die andere zeichnete unabhängig davon denselben Zoom-Wert auf den Aufnahme-Canvas.
+// Zwei separate Schleifen auf demselben State sind eine klassische Quelle für Mikro-Ruckler durch
+// Zeitversatz zwischen den beiden Callback-Ausführungen — genau das "stockt beim Zoomen"-Symptom.
+// Jetzt EINE Schleife: sie treibt pro Frame zuerst den Zoom-Wert an (falls eine Fahrt läuft) und
+// zeichnet danach mit GENAU demselben, gerade aktualisierten Wert auf den Aufnahme-Canvas (falls
+// aufgenommen wird) — beides immer exakt synchron. Das Canvas-Zeichnen selbst ist zusätzlich auf
+// ~30fps gedrosselt (an captureStream(30) gekoppelt): mehr als 30 Zeichenaufrufe/Sekunde erzeugen
+// KEINE zusätzlichen Ausgabeframes, kosten auf Geräten mit hoher Bildwiederholrate (90/120Hz) aber
+// unnötig CPU/GPU-Zeit — genau die Art Dauerlast, die auf schwächeren Handys zu spürbarem
+// Systemruckeln führt, auch in der Vorschau.
+const REC_DRAW_INTERVAL_MS = 1000 / 30;
+let _masterRaf = null;
+let _zoomAnimActive = false, _zoomFrom = 1, _zoomTo = 1, _zoomT0 = 0, _zoomDur = 1, _zoomLastHwSync = 0;
+let _recCtx = null, _recVW = 0, _recVH = 0, _recCW = 0, _recCH = 0, _recLastDraw = 0;
+
+function _ensureMasterLoop() {
+  if (_masterRaf) return;
+  const tick = now => {
+    if (_zoomAnimActive) {
+      const p = Math.min(1, (now - _zoomT0) / _zoomDur);
+      const v = _zoomFrom * Math.pow(_zoomTo / _zoomFrom, p);
+      _renderZoom(v);
+      if (p >= 1 || now - _zoomLastHwSync > 450) { _zoomLastHwSync = now; _syncHwZoom(v); }
+      if (p >= 1) _zoomAnimActive = false;
+    }
+    if (_recCtx && now - _recLastDraw >= REC_DRAW_INTERVAL_MS) {
+      _recLastDraw = now;
+      const video = document.getElementById('camVideo');
+      if (video) {
+        const d = Math.max(1, _viewZoom / (_hwZoom || 1));
+        const sw = _recVW / d, sh = _recVH / d;
+        _recCtx.drawImage(video, (_recVW - sw) / 2, (_recVH - sh) / 2, sw, sh, 0, 0, _recCW, _recCH);
+      }
+    }
+    _masterRaf = (_zoomAnimActive || _recCtx) ? requestAnimationFrame(tick) : null;
+  };
+  _masterRaf = requestAnimationFrame(tick);
+}
+function _cancelMasterLoop() {
+  if (_masterRaf) { cancelAnimationFrame(_masterRaf); _masterRaf = null; }
+}
+
+// Bucketet rohe Kamera-Devices auf einen von fünf sprechenden Namen (Ultra-Weit/Haupt/Tele/Makro/
+// generisch) UND dedupliziert dabei nach diesem angezeigten Namen. Nötig, weil viele Android-
+// Geräte dieselbe physische Linse mehrfach als eigenständiges enumerateDevices()-Objekt melden
+// (zusätzliche logische Kamera-IDs für HDR/Video-Varianten o.ä., alle mit sehr ähnlichem Label) —
+// ohne Dedup erschien z.B. "Hauptkamera" mehrfach identisch in der Auswahl. Generische (nicht
+// erkannte) Linsen werden NICHT gegeneinander dedupliziert, da nicht sicher ist, ob es dieselbe
+// oder tatsächlich verschiedene Linsen sind — im Zweifel lieber getrennt anzeigen.
+function _dedupeLenses(devices) {
+  const seen = new Set();
+  let genericN = 0;
+  const out = [];
+  for (const d of devices) {
+    const lbl = (d.label || '').toLowerCase();
+    let name;
+    if (/ultra/.test(lbl)) name = '📷 Ultra-Weit';
+    else if (/telephoto|tele|[3-9](\.\d)?x\b/.test(lbl)) name = '🔭 Tele';
+    else if (/macro/.test(lbl)) name = '🌸 Makro';
+    else if (/wide|haupt|main|back|rück|rear/.test(lbl)) name = '📷 Haupt';
+    else { name = '📷 Kamera ' + (++genericN); out.push({ deviceId: d.deviceId, name }); continue; }
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push({ deviceId: d.deviceId, name });
+  }
+  return out;
+}
 
 // ---- Geräte aufzählen (Labels erst nach Genehmigung verfügbar) ----
 async function _enumerateDevices() {
@@ -34,18 +105,9 @@ async function _enumerateDevices() {
       // Auswahl unsichtbar). Gleiche Lektion wie bei der QR-Scan-Linsenwahl: eine defekte oder
       // unscharfe Hauptlinse macht die Auswahl erst richtig wichtig.
       const back = allCams.filter(d => !d.label.toLowerCase().match(/front|facetime|user|selfie/));
-      const chosen = back.length ? back : allCams.slice(0, 3);
-      let generic = 0;
-      camSel.innerHTML = chosen.map(d => {
-        const lbl = d.label.toLowerCase();
-        let name;
-        if (lbl.match(/ultra/)) name = '📷 Ultra-Weit';
-        else if (lbl.match(/telephoto|tele|[3-9](\.\d)?x\b/)) name = '🔭 Tele';
-        else if (lbl.match(/macro/)) name = '🌸 Makro';
-        else if (lbl.match(/wide|haupt|main|back|rück|rear/)) name = '📷 Haupt';
-        else name = '📷 Kamera ' + (++generic);
-        return `<option value="${d.deviceId}">${name}</option>`;
-      }).join('');
+      const pool = back.length ? back : allCams.slice(0, 3);
+      const chosen = _dedupeLenses(pool);
+      camSel.innerHTML = chosen.map(c => `<option value="${c.deviceId}">${c.name}</option>`).join('');
       camSel.style.display = chosen.length > 1 ? '' : 'none';
     }
     const micSel = document.getElementById('camMicSelect');
@@ -107,7 +169,9 @@ function _applyZoom(v, immediate) {
 
 function _stopZoomAnim() {
   if (_azDelayTimer) { clearTimeout(_azDelayTimer); _azDelayTimer = null; }
-  if (_zoomAnimTimer) { cancelAnimationFrame(_zoomAnimTimer); _zoomAnimTimer = null; }
+  // NUR die Zoom-Fahrt beenden — die gemeinsame Schleife (_masterRaf) läuft von selbst weiter,
+  // solange noch aufgezeichnet wird (_recCtx gesetzt), und stoppt sich sonst selbst.
+  _zoomAnimActive = false;
 }
 
 function _smoothStopZoom() {
@@ -138,6 +202,17 @@ function _playShutter() {
     src.start(ctx.currentTime);
     src.onended = () => { try { ctx.close(); } catch {} };
   } catch {}
+}
+
+// "Gespeichert!"-Feedback am Galerie-Icon statt die Kamera zu verlassen — void offsetWidth
+// erzwingt einen Reflow, damit die Animation bei schnell aufeinanderfolgenden Fotos jedes Mal
+// wieder von vorn abspielt (sonst würde ein bereits laufendes CSS-Keyframe einfach weiterlaufen).
+function _flashGallery() {
+  const btn = document.getElementById('camGalleryBtn');
+  if (!btn) return;
+  btn.classList.remove('cam-flash'); void btn.offsetWidth;
+  btn.classList.add('cam-flash');
+  setTimeout(() => btn.classList.remove('cam-flash'), 520);
 }
 
 function _flashBtn(id) {
@@ -219,37 +294,27 @@ function _toggleInterval() {
   }
 }
 
-function _startZoomAnim() {
+// forceFullSweep=true (beim Start einer AUFNAHME): die Fahrt läuft immer von echtem Start- bis
+// Ziel-Endpunkt über die volle Dauer — unabhängig davon, wo der Zoom gerade steht. Sonst hätte
+// z.B. ein vorheriges manuelles Vorzoomen oder ein bereits durchgelaufener Vorschau-Schwenk (per
+// "3s"-Knopf) zur Folge, dass "from" schon (nahe) am Ziel liegt und die AUFGEZEICHNETE Fahrt quasi
+// nicht mehr stattfindet — die fertige Aufnahme wäre dann von der ersten bis zur letzten Sekunde
+// praktisch auf demselben (dem letzten) Zoom-Stand. Genau das war der gemeldete Fehler ("ist man
+// direkt schon im letzten Zoomstufe"). Ohne forceFullSweep (manueller Vorschau-Start über den
+// "3s"-Knopf, keine Aufnahme) bleibt das alte Verhalten: vom AKTUELLEN Zoom aus starten, kein
+// Sprung ans Bereichs-Ende, Dauer skaliert mit der verbleibenden Strecke.
+function _startZoomAnim(forceFullSweep) {
   _stopZoomAnim();
   if (_zoomDir === 'none') return;
   const { min: minZ, max: maxZ } = _zoomRange();
-  // Vom AKTUELLEN Zoom aus starten (kein Sprung ans Bereichs-Ende, wenn vorgezoomt wurde);
-  // die Dauer skaliert mit der verbleibenden Log-Strecke, damit das Tempo gleich bleibt —
-  // egal ob von 1× oder von 2,5× aus gezoomt wird.
-  const from = Math.max(minZ, Math.min(maxZ, _viewZoom));
-  const to   = _zoomDir === 'in' ? maxZ : minZ;
+  const to = _zoomDir === 'in' ? maxZ : minZ;
+  const from = forceFullSweep ? (_zoomDir === 'in' ? minZ : maxZ) : Math.max(minZ, Math.min(maxZ, _viewZoom));
   if (Math.abs(Math.log(to / from)) < 0.01) return;
   const fullDur = _zoomSpeed === 'fast' ? 7000 : 28000;
-  const dur = fullDur * Math.abs(Math.log(to / from)) / Math.log(maxZ / minZ || 2);
-  const t0 = performance.now();
-  let _lastHwSync = 0;
-  const tick = now => {
-    const p = Math.min(1, (now - t0) / dur);
-    // Logarithmische Interpolation → wahrgenommene Zoom-Geschwindigkeit konstant
-    const v = from * Math.pow(to / from, p);
-    // Vorschau + Aufnahme laufen framegenau digital (_renderZoom bzw. Canvas-Kompositor).
-    // Der Hardware-Zoom wird nur AUSSERHALB von Aufnahmen gedrosselt nachgeführt — während
-    // einer Aufnahme fasst _syncHwZoom die Pipeline gar nicht an (jeder applyConstraints-
-    // Aufruf wäre ein Ruckler, der frueher direkt in der Aufnahme landete).
-    _renderZoom(v);
-    if (p >= 1 || now - _lastHwSync > 450) {
-      _lastHwSync = now;
-      _syncHwZoom(v);
-    }
-    if (p < 1) { _zoomAnimTimer = requestAnimationFrame(tick); }
-    else { _zoomAnimTimer = null; }
-  };
-  _zoomAnimTimer = requestAnimationFrame(tick);
+  _zoomDur = forceFullSweep ? fullDur : fullDur * Math.abs(Math.log(to / from)) / Math.log(maxZ / minZ || 2);
+  _zoomFrom = from; _zoomTo = to; _zoomT0 = performance.now(); _zoomLastHwSync = 0;
+  _zoomAnimActive = true;
+  _ensureMasterLoop();
 }
 
 // ---- Dual-Kamera Stream starten ----
@@ -332,8 +397,10 @@ async function _takeDualPhoto() {
   }
   cv.toBlob(blob => {
     if (!blob) return;
-    const cb = _onCapture; _close();
-    if (cb) cb({ blob, mime: 'image/jpeg', kind: 'photo' });
+    // Bewusst NICHT _close(): nach einem Dual-Foto bleibt man ebenfalls in der Kamera, wie beim
+    // normalen Fotomodus (siehe _takePhoto) — nur das Galerie-Icon blinkt als Bestätigung.
+    _flashGallery();
+    if (_onCapture) _onCapture({ blob, mime: 'image/jpeg', kind: 'photo' });
   }, 'image/jpeg', 0.95);
 }
 
@@ -464,6 +531,7 @@ function _cleanup() {
   if (_mr && _mr.state === 'recording') _mr.stop();
   _mr = null; _mrChunks = [];
   _stopCanvasRecPipeline();
+  _cancelMasterLoop(); // defensiv: verhindert einen einzelnen verspäteten Tick nach dem Schließen
   if (_stream)  { _stream.getTracks().forEach(t => t.stop());  _stream = null; }
   if (_stream2) { _stream2.getTracks().forEach(t => t.stop()); _stream2 = null; }
   _videoTrack = null; _videoTrack2 = null;
@@ -525,8 +593,11 @@ async function _takePhoto() {
   _drawZoomedFrame(cv, video); // gespeichert wird exakt der sichtbare (gezoomte) Ausschnitt
   cv.toBlob(blob => {
     if (!blob) return;
-    const cb = _onCapture; _close();
-    if (cb) cb({ blob, mime: 'image/jpeg', kind: 'photo' });
+    // Bewusst NICHT _close(): im Fotomodus soll man nach dem Auslösen in der Kamera bleiben, um
+    // ohne erneutes Öffnen mehrere Fotos hintereinander machen zu können — statt wegzunavigieren
+    // blinkt nur das Galerie-Icon oben kurz als "gespeichert"-Bestätigung.
+    _flashGallery();
+    if (_onCapture) _onCapture({ blob, mime: 'image/jpeg', kind: 'photo' });
   }, 'image/jpeg', 0.95);
 }
 
@@ -551,21 +622,18 @@ function _startCanvasRecPipeline() {
   const cw = Math.round(vw * scale / 2) * 2, ch = Math.round(vh * scale / 2) * 2; // gerade Maße für die Encoder
   const cv = document.createElement('canvas');
   cv.width = cw; cv.height = ch;
-  const ctx = cv.getContext('2d');
-  const draw = () => {
-    const d = Math.max(1, _viewZoom / (_hwZoom || 1));
-    const sw = vw / d, sh = vh / d;
-    ctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cw, ch);
-    _recDrawRaf = requestAnimationFrame(draw);
-  };
-  draw();
+  // Zeichnen läuft jetzt über die gemeinsame Schleife (_ensureMasterLoop) statt einer eigenen
+  // rAF-Kette — dort mit der Zoom-Fahrt exakt synchron UND auf ~30fps gedrosselt (s. oben).
+  _recCtx = cv.getContext('2d');
+  _recVW = vw; _recVH = vh; _recCW = cw; _recCH = ch; _recLastDraw = 0;
+  _ensureMasterLoop();
   const stream = cv.captureStream(30);
   for (const t of _stream.getAudioTracks()) stream.addTrack(t);
   return stream;
 }
 
 function _stopCanvasRecPipeline() {
-  if (_recDrawRaf) { cancelAnimationFrame(_recDrawRaf); _recDrawRaf = null; }
+  _recCtx = null; // Master-Loop stoppt sich selbst, sobald weder Zoom-Fahrt noch Aufnahme aktiv ist
   // Nur den Canvas-Videotrack beenden — die Audio-Tracks gehören weiter dem Kamera-Stream!
   if (_recCanvasStream) { _recCanvasStream.getVideoTracks().forEach(t => t.stop()); _recCanvasStream = null; }
 }
@@ -604,6 +672,14 @@ async function _toggleVideo() {
     _hwZoom = _zoomMin;
     _renderZoom(_viewZoom);
   }
+  // Ist eine Kamerafahrt-Richtung gewählt, den sichtbaren Zoom VOR dem Aufnahmestart auf den
+  // wahren Start-Endpunkt zurücksetzen (min bei "Rein", max bei "Raus") — sonst würde die Fahrt
+  // dort weitermachen, wo ein vorheriger manueller/Vorschau-Zoom gerade stand, im schlimmsten Fall
+  // schon am Ziel (dann zeigt die AUFNAHME von Anfang an den Endzustand, ohne jede Bewegung).
+  if (_zoomDir !== 'none') {
+    const { min: minZ, max: maxZ } = _zoomRange();
+    _renderZoom(_zoomDir === 'in' ? minZ : maxZ);
+  }
   _recCanvasStream = _startCanvasRecPipeline();
   const recStream = _recCanvasStream || _stream; // Fallback: altes Direkt-Recording (z.B. sehr alte Browser)
   let mime = '';
@@ -631,7 +707,7 @@ async function _toggleVideo() {
     if (cb) cb({ blob, mime: mime || 'video/webm', kind: 'video' });
   };
   _mr.start();
-  _startZoomAnim();
+  _startZoomAnim(true); // true = immer volle Fahrt über die gesamte Aufnahme (siehe oben)
   _startRecTimer();
   const ind = document.getElementById('camRecIndicator'); if (ind) ind.hidden = false;
   const cap = document.getElementById('camCapture'); if (cap) cap.classList.add('recording');
@@ -727,10 +803,15 @@ async function _buildLapseVideo() {
 }
 
 // ---- Öffentliche API ----
-export function openCamera(onCapture) {
+// onGalleryTap (optional): app.js reicht hier die eigene Galerie-Öffnen-Funktion herein, damit das
+// Galerie-Icon in der Kamera-Kopfzeile tippbar ist (schließt die Kamera und zeigt die Aufnahmen) —
+// camera.js kennt die App-Galerie selbst nicht, genau wie bei onCapture.
+export function openCamera(onCapture, onGalleryTap) {
   const modal = document.getElementById('cameraModal');
   if (!modal) return;
   _onCapture = onCapture;
+  const galBtn = document.getElementById('camGalleryBtn');
+  if (galBtn) galBtn.onclick = onGalleryTap ? () => { _close(); onGalleryTap(); } : null;
   _mode = 'photo';
   modal.classList.add('open');
   _updateModeUI();
