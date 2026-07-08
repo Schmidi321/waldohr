@@ -195,7 +195,10 @@ function _candidatesFrom(r) {
 }
 
 export function canShowAR(r) {
-  return !!(r && (r.method === 'corr' || r.method === 'fix') && _candidatesFrom(r));
+  // tooClose (s. locate.js MIN_BASELINE_M): die Basislinie ist zu kurz, um dem GPS-Rauschen eine
+  // verlässliche Richtung zu entlocken — AR würde dann eine Pfeilrichtung zeigen, die reines
+  // GPS-Rauschen ist, nicht der tatsächliche Peilfehler.
+  return !!(r && !r.tooClose && (r.method === 'corr' || r.method === 'fix') && _candidatesFrom(r));
 }
 
 export function openAR(r) {

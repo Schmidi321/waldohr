@@ -186,7 +186,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v107';
+const APP_VERSION = 'v108';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -2089,11 +2089,14 @@ function closeCalibPrompt() {
 }
 function onCalibEvent(ev) {
   if (ev.kind === 'prep') {
-    _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">🎯</div><div style="font-size:17px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:8px">Feinabgleich</div><div style="font-size:13px;color:var(--ink);line-height:1.5">Alle Handys <b>flach nebeneinander</b> legen und die <b>Lautstärke aufdrehen</b>. Das Mikrofon startet automatisch — gleich ertönt ein kurzer <b>Kalibrier-Ton</b>.</div>');
+    const actionTxt = ev.mode === 'clap' ? 'Das Mikrofon startet automatisch — gleich klatscht ihr gemeinsam <b>einmal</b>.' : 'Das Mikrofon startet automatisch — gleich ertönt ein kurzer <b>Kalibrier-Ton</b>.';
+    _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">🎯</div><div style="font-size:17px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:8px">Feinabgleich</div><div style="font-size:13px;color:var(--ink);line-height:1.5">Alle Handys <b>flach nebeneinander</b> legen und die <b>Lautstärke aufdrehen</b>. ' + actionTxt + '</div>');
   } else if (ev.kind === 'count') {
-    _calibPromptBox('<div style="font-size:15px;color:var(--muted);margin-bottom:6px">Gleich ertönt der Ton …</div><div style="font-size:72px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif;line-height:1">' + (ev.n || '') + '</div>');
+    const countTxt = ev.mode === 'clap' ? 'Gleich klatschen …' : 'Gleich ertönt der Ton …';
+    _calibPromptBox('<div style="font-size:15px;color:var(--muted);margin-bottom:6px">' + countTxt + '</div><div style="font-size:72px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif;line-height:1">' + (ev.n || '') + '</div>');
   } else if (ev.kind === 'clap') {
-    _calibPromptBox('<div style="font-size:44px;margin-bottom:8px">🔊</div><div style="font-size:20px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif">Kalibrier-Ton…</div><div style="font-size:12px;color:var(--muted);margin-top:6px">Handys ruhig nebeneinander liegen lassen</div>');
+    const clapMode = ev.mode === 'clap';
+    _calibPromptBox('<div style="font-size:44px;margin-bottom:8px">' + (clapMode ? '👏' : '🔊') + '</div><div style="font-size:20px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif">' + (clapMode ? 'Jetzt klatschen!' : 'Kalibrier-Ton…') + '</div><div style="font-size:12px;color:var(--muted);margin-top:6px">Handys ruhig nebeneinander liegen lassen</div>');
   } else if (ev.kind === 'done') {
     _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">✅</div><div style="font-size:16px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:6px">Feinabgleich fertig</div><div style="font-size:12px;color:var(--muted);line-height:1.5">Die gemeinsame Ruf-Ortung ist jetzt deutlich genauer.</div>');
     if (_calibPromptTimer) clearTimeout(_calibPromptTimer);
@@ -2121,7 +2124,11 @@ function showLocateResult(r) {
     : r.firstHeard === 'both' ? '💡 Fast gleichzeitig gehört — Quelle vermutlich mittig zwischen euch'
     : `💡 Auch von ${partnerLabel} gehört — ohne direkten Uhren-Abgleich lässt sich nicht sagen, wer näher dran war.`;
   const hasGeo = r.bearingToPeer != null && r.baselineM != null;
-  const compassBlock = hasGeo
+  // Zu kurze Basislinie (s. locate.js MIN_BASELINE_M): keine Richtung vortäuschen, die reines
+  // GPS-Rauschen wäre — stattdessen offen zum Auseinandergehen auffordern.
+  const compassBlock = r.tooClose
+    ? `${_compassSvg(r)}<div style="font-size:12px;color:var(--rose,#fb7185);margin-top:6px;font-weight:600">⚠️ Nur ${r.baselineM} m auseinander — bitte weiter auseinandergehen (mind. ${locate.MIN_BASELINE_M} m) für eine verlässliche Peilung.</div>`
+    : hasGeo
     ? `${_compassSvg(r)}<div style="font-size:11px;color:var(--faint);margin-top:2px">Nur die Seite (näher an dir/Partner) ist zuverlässig — eine genaue Pfeilrichtung würde mehr Präzision vortäuschen, als zwei Mikrofone hergeben. ${r.sideHint || ''}</div>`
     : `<div style="font-size:12px;color:var(--muted);margin-top:10px">Kein GPS bei einem der Geräte — keine Peilung möglich.</div>`;
   // Qualität der Messung transparent machen: audio-korreliert (Kreuzkorrelation der rohen
@@ -2133,12 +2140,24 @@ function showLocateResult(r) {
   const calibHint = r.method === 'corr' && !r.calibrated
     ? '<div style="font-size:11px;color:var(--faint);margin-top:8px">Tipp: 🎯 Audio-Feinabgleich im Kopplungs-Fenster (Handys nebeneinander + klatschen) macht die "wer ist näher"-Aussage nochmal deutlich verlässlicher.</div>'
     : '';
+  // Warum diesmal nur der grobe Fallback (kein AR): macht die von Nutzern beobachtete
+  // Unregelmäßigkeit ("mal geht AR, mal nicht") nachvollziehbar statt eines stillen Unterschieds.
+  const whyCoarseTexts = {
+    unsynced: 'Noch kein Uhren-Abgleich mit diesem Partner — kurz warten oder neu koppeln.',
+    throttled: 'Genauere Peilung ist kurz gedrosselt (Bandbreite sparen) — beim nächsten Ruf wieder aktiv.',
+    nowin: 'Kein Audio-Schnipsel vom Partner für diesen Ruf erhalten.',
+    weak: 'Die Kreuzkorrelation war diesmal nicht eindeutig genug (z. B. Hintergrundgeräusche).',
+  };
+  const whyCoarseBlock = r.method === 'clock' && whyCoarseTexts[r.whyCoarse]
+    ? `<div style="font-size:11px;color:var(--faint);margin-top:8px">ℹ️ Nur grob geortet: ${whyCoarseTexts[r.whyCoarse]}</div>`
+    : '';
   ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:26px 26px 20px;text-align:center;max-width:280px;width:88%">
     <div style="font-size:18px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;margin-bottom:4px">${r.species}</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:10px">${deltaLine}</div>
     <div style="font-size:13px;color:var(--ink);line-height:1.4">${whoLine}</div>
     ${r.firstHeard != null ? compassBlock : ''}
     ${calibHint}
+    ${whyCoarseBlock}
     ${ar.canShowAR(r) ? '<button id="_locResultAr" style="width:100%;margin-top:14px;padding:11px;border-radius:14px;background:linear-gradient(140deg,var(--lime),var(--emerald));color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:\'Outfit\',sans-serif">📷 AR-Peilung — Kamera zeigt die Richtung</button>' : ''}
     <button id="_locResultClose" style="width:100%;margin-top:${ar.canShowAR(r) ? '8' : '14'}px;padding:11px;border-radius:14px;background:${ar.canShowAR(r) ? 'var(--glass-strong,rgba(255,255,255,.08))' : 'var(--lime)'};color:${ar.canShowAR(r) ? 'var(--ink)' : '#04130d'};font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
   </div>`;
@@ -2293,6 +2312,16 @@ function initPairing() {
   // peerId -> { pc, stopQuality, reconnectTimer }.
   const connections = new Map();
   const peerSignalLevels = new Map(); // peerId -> Signal-Level, fürs schwächste Glied im Chip
+  // Explizite Host-Rolle: wer die Kopplung als Erster startet (QR-Code zeigt, während man noch
+  // mit niemandem verbunden ist), bleibt für die ganze Sitzung "die Zentrale" — unabhängig von
+  // js/peerhub.js' rein technischer isHost()-Erkennung (2+ gleichzeitige Verbindungen), die bei
+  // GENAU ZWEI gekoppelten Handys (der häufigste Fall!) für BEIDE Seiten false ist, weil keine
+  // Seite mehr als eine Verbindung hält — dort zeigten bisher beide Geräte identisch "Partner 1"
+  // an, ohne dass irgendwer als Host erkennbar war. _isHostNow() kombiniert beides: die eigene
+  // Zentrale-Rolle ODER (Fallback für Stern-Erweiterungen durch ein Speichen-Handy) die technische
+  // Mehrfach-Verbindung.
+  let _iAmHost = false;
+  function _isHostNow() { return _iAmHost || hub.isHost(); }
 
   function stopCamera() {
     if (stopScan) { stopScan(); stopScan = null; }
@@ -2312,7 +2341,7 @@ function initPairing() {
   // Mini-Icons der anderen Tabs angewendet (updateMiniChips ruft dieselbe Funktion auf).
   function _applyRoleBadge(badgeEl) {
     if (!badgeEl) return;
-    if (hub.isHost()) { badgeEl.hidden = false; badgeEl.textContent = '★'; badgeEl.classList.add('host'); return; }
+    if (_isHostNow()) { badgeEl.hidden = false; badgeEl.textContent = '★'; badgeEl.classList.add('host'); return; }
     const myId = hub.myAssignedId();
     if (myId != null) { badgeEl.hidden = false; badgeEl.textContent = String(myId); badgeEl.classList.remove('host'); return; }
     badgeEl.hidden = true; badgeEl.classList.remove('host');
@@ -2334,12 +2363,8 @@ function initPairing() {
     const levels = [...peerSignalLevels.values()].filter(l => l != null);
     updatePairSignal(levels.length ? Math.min(...levels) : null);
   }
-  // Wer die "Zentrale" ist, ergibt sich rein aus der Verbindungszahl (js/peerhub.js): 2+ gleich-
-  // zeitige Verbindungen -> man IST die Zentrale. Mit genau einer Verbindung sagt einem die
-  // Gegenstelle per kleinem Meta-Protokoll, welche Nummer man selbst bei ihr hat und ob sie ihrer-
-  // seits noch mit weiteren Geräten verbunden ist (dann ist SIE die Zentrale).
   function pairStatusText() {
-    if (hub.isHost()) return 'Zentrale · ' + hub.peerCount() + ' verbunden';
+    if (_isHostNow()) return 'Zentrale · ' + hub.peerCount() + ' verbunden';
     const myId = hub.myAssignedId();
     const idTxt = myId != null ? 'Du: Partner ' + myId : 'Verbunden';
     return hub.remotePeerCount() > 1 ? idTxt + ' · mit Zentrale verbunden' : idTxt;
@@ -2352,6 +2377,12 @@ function initPairing() {
     const cq = document.getElementById('chatQuickBtn');
     if (cq) cq.hidden = n === 0;
     if (n === 0) closeChatModal();
+    // Feinabgleich ist nur der Zentrale vorbehalten (s. calibBtn weiter unten) — Speichen sehen
+    // den Knopf gar nicht erst, brauchen ihn ja auch nicht.
+    const cb = document.getElementById('pairCalibBtn');
+    if (cb) cb.hidden = !_isHostNow();
+    const cbHint = document.getElementById('pairCalibHint');
+    if (cbHint) cbHint.hidden = !_isHostNow();
   }
 
   // ---- Messenger-Popup: Chat lebt in einem eigenen Fenster (Topbar-Icon 💬 mit Ungelesen-Badge,
@@ -2376,11 +2407,21 @@ function initPairing() {
   document.getElementById('pairOpenChatBtn')?.addEventListener('click', () => { modal.classList.remove('open'); openChatModal(); });
   document.getElementById('chatCloseBtn')?.addEventListener('click', closeChatModal);
   document.getElementById('chatScrim')?.addEventListener('click', closeChatModal);
+  // Entfernungs-Zusatz je Partner-Zeile: zeigt den aktuellen GPS-Abstand und warnt, wenn er unter
+  // der für eine sinnvolle Peilung nötigen Mindestdistanz liegt (js/locate.js MIN_BASELINE_M) —
+  // beantwortet "bitte weit auseinandergehen" PROAKTIV, bevor überhaupt ein gemeinsamer Fund
+  // versucht wird, statt erst hinterher mit einem unbrauchbaren Ergebnis zu überraschen.
+  function _distanceSuffix(peerId) {
+    const info = locate.getPeerGeoInfo(peerId);
+    if (!info) return '';
+    const tooClose = info.baselineM < locate.MIN_BASELINE_M;
+    return ` <span style="color:${tooClose ? 'var(--rose,#fb7185)' : 'var(--faint)'}">· ${info.baselineM} m${tooClose ? ' — bitte weiter auseinandergehen (mind. ' + locate.MIN_BASELINE_M + ' m)' : ''}</span>`;
+  }
   function renderPeerList() {
     const el = document.getElementById('pairPeerList');
     if (!el) return;
     el.innerHTML = '';
-    if (hub.isHost()) {
+    if (_isHostNow()) {
       const head = document.createElement('div');
       head.className = 'pair-peer-row pair-peer-head';
       head.textContent = '⭐ Du bist die Zentrale';
@@ -2388,7 +2429,7 @@ function initPairing() {
       for (const { id } of hub.peerList()) {
         const row = document.createElement('div');
         row.className = 'pair-peer-row';
-        row.textContent = '🟢 Partner ' + id;
+        row.innerHTML = '🟢 Partner ' + id + _distanceSuffix(id);
         el.appendChild(row);
       }
     } else if (hub.peerCount() === 1) {
@@ -2396,7 +2437,10 @@ function initPairing() {
       row.className = 'pair-peer-row';
       const myId = hub.myAssignedId();
       const who = myId != null ? ' — du bist Partner ' + myId : '';
-      row.textContent = hub.remotePeerCount() > 1 ? '🟢 Verbunden mit der Zentrale' + who : '🟢 Verbunden' + who;
+      const peerId = hub.peerList()[0]?.id;
+      // Mit genau einem Peer und selbst nicht Host: der eine Peer MUSS die Zentrale sein (2-
+      // Geräte-Fall bzw. der Stern, mit dem man als Speiche verbunden ist) — rein lokal ableitbar.
+      row.innerHTML = '⭐ Verbunden mit der Zentrale' + who + (peerId != null ? _distanceSuffix(peerId) : '');
       el.appendChild(row);
     }
   }
@@ -2605,6 +2649,7 @@ function initPairing() {
     renderPeerList();
     if (connections.size === 0) {
       modulesAttached = false;
+      _iAmHost = false; // frische Kopplung soll die Host-Rolle wieder neu ermitteln, nicht die alte mitschleppen
       locate.detach();
       chat.detach();
       session.detach();
@@ -2675,19 +2720,34 @@ function initPairing() {
   // mehrfach als eigenständiges enumerateDevices()-Objekt — ohne Dedup nach dem ANGEZEIGTEN Namen
   // erschien z.B. "Hauptkamera" mehrfach identisch in der Auswahl.
   function _dedupeLenses(devices) {
-    const seen = new Set();
-    let genericN = 0;
+    const seenCategory = new Set();
+    const seenLabel = new Set();
+    let mainAssigned = false, genericN = 0;
     const out = [];
     for (const d of devices) {
-      const lbl = (d.label || '').toLowerCase();
+      const rawLabel = d.label || '';
+      const lbl = rawLabel.toLowerCase();
+      let category = null;
+      if (/ultra/.test(lbl)) category = '📷 Ultra-Weit';
+      else if (/telephoto|tele|[3-9](\.\d)?x\b/.test(lbl)) category = '🔭 Tele';
+      else if (/macro/.test(lbl)) category = '🌸 Makro';
+      // Eindeutiges Schlüsselwort (Ultra/Tele/Makro) -> zuverlässiges Signal, per Kategorie dedupen.
+      if (category) {
+        if (seenCategory.has(category)) continue;
+        seenCategory.add(category);
+        out.push({ deviceId: d.deviceId, name: category });
+        continue;
+      }
+      // Kein eindeutiges Schlüsselwort — v.a. Android, wo ALLE Rücklinsen oft nur generisch
+      // "Camera 0, facing back"/"Camera 1, facing back" o.ä. heißen. Ein Substring-Match auf
+      // "back"/"rear"/"main" würde die dann fälschlich als EIN Gerät kollabieren und echte
+      // zusätzliche Linsen (Weitwinkel/Tele ohne Namen) verstecken — darum hier nur bei
+      // WORTWÖRTLICH identischem Rohtext als Duplikat werten.
+      if (rawLabel && seenLabel.has(rawLabel)) continue;
+      if (rawLabel) seenLabel.add(rawLabel);
       let name;
-      if (/ultra/.test(lbl)) name = '📷 Ultra-Weit';
-      else if (/telephoto|tele|[3-9](\.\d)?x\b/.test(lbl)) name = '🔭 Tele';
-      else if (/macro/.test(lbl)) name = '🌸 Makro';
-      else if (/wide|haupt|main|back|rück|rear/.test(lbl)) name = '📷 Haupt';
-      else { name = '📷 Kamera ' + (++genericN); out.push({ deviceId: d.deviceId, name }); continue; }
-      if (seen.has(name)) continue;
-      seen.add(name);
+      if (!mainAssigned) { name = '📷 Haupt'; mainAssigned = true; }
+      else { genericN++; name = '📷 Kamera ' + (genericN + 1); }
       out.push({ deviceId: d.deviceId, name });
     }
     return out;
@@ -2713,10 +2773,20 @@ function initPairing() {
   async function startScan(onDecoded, statusEl) {
     stopCamera();
     currentScanOnDecoded = onDecoded; currentScanStatusEl = statusEl;
+    const camId = scanCamSelect && scanCamSelect.value ? scanCamSelect.value : null;
     try {
-      const camId = scanCamSelect && scanCamSelect.value ? scanCamSelect.value : null;
       const videoConstraints = camId ? { deviceId: { exact: camId } } : { facingMode: 'environment' };
       scanStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+    } catch (e) {
+      // Eine bestimmte Linsen-deviceId kann inzwischen ungültig sein (z.B. Geräteliste hat sich
+      // geändert) — statt direkt aufzugeben, mit der einfachen "irgendeine Rückkamera"-Anfrage
+      // nochmal versuchen. Das ist der Sicherheitsnetz-Fallback für genau den gemeldeten Android-
+      // Bug ("keine Kamera mehr angezeigt"), falls die gewählte deviceId doch nicht mehr passt.
+      if (!camId) { if (statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e?.message || ''); return; }
+      try { scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } }); }
+      catch (e2) { if (statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e2?.message || ''); return; }
+    }
+    try {
       scanVideo.srcObject = scanStream;
       await scanVideo.play().catch(() => {});
       stopScan = scanQR(scanVideo, onDecoded);
@@ -2728,6 +2798,10 @@ function initPairing() {
 
   // ---- Seite A: "QR-Code zeigen" (Angebot erstellen) ----
   showBtn.onclick = async () => {
+    // Wer die Kopplung aus dem Stand (noch mit niemandem verbunden) startet, wird für die ganze
+    // Sitzung "die Zentrale" (s. _isHostNow() oben) — ein späteres "➕ Weiteres Handy koppeln" von
+    // einem bereits verbundenen Gerät (egal ob Host oder Speiche) soll daran nichts mehr ändern.
+    if (hub.peerCount() === 0) _iAmHost = true;
     showStep_('show');
     status.textContent = 'Code wird erstellt…';
     showScanAnswerBtn.hidden = true;
@@ -2821,6 +2895,19 @@ function initPairing() {
   // "grob" zu "wenige Millisekunden". Geführter Ablauf: EIN Knopfdruck auf der Zentrale, die
   // Partner-Handys öffnen automatisch ein Popup, schalten ihr Mikrofon selbst an, und es wird
   // nur EINMAL gemeinsam geklatscht.
+  // Feinabgleich-Methode (Einstellungen): Ton (Standard) oder Klatschen — der Signalton war laut
+  // Nutzer-Feedback manchmal unzuverlässig (leiser Lautsprecher, Umgebungslärm), daher als
+  // Fallback wählbar statt fest zu ersetzen, da der Ton im Regelfall die saubereren Peaks liefert.
+  const calibModeToggle = document.getElementById('calibModeToggle');
+  function calibModeGet() { try { return localStorage.getItem('waldohr.calibMode') !== 'clap'; } catch { return true; } }
+  if (calibModeToggle) {
+    calibModeToggle.checked = calibModeGet();
+    locate.setCalibMode(calibModeToggle.checked ? 'tone' : 'clap');
+    calibModeToggle.onchange = () => {
+      try { localStorage.setItem('waldohr.calibMode', calibModeToggle.checked ? 'tone' : 'clap'); } catch {}
+      locate.setCalibMode(calibModeToggle.checked ? 'tone' : 'clap');
+    };
+  }
   const calibBtn = document.getElementById('pairCalibBtn');
   const calibStatusEl = document.getElementById('pairCalibStatus');
   function setCalibStatus(s) {
@@ -2842,6 +2929,9 @@ function initPairing() {
     return audio.running;
   });
   if (calibBtn) calibBtn.onclick = async () => {
+    // Der Knopf ist für Speichen schon per CSS/JS ausgeblendet (refreshPeerChip) — diese Prüfung
+    // ist die zweite, verbindliche Absicherung, falls er trotzdem je ausgelöst wird.
+    if (!_isHostNow()) return;
     calibBtn.disabled = true;
     const orig = calibBtn.textContent;
     calibBtn.textContent = 'Feinabgleich läuft…';

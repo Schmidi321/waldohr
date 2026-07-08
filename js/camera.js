@@ -74,19 +74,34 @@ function _cancelMasterLoop() {
 // erkannte) Linsen werden NICHT gegeneinander dedupliziert, da nicht sicher ist, ob es dieselbe
 // oder tatsächlich verschiedene Linsen sind — im Zweifel lieber getrennt anzeigen.
 function _dedupeLenses(devices) {
-  const seen = new Set();
-  let genericN = 0;
+  const seenCategory = new Set();
+  const seenLabel = new Set();
+  let mainAssigned = false, genericN = 0;
   const out = [];
   for (const d of devices) {
-    const lbl = (d.label || '').toLowerCase();
+    const rawLabel = d.label || '';
+    const lbl = rawLabel.toLowerCase();
+    let category = null;
+    if (/ultra/.test(lbl)) category = '📷 Ultra-Weit';
+    else if (/telephoto|tele|[3-9](\.\d)?x\b/.test(lbl)) category = '🔭 Tele';
+    else if (/macro/.test(lbl)) category = '🌸 Makro';
+    // Eindeutiges Schlüsselwort (Ultra/Tele/Makro) -> zuverlässiges Signal, per Kategorie dedupen.
+    if (category) {
+      if (seenCategory.has(category)) continue;
+      seenCategory.add(category);
+      out.push({ deviceId: d.deviceId, name: category });
+      continue;
+    }
+    // Kein eindeutiges Schlüsselwort — v.a. Android, wo ALLE Rücklinsen oft nur generisch
+    // "Camera 0, facing back"/"Camera 1, facing back" o.ä. heißen. Ein Substring-Match auf
+    // "back"/"rear"/"main" würde die dann fälschlich als EIN Gerät kollabieren und echte
+    // zusätzliche Linsen (Weitwinkel/Tele ohne Namen) verstecken — darum hier nur bei
+    // WORTWÖRTLICH identischem Rohtext als Duplikat werten.
+    if (rawLabel && seenLabel.has(rawLabel)) continue;
+    if (rawLabel) seenLabel.add(rawLabel);
     let name;
-    if (/ultra/.test(lbl)) name = '📷 Ultra-Weit';
-    else if (/telephoto|tele|[3-9](\.\d)?x\b/.test(lbl)) name = '🔭 Tele';
-    else if (/macro/.test(lbl)) name = '🌸 Makro';
-    else if (/wide|haupt|main|back|rück|rear/.test(lbl)) name = '📷 Haupt';
-    else { name = '📷 Kamera ' + (++genericN); out.push({ deviceId: d.deviceId, name }); continue; }
-    if (seen.has(name)) continue;
-    seen.add(name);
+    if (!mainAssigned) { name = '📷 Haupt'; mainAssigned = true; }
+    else { genericN++; name = '📷 Kamera ' + (genericN + 1); }
     out.push({ deviceId: d.deviceId, name });
   }
   return out;
@@ -425,10 +440,21 @@ async function _startStream(camId, micId) {
       audio: audioC
     });
   } catch (_) {
-    _stream = await navigator.mediaDevices.getUserMedia({
-      video: { ...videoC, width: { ideal: 4096 }, height: { ideal: 2160 } },
-      audio: false
-    });
+    try {
+      _stream = await navigator.mediaDevices.getUserMedia({
+        video: { ...videoC, width: { ideal: 4096 }, height: { ideal: 2160 } },
+        audio: false
+      });
+    } catch (_2) {
+      // Eine bestimmte Linsen-deviceId kann ungültig sein (z.B. veraltete Auswahl nach einem
+      // Geräte-/Berechtigungswechsel) — dann auf "irgendeine passende Kamera" zurückfallen statt
+      // komplett zu scheitern (das gemeldete Android-Symptom "gar keine Kamera mehr angezeigt").
+      if (!camId) throw _2;
+      _stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: _facingMode }, width: { ideal: 4096 }, height: { ideal: 2160 } },
+        audio: false
+      });
+    }
   }
 
   const video = document.getElementById('camVideo');

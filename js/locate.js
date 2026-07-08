@@ -21,7 +21,15 @@ const MATCH_WINDOW_MS = 4000; // wie weit zeitlich zwei Erkennungen noch als "de
 const RECENT_KEEP_MS = 8000;
 const SNIP_CHUNK = 12 * 1024; // Bytes pro Datenkanal-Nachricht (Base64 bleibt unter der sicheren 16-KB-Grenze)
 const CORR_MIN_CONF = 1.3;    // darunter gilt die Kreuzkorrelation als nicht eindeutig -> grober Fallback
-const CORR_THROTTLE_MS = 30000; // pro Art+Partner höchstens alle 30 s ein Schnipsel-Austausch (128 KB je Richtung)
+const CORR_THROTTLE_MS = 15000; // pro Art+Partner höchstens alle 15 s ein Schnipsel-Austausch (128 KB je Richtung) —
+// vorher 30 s, aber das ließ AR bei wiederholten Rufen (z.B. Vogel ruft alle 10-20 s) meist auf den
+// groben Uhren-Fallback zurückfallen, der AR NICHT anbietet (s. app.js result.method-Prüfung).
+// MIN_BASELINE_M: unter diesem Abstand ist die Basislinie zwischen zwei Handys zu kurz für eine
+// belastbare Peilung — der GPS-Fehler pro Gerät liegt typ. bei 5-15 m; bei z.B. 10 m Abstand könnte
+// die "gemessene" Basislinie in Wahrheit zwischen 0 und 25 m liegen, was jede Peilung reine
+// Zahlenspielerei macht. 20 m hält die Unsicherheit der Basislinie selbst bei ungünstigem GPS auf
+// unter ~50%, sodass die daraus abgeleitete Peilung noch aussagekräftig bleibt.
+export const MIN_BASELINE_M = 20;
 
 let _active = false;
 let _myPos = null;
@@ -42,6 +50,13 @@ let _calibWaiter = null;         // wartet auf das erste Fenster, das den Klatsc
 let _calibErrReason = null;      // Fehlergrund vom Partner während einer laufenden Kalibrierung
 let _micController = null;       // von app.js gesetzt: schaltet das eigene Mikrofon bei Bedarf ein
 let _resyncTimer = null;         // periodischer Uhren-Re-Sync (Drift-Kompensation)
+// Feinabgleich-Methode: 'tone' (Standard, automatischer Chirp — zuverlässiger, da lauteren/
+// gleichmäßigeren Sweep als ein menschliches Klatschen) oder 'clap' (Fallback für sehr leise
+// Lautsprecher/Störgeräusche). Wird von app.js aus den Nutzer-Einstellungen gesetzt; nur auf der
+// Zentrale relevant (die startet startCalibration()), wird den Partnern per calibPrep/calibCount
+// mitgeteilt, damit deren Popup-Text zum tatsächlichen Ablauf passt.
+let _calibMode = 'tone';
+export function setCalibMode(mode) { _calibMode = mode === 'clap' ? 'clap' : 'tone'; }
 
 // app.js reicht hier eine Funktion herein, die das Mikrofon startet (falls aus) und true liefert,
 // sobald es läuft — damit die Kalibrierung das Lauschen auf allen Handys selbst anschalten kann,
@@ -209,21 +224,23 @@ function _onMessage(msg, fromId) {
   if (msg.type === 'snipHdr' || msg.type === 'snipChunk') { _collectSnippet(fromId, msg); return; }
   // Zentrale startet den geführten Feinabgleich -> Popup öffnen + eigenes Mikrofon anschalten.
   if (msg.type === 'calibPrep') {
-    if (_onCalibEvent) _onCalibEvent({ kind: 'prep', peerId: fromId });
+    const mode = msg.mode === 'clap' ? 'clap' : 'tone';
+    if (_onCalibEvent) _onCalibEvent({ kind: 'prep', peerId: fromId, mode });
     _ensureMicOn();
     return;
   }
   if (msg.type === 'calibCount') {
     // n landet in der UI in innerHTML -> hier hart auf eine kleine Ganzzahl zwingen (fremder Input!)
     const n = Math.max(1, Math.min(9, Math.round(Number(msg.n)) || 1));
-    if (_onCalibEvent) _onCalibEvent({ kind: 'count', n, peerId: fromId });
+    const mode = msg.mode === 'clap' ? 'clap' : 'tone';
+    if (_onCalibEvent) _onCalibEvent({ kind: 'count', n, peerId: fromId, mode });
     return;
   }
   if (msg.type === 'calibEnd') {
     if (_onCalibEvent) _onCalibEvent({ kind: 'end', peerId: fromId });
     return;
   }
-  if (msg.type === 'calib') { _serveCalib(fromId, msg); if (_onCalibEvent) _onCalibEvent({ kind: 'clap', peerId: fromId }); return; }
+  if (msg.type === 'calib') { _serveCalib(fromId, msg); if (_onCalibEvent) _onCalibEvent({ kind: 'clap', peerId: fromId, mode: msg.mode === 'clap' ? 'clap' : 'tone' }); return; }
   if (msg.type === 'calibDone') {
     if (typeof msg.bias === 'number' && Math.abs(msg.bias) < 500) {
       _calibBias.set(fromId, msg.bias);
@@ -280,7 +297,7 @@ function _handlePeerDetection(msg, fromId) {
   const offset = _clockOffsetMs.get(fromId);
   if (offset == null) {
     if (Math.abs(match.ts - msg.ts) > MATCH_WINDOW_MS * 3) return; // grobe Plausibilitätsgrenze ohne Abgleich
-    if (_onResult) _onResult({ species: match.species, key: match.key, peerId: fromId, deltaMs: null, firstHeard: null, bearingToPeer: null, baselineM: null, sideHint: null, thetaDeg: null });
+    if (_onResult) _onResult({ species: match.species, key: match.key, peerId: fromId, deltaMs: null, firstHeard: null, bearingToPeer: null, baselineM: null, sideHint: null, thetaDeg: null, method: 'clock', whyCoarse: 'unsynced' });
     return;
   }
 
@@ -291,18 +308,22 @@ function _handlePeerDetection(msg, fromId) {
   // Erkennungs-Zeitstempel selbst sind durch die 3s-Fenster ±1500 ms unscharf und taugen nur als
   // grober Fallback. Gedrosselt, weil ein Austausch ~128 KB je Richtung kostet.
   const throttleKey = fromId + ':' + msg.key;
-  if (match.win && msg.snip && Date.now() - (_lastCorrAt.get(throttleKey) || 0) > CORR_THROTTLE_MS) {
-    _lastCorrAt.set(throttleKey, Date.now());
-    _preciseTdoa(fromId, msg, match).then(p => {
-      if (p) {
-        _emitResult(match, fromId, p.tdoaMs, { method: 'corr', corrConf: p.confidence, calibrated: p.calibrated });
-        _collectForFix(fromId, match, p);
-      }
-      else _emitResult(match, fromId, match.ts - remoteTsLocal, { method: 'clock' });
-    });
+  if (match.win && msg.snip) {
+    if (Date.now() - (_lastCorrAt.get(throttleKey) || 0) > CORR_THROTTLE_MS) {
+      _lastCorrAt.set(throttleKey, Date.now());
+      _preciseTdoa(fromId, msg, match).then(p => {
+        if (p) {
+          _emitResult(match, fromId, p.tdoaMs, { method: 'corr', corrConf: p.confidence, calibrated: p.calibrated });
+          _collectForFix(fromId, match, p);
+        }
+        else _emitResult(match, fromId, match.ts - remoteTsLocal, { method: 'clock', whyCoarse: 'weak' });
+      });
+      return;
+    }
+    _emitResult(match, fromId, match.ts - remoteTsLocal, { method: 'clock', whyCoarse: 'throttled' });
     return;
   }
-  _emitResult(match, fromId, match.ts - remoteTsLocal, { method: 'clock' });
+  _emitResult(match, fromId, match.ts - remoteTsLocal, { method: 'clock', whyCoarse: 'nowin' });
 }
 
 // ---- 3-Geräte-Fix: hat die Zentrale für DENSELBEN Ruf präzise Laufzeitdifferenzen zu zwei
@@ -312,6 +333,10 @@ function _handlePeerDetection(msg, fromId) {
 function _collectForFix(fromId, match, p) {
   const peerPos = _peerPos.get(fromId);
   if (!_myPos || !peerPos || !hub.isHost()) return;
+  // Auch hier: eine zu kurze Basislinie zu EINEM der Partner würde die ganze Trilateration
+  // verzerren (die Hyperbel zu dieser Station ist dann praktisch nur GPS-Rauschen) — lieber
+  // ehrlich auf den paarweisen Fallback zurückfallen als eine Pseudo-Position auszurechnen.
+  if (haversineKm(_myPos, peerPos) * 1000 < MIN_BASELINE_M) return;
   const now = Date.now();
   const list = (_recentTdoa.get(match.key) || []).filter(e => now - e.ts < 8000 && e.peerId !== fromId);
   list.push({ peerId: fromId, tdoaMs: p.tdoaMs, calibrated: p.calibrated, ts: now, peerPos: { ...peerPos } });
@@ -365,12 +390,17 @@ function _emitResult(match, fromId, deltaMs, extra) {
   const th = extra.method === 'corr' ? (extra.calibrated ? 8 : 60) : 30;
   const firstHeard = deltaMs > th ? 'peer' : deltaMs < -th ? 'me' : 'both';
 
-  let bearingToPeer = null, baselineM = null, sideHint = null, thetaDeg = null;
+  let bearingToPeer = null, baselineM = null, sideHint = null, thetaDeg = null, tooClose = false;
   const peerPos = _peerPos.get(fromId);
   if (_myPos && peerPos) {
     baselineM = Math.round(haversineKm(_myPos, peerPos) * 1000);
     bearingToPeer = Math.round(bearingDeg(_myPos, peerPos));
-    if (baselineM > 1) {
+    // Basislinie zu kurz -> keine Peilungs-Details vortäuschen (s. MIN_BASELINE_M oben): der
+    // GPS-Fehler dominiert dann die Messung komplett. App.js zeigt stattdessen einen Hinweis,
+    // sich weiter zu trennen, statt einer irreführenden Richtung/AR-Ansicht.
+    if (baselineM < MIN_BASELINE_M) {
+      tooClose = true;
+    } else if (baselineM > 1) {
       const sinTheta = Math.max(-1, Math.min(1, (SOUND_SPEED_MPS * (Math.abs(deltaMs) / 1000)) / baselineM));
       thetaDeg = Math.round(Math.asin(sinTheta) * 180 / Math.PI);
       sideHint = thetaDeg < 20 ? 'eher mittig zwischen euch' : thetaDeg > 60 ? 'eher seitlich, nah an der Verbindungslinie' : 'irgendwo dazwischen';
@@ -380,8 +410,9 @@ function _emitResult(match, fromId, deltaMs, extra) {
   _onResult({
     species: match.species, key: match.key, peerId: fromId,
     deltaMs: Math.round(Math.abs(deltaMs)), deltaSignedMs: Math.round(deltaMs), firstHeard,
-    bearingToPeer, baselineM, sideHint, thetaDeg,
+    bearingToPeer, baselineM, sideHint, thetaDeg, tooClose,
     method: extra.method, corrConf: extra.corrConf || null, calibrated: !!extra.calibrated,
+    whyCoarse: extra.whyCoarse || null,
   });
 }
 
@@ -483,7 +514,8 @@ export async function startCalibration(onStatus) {
   if (!peers.length) { onStatus?.({ phase: 'err', text: 'Kein direkt verbundener Partner mit Uhren-Abgleich — erst koppeln und kurz warten.' }); return false; }
 
   // 1. Partner vorbereiten (Popup + Mikro an)
-  for (const p of peers) hub.sendTo(p.id, { type: 'calibPrep', relay: false });
+  const mode = _calibMode;
+  for (const p of peers) hub.sendTo(p.id, { type: 'calibPrep', mode, relay: false });
   onStatus?.({ phase: 'prep', text: 'Alle Handys flach nebeneinander legen…' });
 
   // 2. Eigenes Mikrofon anschalten + warmlaufen
@@ -495,21 +527,24 @@ export async function startCalibration(onStatus) {
   await new Promise(r => setTimeout(r, 800)); // Partner-Mikros ebenfalls warmlaufen lassen
 
   // 3. Countdown auf allen Geräten
+  const countText = mode === 'clap' ? 'Gleich klatschen … ' : 'Gleich ertönt der Ton … ';
   for (let n = 3; n >= 1; n--) {
-    onStatus?.({ phase: 'count', text: 'Gleich klatschen … ' + n });
-    for (const p of peers) hub.sendTo(p.id, { type: 'calibCount', n, relay: false });
+    onStatus?.({ phase: 'count', text: countText + n });
+    for (const p of peers) hub.sendTo(p.id, { type: 'calibCount', n, mode, relay: false });
     await new Promise(r => setTimeout(r, 800));
   }
   _calibErrReason = null;
-  const at = Date.now() + 250; // gemeinsamer Ton-Zeitpunkt, minimal in der Zukunft
-  for (const p of peers) hub.sendTo(p.id, { type: 'calib', at, relay: false });
-  onStatus?.({ phase: 'clap', text: '🔊 Kalibrier-Ton…' });
-  // Chirp-Kalibrierung (Stufe 4): statt eines menschlichen Klatschers spielt die Zentrale einen
-  // kurzen, breitbandigen Frequenz-Sweep ab (js/tdoa.js playChirp). Alle Handys liegen nebeneinander
-  // und hören denselben Ton — die scharfe Autokorrelation eines Chirps liefert einen deutlich
-  // saubereren Peak als ein Klatschen und braucht keine menschliche Aktion im richtigen Moment.
-  // Ein zusätzliches Klatschen stört nicht (die Korrelation nimmt den stärksten Transienten).
-  playChirp();
+  const at = Date.now() + 250; // gemeinsamer Ton-/Klatsch-Zeitpunkt, minimal in der Zukunft
+  for (const p of peers) hub.sendTo(p.id, { type: 'calib', at, mode, relay: false });
+  // Chirp-Kalibrierung (Stufe 4, Standard): statt eines menschlichen Klatschers spielt die
+  // Zentrale einen kurzen, breitbandigen Frequenz-Sweep ab (js/tdoa.js playChirp). Alle Handys
+  // liegen nebeneinander und hören denselben Ton — die scharfe Autokorrelation eines Chirps
+  // liefert einen deutlich saubereren Peak als ein Klatschen und braucht keine menschliche Aktion
+  // im richtigen Moment. Zuverlässigkeits-Fallback (Nutzer-Einstellung): bei sehr leisem
+  // Lautsprecher/Umgebungslärm kann ein gemeinsames Klatschen der Nutzer besser funktionieren —
+  // dann NICHT den Ton abspielen, sondern auf das menschliche Klatschen zum `at`-Zeitpunkt warten.
+  if (mode === 'tone') { onStatus?.({ phase: 'clap', text: '🔊 Kalibrier-Ton…' }); playChirp(); }
+  else onStatus?.({ phase: 'clap', text: '👏 Jetzt klatschen!' });
 
   // Eigenes Fenster um den Klatsch-Zeitpunkt abwarten
   const win = await new Promise(res => {
