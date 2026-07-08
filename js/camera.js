@@ -144,6 +144,18 @@ function _zoomRange() {
   return _zoomSupported ? { min: _zoomMin, max: _zoomMax } : { min: 1, max: DIGITAL_MAX };
 }
 
+// Zoom-Bereich für eine Fahrt WÄHREND EINER AUFNAHME: die Hardware bleibt dort zwingend eingefroren
+// (s. _syncHwZoom weiter unten, `_isRecording()`-Guard) — die Fahrt läuft also IMMER rein digital,
+// auch auf Geräten MIT Hardware-Zoom. Viele Android-Handys melden dort aber einen riesigen
+// Hardware-Bereich (8×, 10× oder mehr, oft ein Hybrid aus mehreren Linsen) — als reiner Digital-Crop
+// wäre das weit jenseits von brauchbar scharf und würde die Aufnahme zum Fahrtende hin extrem
+// verwaschen/verpixeln. Denselben DIGITAL_MAX-Deckel wie beim "kein Hardware-Zoom"-Fall (iOS)
+// anwenden, statt den vollen (nur theoretisch nutzbaren) Hardware-Bereich als Ziel zu nehmen.
+function _recZoomRange() {
+  const r = _zoomRange();
+  return { min: r.min, max: Math.min(r.max, DIGITAL_MAX) };
+}
+
 // Logischen Zoom setzen: Vorschau (CSS) und Slider sofort, framegenau, ohne die Kamera-Pipeline
 // anzufassen. Der sichtbare Digital-Faktor ist immer relativ zum aktuellen Hardware-Stand —
 // dadurch stimmen Vorschau und (Canvas-)Aufnahme exakt überein und nichts springt.
@@ -321,12 +333,15 @@ function _toggleInterval() {
 function _startZoomAnim(forceFullSweep) {
   _stopZoomAnim();
   if (_zoomDir === 'none') return;
-  const { min: minZ, max: maxZ } = _zoomRange();
+  const full = _zoomRange();
+  // Während einer Aufnahme läuft die Fahrt zwingend rein digital (s. _recZoomRange oben) — der
+  // volle Hardware-Bereich ist dort nur eine theoretische Zahl, keine tatsächlich nutzbare Schärfe.
+  const { min: minZ, max: maxZ } = forceFullSweep ? _recZoomRange() : full;
   const to = _zoomDir === 'in' ? maxZ : minZ;
   const from = forceFullSweep ? (_zoomDir === 'in' ? minZ : maxZ) : Math.max(minZ, Math.min(maxZ, _viewZoom));
   if (Math.abs(Math.log(to / from)) < 0.01) return;
   const fullDur = _zoomSpeed === 'fast' ? 7000 : 28000;
-  _zoomDur = forceFullSweep ? fullDur : fullDur * Math.abs(Math.log(to / from)) / Math.log(maxZ / minZ || 2);
+  _zoomDur = forceFullSweep ? fullDur : fullDur * Math.abs(Math.log(to / from)) / Math.log(full.max / full.min || 2);
   _zoomFrom = from; _zoomTo = to; _zoomT0 = performance.now(); _zoomLastHwSync = 0;
   _zoomAnimActive = true;
   _ensureMasterLoop();
@@ -703,7 +718,11 @@ async function _toggleVideo() {
   // dort weitermachen, wo ein vorheriger manueller/Vorschau-Zoom gerade stand, im schlimmsten Fall
   // schon am Ziel (dann zeigt die AUFNAHME von Anfang an den Endzustand, ohne jede Bewegung).
   if (_zoomDir !== 'none') {
-    const { min: minZ, max: maxZ } = _zoomRange();
+    // Selber Deckel wie _startZoomAnim(true) gleich danach — sonst würde die Vorschau hier schon
+    // kurz auf den vollen (ungedeckelten) Hardware-Maximalwert springen, bevor die eigentliche
+    // Fahrt überhaupt beginnt (bei "Raus" besonders sichtbar: ein harter Zoom-Sprung im Bild,
+    // noch bevor die Aufnahme lief).
+    const { min: minZ, max: maxZ } = _recZoomRange();
     _renderZoom(_zoomDir === 'in' ? minZ : maxZ);
   }
   _recCanvasStream = _startCanvasRecPipeline();
