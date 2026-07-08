@@ -666,6 +666,11 @@ function _startCanvasRecPipeline() {
   // Zeichnen läuft jetzt über die gemeinsame Schleife (_ensureMasterLoop) statt einer eigenen
   // rAF-Kette — dort mit der Zoom-Fahrt exakt synchron UND auf ~30fps gedrosselt (s. oben).
   _recCtx = cv.getContext('2d');
+  // Canvas2D interpoliert beim Hochskalieren standardmäßig oft nur mit 'low' (browserabhängig,
+  // spec-Default) — bei starkem Digital-Zoom (Quell-Crop deutlich kleiner als das Aufnahme-Canvas)
+  // macht 'high' (bikubisch-ähnlich) einen sichtbaren Unterschied in der Schärfe der Aufnahme.
+  _recCtx.imageSmoothingEnabled = true;
+  _recCtx.imageSmoothingQuality = 'high';
   _recVW = vw; _recVH = vh; _recCW = cw; _recCH = ch; _recLastDraw = 0;
   _ensureMasterLoop();
   const stream = cv.captureStream(30);
