@@ -1059,8 +1059,9 @@
         <p style="font-size:12px;color:var(--muted);margin-bottom:16px">Verbindet zwei Handys direkt miteinander per QR-Code — kein Server. Beide Geräte brauchen kurz Internet oder dasselbe WLAN zum Verbindungsaufbau.</p>
 
         <div id="pairChoice">
-          <button class="btn ghost" id="pairShowBtn" style="width:100%;margin-bottom:10px">📱 QR-Code zeigen (ich starte)</button>
+          <button class="btn ghost" id="pairShowBtn" style="width:100%;margin-bottom:10px">📱 QR-Code zeigen — ich werde die Zentrale ★</button>
           <button class="btn ghost" id="pairScanBtn" style="width:100%">📷 QR-Code scannen</button>
+          <div style="font-size:11px;color:var(--faint);text-align:center;margin-top:10px">⭐ Wer zuerst "QR-Code zeigen" tippt, wird für diese Kopplung die Zentrale (Host) — z. B. nur die Zentrale kann später den Feinabgleich starten.</div>
         </div>
 
         <div id="pairShowStep" hidden>
@@ -1091,7 +1092,8 @@
             <div id="pairConnectedSub" style="font-size:11px;color:var(--muted);margin-top:4px">Bereit für weitere Funktionen.</div>
           </div>
           <div id="pairPeerList" class="pair-peer-list"></div>
-          <button type="button" class="btn ghost" id="pairAddDeviceBtn" style="width:100%;margin-bottom:10px">➕ Weiteres Handy koppeln</button>
+          <button type="button" class="btn ghost" id="pairAddDeviceBtn" style="width:100%;margin-bottom:6px">➕ Weiteres Handy koppeln</button>
+          <div id="pairAddDeviceHint" style="font-size:11px;color:var(--faint);text-align:center;margin-bottom:10px">Nur die Zentrale kann weitere Handys einladen — sonst würde ein zweiter "Knotenpunkt" entstehen und beide Seiten fälschlich als Zentrale erscheinen. Bitte die Zentrale bitten, das neue Handy einzuladen.</div>
           <button type="button" class="btn ghost" id="pairCalibBtn" style="width:100%;margin-bottom:6px">🎯 Feinabgleich starten (für alle Handys)</button>
           <div id="pairCalibHint" style="font-size:11px;color:var(--faint);text-align:center;margin-bottom:6px">Alle Handys nebeneinander legen, Lautstärke aufdrehen — startet das Lauschen automatisch und spielt einen kurzen Kalibrier-Ton ab.</div>
           <div id="pairCalibStatus" style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:14px" hidden></div>

@@ -186,7 +186,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v111';
+const APP_VERSION = 'v112';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -2403,6 +2403,20 @@ function initPairing() {
     if (cb) cb.hidden = !_isHostNow();
     const cbHint = document.getElementById('pairCalibHint');
     if (cbHint) cbHint.hidden = !_isHostNow();
+    // "Weiteres Handy koppeln" ebenfalls nur die Zentrale — sonst könnte eine Speiche selbst zu
+    // einer zweiten Verbindung kommen (zum neuen Gerät), wodurch hub.isHost() (rein topologisch:
+    // 2+ Verbindungen) für DIESE Speiche plötzlich auch true würde: beide Seiten zeigten dann
+    // gleichzeitig den ★-Host-Badge, ohne dass irgendwer es so gewollt hätte (genau der gemeldete
+    // "beide sind Host"-Fall). Ein sauberer Stern bleibt nur erhalten, wenn ausschließlich die
+    // echte Zentrale neue Handys einlädt.
+    const ad = document.getElementById('pairAddDeviceBtn');
+    if (ad) ad.hidden = !_isHostNow();
+    // Der Hinweistext ERKLÄRT, warum der Knopf fehlt — er gehört also der Speiche (die den Knopf
+    // NICHT sieht), nicht der Zentrale (die ihn hat und keine Erklärung braucht). Umgekehrte
+    // Bedingung zu `ad.hidden`, anders als beim Feinabgleich-Hinweis oben (der IMMER neben seinem
+    // sichtbaren Knopf steht).
+    const adHint = document.getElementById('pairAddDeviceHint');
+    if (adHint) adHint.hidden = _isHostNow();
   }
 
   // ---- Messenger-Popup: Chat lebt in einem eigenen Fenster (Topbar-Icon 💬 mit Ungelesen-Badge,
@@ -2747,6 +2761,9 @@ function initPairing() {
   // ---- Weiteres Handy koppeln (Stern-Modell) — bestehende Verbindungen bleiben unangetastet ----
   const addDeviceBtn = document.getElementById('pairAddDeviceBtn');
   if (addDeviceBtn) addDeviceBtn.onclick = () => {
+    // Der Knopf ist für Speichen schon ausgeblendet (refreshPeerChip) — diese Prüfung ist die
+    // zweite, verbindliche Absicherung (s. Kommentar dort, warum nur die Zentrale einladen darf).
+    if (!_isHostNow()) return;
     if (pendingPc) { try { pendingPc.close(); } catch {} pendingPc = null; }
     showStep_('choice');
   };
