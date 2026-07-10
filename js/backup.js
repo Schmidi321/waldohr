@@ -59,13 +59,21 @@ export async function importBackup(file, onProgress) {
     const newId = await addDetection(rest);
     if (oldId != null) idMap.set(oldId, newId);
   }
+  // Die Funde oben sind schon geschrieben (keine Transaktion über beide Loops) — ein einzelner
+  // kaputter Anhang (z.B. abgeschnittenes/verändertes Base64) darf den Rest des Imports nicht
+  // abbrechen, sonst bleiben Funde ohne ihre Anhänge zurück und ein erneuter Versuch würde alle
+  // Funde nochmal (mit neuen IDs) importieren. Pro Anhang überspringen + loggen statt abbrechen.
   const atts = payload.attachments || [];
+  let attOk = 0;
   for (let i = 0; i < atts.length; i++) {
     const a = atts[i];
-    const blob = base64ToBlob(a.dataBase64, a.mime);
-    const detId = a.detId != null && idMap.has(a.detId) ? idMap.get(a.detId) : null;
-    await addAttachment({ detId, key: a.key, label: a.label, kind: a.kind, blob, mime: a.mime, note: a.note, ts: a.ts });
+    try {
+      const blob = base64ToBlob(a.dataBase64, a.mime);
+      const detId = a.detId != null && idMap.has(a.detId) ? idMap.get(a.detId) : null;
+      await addAttachment({ detId, key: a.key, label: a.label, kind: a.kind, blob, mime: a.mime, note: a.note, ts: a.ts });
+      attOk++;
+    } catch (e) { console.warn('Anhang übersprungen (defekt):', a.key, e); }
     if (onProgress) onProgress(i + 1, atts.length);
   }
-  return { detCount: payload.detections.length, attCount: atts.length };
+  return { detCount: payload.detections.length, attCount: attOk };
 }

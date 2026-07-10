@@ -260,7 +260,9 @@ function _escText(s) {
 // BirdNET) bekommen einen generischen Eintrag, damit Karte/Sammlung/Modal funktionieren.
 export function ensureSpecies({ sci, name, rarity = 'common' }) {
   const scil = (sci || '').toLowerCase();
-  const existing = SPECIES_LIST.find(s => s.sci.toLowerCase() === scil);
+  // Nur bei vorhandenem wiss. Namen als Treffer werten — sonst würden zwei verschiedene
+  // Funde ohne sci (beide scil==='') fälschlich auf denselben ersten Generic-Eintrag matchen.
+  const existing = scil ? SPECIES_LIST.find(s => s.sci.toLowerCase() === scil) : null;
   if (existing) return existing.key;
   const key = 'x_' + (sci || name || 'unbekannt').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
   if (!SPECIES[key]) {

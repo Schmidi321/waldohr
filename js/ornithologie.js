@@ -4,7 +4,40 @@ import { routeTracker } from './route.js';
 import { showInfoToast } from './ui.js';
 
 const $ = id => document.getElementById(id);
-const todayStr = () => new Date().toISOString().slice(0, 10);
+// Lokales Kalenderdatum statt UTC (toISOString) — sonst rutscht ein Fund kurz nach lokaler
+// Mitternacht (UTC+1/+2) noch auf den Vortag: falsche Gruppierung in _groupByDateSpecies und
+// falsches Datum in eBird/ornitho/NABU-Exporten.
+function _localDateStr(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+const todayStr = () => _localDateStr(new Date());
+
+// Sitzungsname ist freier Nutzer-Text (Input-Feld) und wird unten via innerHTML gerendert ->
+// escapen, sonst HTML/Script-Injection über das Namensfeld möglich (gleiches Muster wie esc()
+// in app.js showFixResult für fremden Peer-Input).
+function _escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// localStorage.setItem kann bei vollem Speicher (QuotaExceededError) werfen — wurde bisher an
+// mehreren Stellen mit bloßem catch{} verschluckt, die Sitzung ging dann kommentarlos verloren.
+// Wenigstens sichtbar machen, damit klar ist, dass nichts gespeichert wurde.
+function _warnStorageFail(what) {
+  showInfoToast('⚠️ Nicht gespeichert', what + ' — der Speicherplatz im Browser ist voll.', '⚠️');
+}
+
+// GPS-Punkte werden alle 10s aufgezeichnet — bei langen/vielen Transekten wächst
+// waldohr.tx.sessions unbegrenzt (nur Session-ANZAHL ist gedeckelt, nicht die Byte-Größe) und
+// reißt schneller an die localStorage-Quote. Vor dem Speichern gleichmäßig auf max.
+// _MAX_TX_POINTS verdünnen — die GPX-Route bleibt brauchbar, nur feinkörniger geglättet.
+const _MAX_TX_POINTS = 300;
+function _capPoints(points) {
+  if (!points || points.length <= _MAX_TX_POINTS) return points;
+  const step = points.length / _MAX_TX_POINTS;
+  const out = [];
+  for (let i = 0; i < _MAX_TX_POINTS; i++) out.push(points[Math.floor(i * step)]);
+  return out;
+}
 
 // ---- CSV / download helpers ----
 function _csvBlob(rows) {
@@ -31,7 +64,7 @@ function _showStartPopup(label) {
 function _groupByDateSpecies(dets) {
   const map = new Map();
   for (const d of dets) {
-    const date = new Date(d.ts).toISOString().slice(0, 10);
+    const date = _localDateStr(new Date(d.ts));
     const k = date + '__' + d.key;
     if (!map.has(k)) map.set(k, { species: d.species, sci: d.sci || '', key: d.key, date, count: 0, firstTs: d.ts, lat: d.lat, lng: d.lng });
     const g = map.get(k);
@@ -69,7 +102,7 @@ function _exportBirdnetNotebook(dets) {
       d.species, d.sci || '',
       d.confidence != null ? d.confidence.toFixed(2) : '',
       d.ts,
-      dt.toISOString().slice(0, 10),
+      _localDateStr(dt),
       dt.toTimeString().slice(0, 8),
       d.lat?.toFixed(6) ?? '', d.lng?.toFixed(6) ?? '',
       d.source || 'mic', 'WaldOhr'
@@ -267,7 +300,7 @@ function _savePkSession(startTs, species) {
     if (sessions.length > 100) sessions.length = 100;
     localStorage.setItem('waldohr.pk.sessions', JSON.stringify(sessions));
     return 0; // index of the newly saved session
-  } catch { return -1; }
+  } catch { _warnStorageFail('Punkt-Zählung'); return -1; }
 }
 
 // ---- Transekt-Zählung (feste Route, freie Dauer) ----
@@ -339,11 +372,11 @@ function _initTransekt() {
 function _saveTxSession(startTs, endTs, species, distKm, points) {
   try {
     const sessions = JSON.parse(localStorage.getItem('waldohr.tx.sessions') || '[]');
-    sessions.unshift({ name: '', ts: Date.now(), startTs, endTs, species, distKm, points });
+    sessions.unshift({ name: '', ts: Date.now(), startTs, endTs, species, distKm, points: _capPoints(points) });
     if (sessions.length > 50) sessions.length = 50;
     localStorage.setItem('waldohr.tx.sessions', JSON.stringify(sessions));
     return 0;
-  } catch { return -1; }
+  } catch { _warnStorageFail('Transekt-Sitzung'); return -1; }
 }
 
 async function _showTxResults(el, startTs, summary, points) {
@@ -377,7 +410,7 @@ async function _showTxResults(el, startTs, summary, points) {
       try {
         const sessions = JSON.parse(localStorage.getItem('waldohr.tx.sessions') || '[]');
         if (sessions[sessionIdx] != null) { sessions[sessionIdx].name = inp.value; localStorage.setItem('waldohr.tx.sessions', JSON.stringify(sessions)); }
-      } catch {}
+      } catch { _warnStorageFail('Sitzungsname'); }
     };
   }
   _showPkEndPopup(list.length, 'auf ' + fmtDist(distKm) + ' Strecke erkannt');
@@ -411,7 +444,7 @@ async function _showPkResults(el, startTs) {
       try {
         const sessions = JSON.parse(localStorage.getItem('waldohr.pk.sessions') || '[]');
         if (sessions[sessionIdx] != null) { sessions[sessionIdx].name = inp.value; localStorage.setItem('waldohr.pk.sessions', JSON.stringify(sessions)); }
-      } catch {}
+      } catch { _warnStorageFail('Sitzungsname'); }
     };
   }
   _showPkEndPopup(list.length);
@@ -456,7 +489,7 @@ function _renderProtokolle() {
     const d = new Date(s.ts);
     const dateStr = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const timeStr = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-    const label = s.name || ((isTx ? '🗺️ Transekt vom ' : '📍 Sitzung vom ') + dateStr);
+    const label = _escHtml(s.name || ((isTx ? '🗺️ Transekt vom ' : '📍 Sitzung vom ') + dateStr));
 
     const card = document.createElement('div');
     card.className = 'infoblock';
@@ -533,7 +566,7 @@ function _renderProtokolle() {
         ss.splice(s._idx, 1);
         localStorage.setItem(key, JSON.stringify(ss));
         _renderProtokolle();
-      } catch {}
+      } catch { _warnStorageFail('Löschen'); }
     });
 
     card.append(header, body);
@@ -563,7 +596,7 @@ async function _renderExportSection() {
       </label>
       ${sessions.map((s, i) => {
         const d = new Date(s.ts);
-        const label = s.name || ('Sitzung ' + d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' }) + ' ' + d.toLocaleTimeString('de-DE', { hour:'2-digit', minute:'2-digit' }));
+        const label = _escHtml(s.name || ('Sitzung ' + d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' }) + ' ' + d.toLocaleTimeString('de-DE', { hour:'2-digit', minute:'2-digit' })));
         return `<label style="display:flex;align-items:center;gap:10px;padding:7px 0;font-size:12px;cursor:pointer;border-bottom:1px solid var(--stroke)">
           <input type="checkbox" class="du-sess-chk" data-idx="${i}" style="width:16px;height:16px;accent-color:var(--lime)">
           <span style="flex:1;color:var(--ink)">${label}</span>

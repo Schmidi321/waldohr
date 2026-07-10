@@ -165,9 +165,13 @@ function _syncNewPeers() {
 // Periodischer Re-Sync ALLER Partner: Quarzuhren driften 10–50 ppm — nach einer halben Stunde
 // im Feld wäre der einmalige Offset vom Koppeln um Dutzende Millisekunden weg und würde jede
 // Laufzeitmessung (und still den Feinabgleich) vergiften. Alle 60 s mit 3 Runden nachziehen.
+// Bewusst OHNE _clockOffsetMs.has(id)-Prüfung: ein Partner, dessen allererster Sync-Versuch
+// (in _syncNewPeers, 5 Runden) komplett fehlschlug, hat nie einen Offset bekommen und würde
+// sonst für den Rest der Session nie wieder versucht (er steht ja schon in _syncedPeers) —
+// so bleibt er alle 60 s ein Kandidat, bis der Abgleich einmal klappt.
 function _resyncAll() {
   for (const { id } of hub.peerList()) {
-    if (_clockOffsetMs.has(id) && !_syncBusy.has(id)) _syncClock(id, 3);
+    if (!_syncBusy.has(id)) _syncClock(id, 3);
   }
 }
 
@@ -196,6 +200,9 @@ async function _syncClock(peerId, rounds) {
       if (result && (!best || result.rtt < best.rtt)) best = result;
       await new Promise(r => setTimeout(r, 150));
     }
+    // Zwischenzeitlich getrennt (z.B. Nutzer hat detach() ausgelöst, während noch eine Runde
+    // lief) -> nicht mehr in bereits geleerte _clockOffsetMs/_calibBias einer neuen Session schreiben.
+    if (!isActive()) return;
     // Miese Verbindung (hoher RTT) -> alten Offset behalten statt einen schlechteren einzubauen.
     if (!best || best.rtt > 400) return;
     const old = _clockOffsetMs.get(peerId);
@@ -252,7 +259,7 @@ function _onMessage(msg, fromId) {
   if (msg.type === 'fix2d') {
     // 3-Geräte-Fix von der Zentrale. Partner-Strings sind fremder Input -> nur validierte Felder
     // übernehmen; die Anzeige (app.js) escaped den Artnamen zusätzlich.
-    if (typeof msg.lat !== 'number' || typeof msg.lng !== 'number' || Math.abs(msg.lat) > 90 || Math.abs(msg.lng) > 180) return;
+    if (!Number.isFinite(msg.lat) || !Number.isFinite(msg.lng) || Math.abs(msg.lat) > 90 || Math.abs(msg.lng) > 180) return;
     if (_onResult) {
       _onResult({
         method: 'fix', key: String(msg.key || ''), species: String(msg.species || 'Unbekannt').slice(0, 60),

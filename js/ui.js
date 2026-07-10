@@ -116,7 +116,10 @@ export function initUI() {
     nav.forEach(x => x.classList.remove('on')); b.classList.add('on');
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     $('v-' + b.dataset.v).classList.add('active');
-    if (b.dataset.v === 'map') invalidateMapSize();
+    if (b.dataset.v === 'map') {
+      invalidateMapSize();
+      if (mapNeedsRender) renderMap(lastMapDets);   // während "unsichtbar" übersprungenes volles Rendern nachholen
+    }
   });
   $('sheetScrim').onclick = closeSheet;
   $('sheetClose').onclick = closeSheet;
@@ -200,15 +203,18 @@ export function initUI() {
   const timingClose = $('timingClose'); if (timingClose) timingClose.onclick = closeTimingModal;
   // Timing-Controls: Auto-Save bei jeder Änderung — kein Speichern-Button nötig
   function autoSaveTiming() {
+    // parseInt(x)||default würde eine echte 0 (z.B. ":00"-Minuten oder "00:"-Stunde) still-
+    // schweigend durch den Default ersetzen (0 ist falsy) — NaN-Check erhält echte Nullen.
+    const numOr = (v, d) => { const n = parseInt(v, 10); return Number.isNaN(n) ? d : n; };
     const mc = getMorgenchor();
-    setMorgenchor({ enabled: $('mcEnabled')?.checked ?? mc.enabled, offsetMin: parseInt($('mcOffset')?.value) || 15 });
+    setMorgenchor({ enabled: $('mcEnabled')?.checked ?? mc.enabled, offsetMin: numOr($('mcOffset')?.value, 15) });
     const nm = getNachtModus();
     const nmStart = ($('nmTime')?.value || '22:00').split(':');
     const nmEnd = ($('nmEndTime')?.value || '23:30').split(':');
-    setNachtModus({ enabled: $('nmEnabled')?.checked ?? nm.enabled, hour: parseInt(nmStart[0]) || 22, minute: parseInt(nmStart[1]) || 0, endEnabled: $('nmEndEnabled')?.checked ?? nm.endEnabled, endHour: parseInt(nmEnd[0]) || 23, endMinute: parseInt(nmEnd[1]) || 30 });
+    setNachtModus({ enabled: $('nmEnabled')?.checked ?? nm.enabled, hour: numOr(nmStart[0], 22), minute: numOr(nmStart[1], 0), endEnabled: $('nmEndEnabled')?.checked ?? nm.endEnabled, endHour: numOr(nmEnd[0], 23), endMinute: numOr(nmEnd[1], 30) });
     const fw = getFotoWecker();
     const fwParts = ($('fwTime')?.value || '05:30').split(':');
-    setFotoWecker({ enabled: $('fwEnabled')?.checked ?? fw.enabled, hour: parseInt(fwParts[0]) || 5, minute: parseInt(fwParts[1]) || 30, vibrateOnly: $('fwVibrateOnly')?.checked ?? fw.vibrateOnly ?? false });
+    setFotoWecker({ enabled: $('fwEnabled')?.checked ?? fw.enabled, hour: numOr(fwParts[0], 5), minute: numOr(fwParts[1], 30), vibrateOnly: $('fwVibrateOnly')?.checked ?? fw.vibrateOnly ?? false });
   }
   ['mcEnabled','nmEnabled','nmEndEnabled','fwEnabled','fwVibrateOnly'].forEach(id => {
     const el = $(id); if (el) el.addEventListener('change', autoSaveTiming);
@@ -547,6 +553,9 @@ export function unregisterRecording(key) {
   refreshRecordingBadges();
 }
 export function clearRecordings() {
+  // Vor dem Leeren die gehaltenen blob:-URLs freigeben — sonst bleibt bei jedem erneuten Hydrieren
+  // (Backup-Import, DB-Reset) der gesamte vorherige Blob-Speicher unrevoked im Speicher hängen.
+  for (const r of RECORDINGS.values()) { try { URL.revokeObjectURL(r.url); } catch {} }
   RECORDINGS.clear();
   refreshRecordingBadges();
 }
@@ -800,7 +809,9 @@ function loadLeaflet() {
   return leafletPromise;
 }
 
-let mapInst = null, markersLayer = null, userMarker = null, lastMapDets = [], mapCenteredOnLive = false;
+let mapInst = null, markersLayer = null, userMarker = null, lastMapDets = [], mapCenteredOnLive = false, mapNeedsRender = false;
+// Ob der Karten-Tab gerade sichtbar ist (initUI toggelt "active" auf #v-map beim Tab-Wechsel).
+function _isMapTabVisible() { const v = document.getElementById('v-map'); return !!v && v.classList.contains('active'); }
 const peerMarkers = new Map(); // peerId -> { marker, lastAnimPos }
 const peerPositions = new Map(); // peerId -> {lat,lng}
 // Stufe 4: manuelle Positions-Korrektur + Ortungs-Marker der 3-Geräte-Fixes
@@ -820,6 +831,12 @@ export async function renderMap(dets) {
   if (count) count.textContent = geo.length + (geo.length === 1 ? ' Fund' : ' Funde');
   // Eigene Position zeigen, auch ganz ohne verortete Funde — nicht hinter dem Leerzustand verstecken.
   if (empty) empty.hidden = !!geo.length || !!livePos;
+  // app.js ruft renderMap() nach JEDER qualifizierenden Erkennung auf — der teure Teil (bis zu 200
+  // circleMarker + Popup-DOM neu aufbauen) lohnt sich nicht, solange der Karten-Tab gar nicht zu
+  // sehen ist (Nutzer auf Sammlung/Statistik). lastMapDets ist oben schon aktualisiert, also holt
+  // der nav-Handler in initUI beim Tab-Wechsel das volle Rendern einmalig nach (mapNeedsRender).
+  if (!_isMapTabVisible()) { mapNeedsRender = true; return; }
+  mapNeedsRender = false;
   // Nur abbrechen, wenn die Karte noch nie initialisiert wurde — sonst müssen alte Pins
   // weichen können (z.B. nach "Datenbank zurücksetzen"), auch ohne aktuellen GPS-Fix.
   if (!geo.length && !livePos && !mapInst) return;
@@ -897,8 +914,13 @@ function _walkerIconHtml(kind, badgeNum) {
 // Bewegt einen Marker weich von seiner aktuellen Position zur neuen (statt hart zu springen) und
 // dreht den kleinen Richtungspfeil in die Bewegungsrichtung. Bei der allerersten Platzierung
 // (kein vorheriger Punkt) wird direkt gesetzt, ohne zu gleiten (nichts, wovon man "herkommen" könnte).
+// Pro Marker aktive Glide-"Generation" (WeakMap, kein Leak): Peer-Updates treffen bei aktivem
+// Multi-Handy-Tracking (~300-500ms) öfter ein als eine Glide-Animation dauert (~900ms) — ohne
+// diesen Zähler würde der ältere, noch laufende Tick-Loop den Marker nach dem neueren Zielwechsel
+// wieder auf sein inzwischen veraltetes Ziel zurückspringen lassen (sichtbares Rückwärts-Zucken).
+const _glideGen = new WeakMap();
 function _glideMarker(marker, fromPos, toPos, durMs = 900) {
-  if (!fromPos) { marker.setLatLng([toPos.lat, toPos.lng]); return; }
+  if (!fromPos) { marker.setLatLng([toPos.lat, toPos.lng]); _glideGen.set(marker, (_glideGen.get(marker) || 0) + 1); return; }
   const el = marker.getElement();
   const arrow = el && el.querySelector('.map-heading-arrow');
   const distM = haversineKm(fromPos, toPos) * 1000;
@@ -907,8 +929,11 @@ function _glideMarker(marker, fromPos, toPos, durMs = 900) {
     arrow.style.transform = `rotate(${brg}deg)`;
     arrow.classList.add('visible');
   }
+  const gen = (_glideGen.get(marker) || 0) + 1;
+  _glideGen.set(marker, gen);
   const t0 = performance.now();
   const tick = now => {
+    if (_glideGen.get(marker) !== gen) return; // von einem neueren Glide für denselben Marker abgelöst
     const p = Math.min(1, (now - t0) / durMs);
     const lat = fromPos.lat + (toPos.lat - fromPos.lat) * p;
     const lng = fromPos.lng + (toPos.lng - fromPos.lng) * p;
@@ -1177,6 +1202,10 @@ async function fetchSpeciesAudio(sci) {
   return url;
 }
 let callAudio = null;
+// Deckt die Lücke zwischen Tap und dem Setzen von callAudio ab: solange fetchSpeciesAudio noch
+// nicht zurück ist, steht callAudio noch auf null, also würde ein zweiter schneller Tap den
+// paused-Guard unten ebenfalls passieren und ein eigenes, konkurrierendes Audio-Objekt erzeugen.
+let callBusy = false;
 function stopCallAudio() {
   if (callAudio) { callAudio.pause(); callAudio = null; }
   if (typeof window.__waldohrResumeMicAfterPlayback === 'function') window.__waldohrResumeMicAfterPlayback();
@@ -1186,22 +1215,28 @@ function stopCallAudio() {
 }
 async function togglePlayCall(sci) {
   if (callAudio && !callAudio.paused) { stopCallAudio(); return; }
+  if (callBusy) return;   // vorherige Anfrage noch in Flight — zweiten Tap ignorieren statt zu überlagern
   if (!xcKeyGet()) {
     const label = $('mPlayLabel'); if (label) label.textContent = 'Xeno-canto-Key fehlt (⚙ Einstellungen)';
     setTimeout(() => { if (label) label.textContent = 'Ruf anhören'; }, 3000);
     return;
   }
+  callBusy = true;
   const label = $('mPlayLabel'); if (label) label.textContent = 'Suche Aufnahme …';
   const url = await fetchSpeciesAudio(sci);
-  if (!url) { if (label) label.textContent = 'Keine Aufnahme gefunden'; setTimeout(() => { if (label) label.textContent = 'Ruf anhören'; }, 2500); return; }
+  if (!url) { callBusy = false; if (label) label.textContent = 'Keine Aufnahme gefunden'; setTimeout(() => { if (label) label.textContent = 'Ruf anhören'; }, 2500); return; }
   // Mikro kurz pausieren: sonst routen iOS/Android die Wiedergabe leise über den Hörer statt
   // den Lautsprecher (geteilte Aufnahme+Wiedergabe-Audiosession), und das eigene Mikro würde
   // die abgespielte Referenzaufnahme sonst als neue Live-Erkennung missverstehen.
   if (typeof window.__waldohrSuspendMicForPlayback === 'function') await window.__waldohrSuspendMicForPlayback();
-  callAudio = new Audio(url);
-  callAudio.onended = stopCallAudio;
-  callAudio.onerror = () => { if (label) label.textContent = 'Wiedergabe fehlgeschlagen'; stopCallAudio(); };
-  try { await callAudio.play(); } catch (e) { console.warn('play', e); if (label) label.textContent = 'Wiedergabe fehlgeschlagen'; stopCallAudio(); return; }
+  // Lokale Referenz statt direkt mit callAudio zu arbeiten: so kann onended/onerror einer
+  // inzwischen überholten Instanz nicht mehr die NEUERE, noch laufende callAudio-Referenz nullen.
+  const audio = new Audio(url);
+  callAudio = audio;
+  callBusy = false;
+  audio.onended = () => { if (callAudio === audio) stopCallAudio(); };
+  audio.onerror = () => { if (label) label.textContent = 'Wiedergabe fehlgeschlagen'; if (callAudio === audio) stopCallAudio(); };
+  try { await audio.play(); } catch (e) { console.warn('play', e); if (label) label.textContent = 'Wiedergabe fehlgeschlagen'; if (callAudio === audio) stopCallAudio(); return; }
   if (label) label.textContent = 'Spielt … (Xeno-canto)';
   const icon = $('mPlayIcon'); if (icon) icon.innerHTML = '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>';
 }
@@ -1502,6 +1537,6 @@ export async function sharePhotoCard(photoUrl, key, label, pos) {
   } else if (navigator.share) {
     await navigator.share({ title, text, url: appUrl });
   } else if (blob) {
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+    _dlBlob(blob, fname);   // wie beim eBird/Ornitho-Export: revoked die object URL nach Klick statt sie zu leaken
   }
 }

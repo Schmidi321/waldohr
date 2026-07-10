@@ -179,14 +179,24 @@ export async function createAnswerer(offerText) {
 // ausgetauscht wurden) — löst mit dem geöffneten RTCDataChannel auf oder wirft bei Timeout/Fehler.
 // Nimmt sowohl einen fertigen RTCDataChannel als auch ein Promise darauf entgegen (Seite B liefert
 // aus createAnswerer() ein Promise, da der Kanal erst bei echter Verbindung entsteht).
-export async function waitForOpen(dcOrPromise, timeoutMs = 15000) {
-  const dc = await dcOrPromise;
-  return new Promise((res, rej) => {
-    if (dc.readyState === 'open') { res(dc); return; }
-    const to = setTimeout(() => rej(new Error('Verbindung nicht zustande gekommen (Timeout)')), timeoutMs);
-    dc.addEventListener('open', () => { clearTimeout(to); res(dc); }, { once: true });
-    dc.addEventListener('error', e => { clearTimeout(to); rej(e); }, { once: true });
+export function waitForOpen(dcOrPromise, timeoutMs = 15000) {
+  // Der Timeout muss auch die Wartezeit auf dcOrPromise selbst abdecken: bei Seite B (Antwortende)
+  // ist das ein Promise, das erst auflöst, wenn 'ondatachannel' feuert — kommt die Gegenseite nie
+  // dazu, den Antwort-Code zu scannen (App zu, anderes Netz, ICE nie erfolgreich), würde ein
+  // Timeout, der erst NACH diesem await startet, nie greifen und die Seite hinge für immer fest.
+  let to;
+  const timeout = new Promise((_, rej) => {
+    to = setTimeout(() => rej(new Error('Verbindung nicht zustande gekommen (Timeout)')), timeoutMs);
   });
+  const wait = (async () => {
+    const dc = await dcOrPromise;
+    if (dc.readyState === 'open') return dc;
+    return new Promise((res, rej) => {
+      dc.addEventListener('open', () => res(dc), { once: true });
+      dc.addEventListener('error', e => rej(e), { once: true });
+    });
+  })();
+  return Promise.race([wait, timeout]).finally(() => clearTimeout(to));
 }
 
 // ---- Verbindungsqualität überwachen ----

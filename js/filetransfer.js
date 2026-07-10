@@ -10,6 +10,7 @@ const MAX_FILE_SIZE = 25 * 1024 * 1024; // Sicherheitsgrenze, damit eine Übertr
 const BUFFER_HIGH = 1 * 1024 * 1024; // ab hier abwarten, bevor weitere Stücke gesendet werden
 
 let _unsub = null;
+let _unsubPeers = null;
 let _onIncoming = null;
 let _onProgress = null;
 let _incoming = new Map(); // transferId -> { chunks, mime, kind, name, total, received }
@@ -20,13 +21,27 @@ export function attach(onIncoming, onProgress) {
   _onProgress = onProgress || null;
   _incoming = new Map();
   _unsub = hub.onMessage((msg, fromId) => _handle(msg, fromId));
+  // Räumt liegen gebliebene Übertragungen auf, wenn EIN Partner die Verbindung verliert (im
+  // Stern-Modell bleiben ja die übrigen bestehen) — ohne das würden bei jedem Abbruch mitten in
+  // der Übertragung (instabiles WLAN unterwegs) bis zu 25 MB bereits empfangener Chunks pro
+  // Versuch dauerhaft im Speicher hängen bleiben, da 'fileend' dann nie kommt.
+  _unsubPeers = hub.onPeerListChange(_cleanupOrphaned);
 }
 
 export function detach() {
   if (_unsub) _unsub();
   _unsub = null;
+  if (_unsubPeers) _unsubPeers();
+  _unsubPeers = null;
   _onIncoming = null; _onProgress = null;
   _incoming.clear();
+}
+
+function _cleanupOrphaned() {
+  const activeIds = new Set(hub.peerList().map(p => String(p.id)));
+  for (const key of _incoming.keys()) {
+    if (!activeIds.has(key.slice(0, key.indexOf(':')))) _incoming.delete(key);
+  }
 }
 
 export function isActive() {
@@ -83,7 +98,8 @@ function _handle(raw, fromId) {
   if (raw.type === 'filechunk') {
     const t = _incoming.get(key);
     if (!t || raw.i < 0 || raw.i >= t.total) return;
-    t.chunks[raw.i] = _base64ToBytes(raw.data);
+    if (typeof raw.data !== 'string') return; // fehlerhafte/fremde Nachricht, wie chat.js es für chatvoice schon prüft
+    try { t.chunks[raw.i] = _base64ToBytes(raw.data); } catch { console.warn('filetransfer: ungültige Chunk-Daten, ignoriert'); return; }
     t.received++;
     if (_onProgress) _onProgress({ direction: 'receive', sent: t.received, total: t.total });
     return;
@@ -91,7 +107,9 @@ function _handle(raw, fromId) {
   if (raw.type === 'fileend') {
     const t = _incoming.get(key);
     _incoming.delete(key);
-    if (!t || t.chunks.some(c => !c)) { if (t) console.warn('filetransfer: unvollständige Übertragung, verworfen'); return; }
+    // Zählervergleich statt Lücken-Suche im Array: t.chunks ist ein "sparse" Array (new Array(n)),
+    // .some() überspringt unbesetzte Indizes stillschweigend statt sie als fehlend zu erkennen.
+    if (!t || t.received !== t.total) { if (t) console.warn('filetransfer: unvollständige Übertragung, verworfen'); return; }
     const blob = new Blob(t.chunks, { type: t.mime || 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     if (_onIncoming) _onIncoming({ blob, url, kind: t.kind, name: t.name, mime: t.mime, peerId: fromId });

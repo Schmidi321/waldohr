@@ -1,5 +1,5 @@
 // Service Worker — cacht die App-Shell, damit Waldohr offline startet.
-const CACHE = 'waldohr-v110';
+const CACHE = 'waldohr-v111';
 const ASSETS = [
   '.', 'index.html', 'styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-180.png',
   'js/app.js', 'js/ui.js', 'js/db.js', 'js/audio.js', 'js/recognizer.js', 'js/species.js', 'js/species-extra.js', 'js/gemini.js',
@@ -14,7 +14,14 @@ self.addEventListener('install', e => {
   // könnte — { cache: 'reload' } erzwingt pro Datei einen frischen Netzwerk-Abruf.
   e.waitUntil(
     caches.open(CACHE)
-      .then(c => Promise.all(ASSETS.map(url => fetch(url, { cache: 'reload' }).then(res => c.put(url, res)))))
+      .then(c => Promise.all(ASSETS.map(url => fetch(url, { cache: 'reload' }).then(res => {
+        // res.ok prüfen: fetch() lehnt nur bei Netzwerkfehlern ab, nicht bei 404/500 —
+        // ohne diese Prüfung würde eine fehlerhafte Antwort dauerhaft (bis zum nächsten
+        // Cache-Versionsbump) als "gültige" Datei gecacht. Lieber Install fehlschlagen
+        // lassen (und retryen), als einen unvollständigen Cache stillschweigend zu übernehmen.
+        if (!res.ok) throw new Error(`Precache fehlgeschlagen für ${url}: ${res.status}`);
+        return c.put(url, res);
+      }))))
       .then(() => self.skipWaiting())
   );
 });
@@ -34,9 +41,19 @@ self.addEventListener('fetch', e => {
 
   e.respondWith(
     caches.match(req).then(hit => hit || fetch(req).then(res => {
-      const copy = res.clone();
-      caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+      // Nur ok-Antworten cachen — sonst würde ein transienter 404/500 dauerhaft
+      // (bis zum nächsten Cache-Versionsbump) als "gültige" Antwort gecacht bleiben.
+      if (res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+      }
       return res;
-    }).catch(() => caches.match('index.html')))
+    }).catch(() => {
+      // Fallback auf die App-Shell nur bei Navigations-Requests: sonst würde ein
+      // fehlgeschlagener Fetch einer Nicht-HTML-Ressource (z.B. Modell-/Labels-Datei)
+      // stillschweigend HTML mit Status 200 zurückliefern, statt den Fehler durchzureichen.
+      if (req.mode === 'navigate') return caches.match('index.html');
+      return Response.error();
+    }))
   );
 });

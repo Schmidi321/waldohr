@@ -99,8 +99,11 @@ function _drawRibbon(ctx, w) {
 function _render() {
   if (!_canvas || !_el) return;
   const ctx = _canvas.getContext('2d');
-  const w = _canvas.width = _canvas.clientWidth;
-  const h = _canvas.height = _canvas.clientHeight;
+  // Backing-Store nur bei tatsächlicher Größenänderung neu setzen — sonst wird bei jedem der
+  // 60 Frames/s ein volles Canvas-Reset erzwungen, obwohl das Handy meist ruhig gehalten wird.
+  const w = _canvas.clientWidth, h = _canvas.clientHeight;
+  if (_canvas.width !== w) _canvas.width = w;
+  if (_canvas.height !== h) _canvas.height = h;
   ctx.clearRect(0, 0, w, h);
 
   if (_heading == null) {
@@ -167,7 +170,7 @@ function _candidatesFrom(r) {
   // 3-Geräte-Fix: eindeutige Position bekannt -> EINE Zone mit Richtung + Entfernung von der
   // eigenen Position aus. Zonenbreite aus der Orts-Unsicherheit auf die Entfernung projiziert.
   if (r.method === 'fix') {
-    if (!r.myPos || typeof r.lat !== 'number' || typeof r.lng !== 'number') return null;
+    if (!r.myPos || !Number.isFinite(r.lat) || !Number.isFinite(r.lng)) return null;
     const distM = Math.max(5, Math.round(haversineKm(r.myPos, r) * 1000));
     const bearing = (bearingDeg(r.myPos, r) + 360) % 360;
     // Zonenbreite aus der Richtungs-Unsicherheit des Fixes (Näherung: von der Zentrale aus

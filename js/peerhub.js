@@ -81,8 +81,12 @@ export function onTopoChange(fn) { _topoListeners.add(fn); return () => _topoLis
 // die Nachricht ursprünglich verschickt hat (auch bei weitergeleiteten Nachrichten über die Zentrale).
 export function onMessage(fn) { _handlers.add(fn); return () => _handlers.delete(fn); }
 
+// Gibt zurück, ob der Versand tatsächlich geklappt hat (Kanal offen + kein Fehler beim Senden) —
+// z.B. js/chat.js braucht das für Sprachnachrichten, um bei einer zu großen Nachricht (Datenkanäle
+// haben ein implementierungsabhängiges Größenlimit) nicht fälschlich "gesendet" anzuzeigen.
 function _send(dc, obj) {
-  if (dc.readyState === 'open') { try { dc.send(JSON.stringify(obj)); } catch {} }
+  if (dc.readyState !== 'open') return false;
+  try { dc.send(JSON.stringify(obj)); return true; } catch { return false; }
 }
 
 // Nachricht an einen bestimmten Partner.
@@ -91,9 +95,14 @@ export function sendTo(peerId, obj) {
   if (p) _send(p.dc, obj);
 }
 
-// Nachricht an ALLE aktuell verbundenen Partner (eigener Ursprung).
+// Nachricht an ALLE aktuell verbundenen Partner (eigener Ursprung). Rückgabewert: true nur, wenn
+// es mindestens einen Partner gab UND der Versand bei ALLEN geklappt hat (sonst false) — nötig,
+// damit Aufrufer wie chat.js einen fehlgeschlagenen Versand (z.B. Nachricht zu groß) erkennen
+// können, statt ihn stillschweigend als erfolgreich zu behandeln.
 export function broadcast(obj) {
-  for (const { dc } of _peers.values()) _send(dc, obj);
+  let ok = _peers.size > 0;
+  for (const { dc } of _peers.values()) { if (!_send(dc, obj)) ok = false; }
+  return ok;
 }
 
 // Größter Sendepuffer über ALLE aktuell verbundenen Kanäle — Backpressure-Grundlage für große
@@ -132,7 +141,15 @@ function _onMessage(fromId, e) {
     for (const fn of _topoListeners) { try { fn(); } catch {} }
     return;
   }
-  const originId = msg._origin ?? fromId;
+  // _origin nur übernehmen, wenn ICH SELBST gerade eine Speiche bin (genau 1 Verbindung = zur
+  // Zentrale) — dann stammt _origin ehrlich aus DEREN Relay-Logik (s. unten), der ich als einziger
+  // Gegenstelle ohnehin vertrauen muss. Bin ich dagegen selbst die Zentrale (2+ Verbindungen),
+  // NIE einem von einer Speiche direkt gesendeten _origin trauen: `msg._hop`/`msg._origin` sind
+  // nur JSON-Felder, die jede Gegenstelle beliebig selbst setzen kann — eine böswillige Speiche
+  // könnte sonst mit `{_hop:true, _origin:<fremde Id>}` die Identität eines anderen Partners
+  // fälschen (Peer-IDs sind kleine, erratbare Zahlen). Die Zentrale muss originId daher IMMER aus
+  // der echten Verbindung (fromId) ableiten, egal was die Nachricht selbst behauptet.
+  const originId = (_peers.size <= 1 && msg._origin != null) ? msg._origin : fromId;
   // Nur die Zentrale (2+ gleichzeitige Verbindungen) leitet weiter, und nur frische, dafür
   // vorgesehene Nachrichten (noch kein _hop, relay!==false) — verhindert sowohl Weiterleitungs-
   // Schleifen als auch, dass reine Punkt-zu-Punkt-Protokolle (z.B. locate.js' Uhren-Abgleich per
@@ -141,5 +158,7 @@ function _onMessage(fromId, e) {
     const relayMsg = { ...msg, _hop: true, _origin: originId };
     for (const [id, p] of _peers) { if (id !== fromId) _send(p.dc, relayMsg); }
   }
-  for (const fn of _handlers) fn(msg, originId);
+  // Wie bei den topo-/Peer-Listen-Listenern oben: ein Handler, der bei kaputten/unerwarteten
+  // Nachrichten wirft, darf die Zustellung an die übrigen angemeldeten Handler nicht abbrechen.
+  for (const fn of _handlers) { try { fn(msg, originId); } catch (e) { console.warn('peerhub: Handler-Fehler', e); } }
 }

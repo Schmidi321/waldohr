@@ -3,6 +3,7 @@ import { SPECIES } from './species.js';
 
 const DB_NAME = 'waldohr', DB_VER = 2, STORE = 'detections', ATT_STORE = 'attachments';
 let _db = null;
+let _dbPromise = null; // In-Flight-Open cachen, sonst starten parallele Aufrufer vor dem ersten onsuccess je eine eigene Connection (Leak)
 
 function open() {
   return new Promise((res, rej) => {
@@ -25,10 +26,10 @@ function open() {
       }
     };
     r.onsuccess = () => { _db = r.result; res(_db); };
-    r.onerror = () => rej(r.error);
+    r.onerror = () => { _dbPromise = null; rej(r.error); }; // Fehlschlag nicht dauerhaft cachen, sonst blockiert ein transienter Fehler alle künftigen Retries
   });
 }
-async function db() { return _db || (await open()); }
+async function db() { return _db || (_dbPromise || (_dbPromise = open())); }
 
 export async function addDetection(d) {
   const database = await db();
@@ -165,12 +166,18 @@ export async function migrateGeo() {
 // Fake-Eifel-Position bekommen haben: erkennbar daran, dass sie nicht aus dem Seed
 // stammen, aber exakt im Jitter-Bereich um DEMO_BASE liegen. Entfernt nur die Koordinaten,
 // der Fund selbst bleibt erhalten (taucht dann zu Recht nicht mehr auf der Karte auf).
+// NUR EINMALIG je Installation (Flag in localStorage): DEMO_BASE liegt im echten
+// Nationalpark Eifel — ohne die Sperre würde die Heuristik bei JEDEM Start auch die
+// GPS-Koordinaten eines Nutzers löschen, der dort tatsächlich real unterwegs ist.
+const GEO_CLEANUP_DONE_KEY = 'waldohr.geoCleanupDone';
 export async function cleanupFakeGeo() {
+  try { if (localStorage.getItem(GEO_CLEANUP_DONE_KEY)) return 0; } catch {}
   const dets = await allDetections();
   const bad = dets.filter(d =>
     d.source !== 'seed' && typeof d.lat === 'number' && typeof d.lng === 'number' &&
     Math.abs(d.lat - DEMO_BASE.lat) <= 0.003 && Math.abs(d.lng - DEMO_BASE.lng) <= 0.003
   );
+  try { localStorage.setItem(GEO_CLEANUP_DONE_KEY, '1'); } catch {}
   if (!bad.length) return 0;
   const database = await db();
   await new Promise((res, rej) => {

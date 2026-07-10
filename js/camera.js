@@ -3,7 +3,7 @@
 let _stream = null, _videoTrack = null;
 let _stream2 = null, _videoTrack2 = null;
 let _analyser = null, _audioCtx = null, _meterFreqs = null, _meterRaf = null;
-let _mr = null, _mrChunks = [];
+let _mr = null, _mrChunks = [], _recordingStarting = false;
 let _mode = 'photo';
 let _zoomSupported = false, _zoomMin = 1, _zoomMax = 1;
 let _onCapture = null;
@@ -172,9 +172,17 @@ function _renderZoom(v) {
 // eine spürbare Unterbrechung der Kamera-Pipeline (Frame-Drop) — deshalb passiert das NIE
 // während einer laufenden Videoaufnahme (dort zoomt der Canvas-Kompositor rein digital) und
 // außerhalb von Aufnahmen nur gedrosselt.
-function _syncHwZoom(v) {
+async function _syncHwZoom(v) {
   if (!_zoomSupported || !_videoTrack || _isRecording()) return;
-  try { _videoTrack.applyConstraints({ advanced: [{ zoom: v }] }); _hwZoom = v; } catch {}
+  // applyConstraints() lehnt selten asynchron ab (Wert kurz außerhalb des Bereichs, Track busy/
+  // beendet) — das ist eine Promise-Rejection, kein synchroner Throw, darum hier bewusst AWARTEN
+  // und fangen. Ohne await liefe die Funktion einfach weiter und _hwZoom würde auf den angefragten
+  // Wert gesetzt, obwohl die Kamera ihn nie übernommen hat — das digitale Crop-Modell (Vorschau,
+  // Foto-Crop, Aufnahme-Canvas) würde dauerhaft vom tatsächlichen Hardware-Zoom abweichen.
+  try {
+    await _videoTrack.applyConstraints({ advanced: [{ zoom: v }] });
+  } catch (e) { console.warn('hw zoom', e); return; }
+  _hwZoom = v;
   _renderZoom(_viewZoom); // Digital-Anteil neu berechnen (schrumpft nach dem Sync auf ~1)
 }
 
@@ -607,7 +615,15 @@ function _updateModeUI() {
     const azWrap = document.getElementById('camAutoZoomWrap');
     if (azWrap) azWrap.hidden = true;
     if (azToggle) azToggle.classList.remove('active');
-    if (_intervalTimer) { clearInterval(_intervalTimer); _intervalTimer = null; const ib = document.getElementById('camInterval'); if (ib) ib.classList.remove('on'); }
+  }
+  // Intervall-Aufnahme gehört zum Fotomodus (camInterval-Button steckt in camPhotoExtras) — darum
+  // beim Verlassen von 'photo' stoppen, nicht erst beim Verlassen von 'video': sonst läuft der
+  // Timer beim direkten Wechsel photo -> video unsichtbar (Button nicht mehr erreichbar) weiter.
+  if (_mode !== 'photo' && _intervalTimer) {
+    clearInterval(_intervalTimer); _intervalTimer = null;
+    const ib = document.getElementById('camInterval'); if (ib) ib.classList.remove('on');
+    if (_intervalCountdown) { _intervalCountdown.remove(); _intervalCountdown = null; }
+    _intervalNext = 0;
   }
   // Zeitraffer-Intervallauswahl nur im Zeitraffer-Modus sichtbar
   const lapseWrap = document.getElementById('camLapseWrap');
@@ -706,61 +722,75 @@ async function _toggleVideo() {
   if (_mr && _mr.state === 'recording') {
     _stopZoomAnim(); _mr.stop(); return;
   }
+  // Reentrancy-Sperre (gleiches Muster wie _burstActive): der Hardware-Zoom-Reset gleich unten
+  // awaitet ~350ms, BEVOR _mr überhaupt existiert — ein Doppel-Tap auf den Auslöser in diesem
+  // Fenster sähe zweimal "_mr ist null" und würde zwei MediaRecorder/Canvas-Pipelines gleichzeitig
+  // starten (die zweite überschreibt _recCanvasStream/_mr, die erste läuft als Orphan verwaist
+  // weiter und beide teilen sich _mrChunks -> korrupter Aufnahme-Blob).
+  if (_recordingStarting) return;
   if (!_stream) return;
-  // Hardware-Zoom einmalig aufs Minimum: voller Sensorausschnitt = maximale Digital-Reserve,
-  // und der Pipeline-Ruckler davon passiert VOR dem Aufnahmestart statt mittendrin.
-  // Reihenfolge wichtig: erst die Hardware umstellen und den Inhaltswechsel abwarten, DANN das
-  // Zoom-Modell (_hwZoom) und die CSS-Vorschau umrechnen — sonst zeigt die Vorschau für einen
-  // Augenblick doppelt gezoomt (CSS-Faktor springt hoch, während der Track noch gezoomt liefert).
-  if (_zoomSupported && _videoTrack && _hwZoom !== _zoomMin) {
-    try { _videoTrack.applyConstraints({ advanced: [{ zoom: _zoomMin }] }); } catch {}
-    await new Promise(r => setTimeout(r, 350));
-    _hwZoom = _zoomMin;
-    _renderZoom(_viewZoom);
-  }
-  // Ist eine Kamerafahrt-Richtung gewählt, den sichtbaren Zoom VOR dem Aufnahmestart auf den
-  // wahren Start-Endpunkt zurücksetzen (min bei "Rein", max bei "Raus") — sonst würde die Fahrt
-  // dort weitermachen, wo ein vorheriger manueller/Vorschau-Zoom gerade stand, im schlimmsten Fall
-  // schon am Ziel (dann zeigt die AUFNAHME von Anfang an den Endzustand, ohne jede Bewegung).
-  if (_zoomDir !== 'none') {
-    // Selber Deckel wie _startZoomAnim(true) gleich danach — sonst würde die Vorschau hier schon
-    // kurz auf den vollen (ungedeckelten) Hardware-Maximalwert springen, bevor die eigentliche
-    // Fahrt überhaupt beginnt (bei "Raus" besonders sichtbar: ein harter Zoom-Sprung im Bild,
-    // noch bevor die Aufnahme lief).
-    const { min: minZ, max: maxZ } = _recZoomRange();
-    _renderZoom(_zoomDir === 'in' ? minZ : maxZ);
-  }
-  _recCanvasStream = _startCanvasRecPipeline();
-  const recStream = _recCanvasStream || _stream; // Fallback: altes Direkt-Recording (z.B. sehr alte Browser)
-  let mime = '';
-  for (const t of ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']) {
-    if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { mime = t; break; }
-  }
-  // Bitrate explizit setzen: die Browser-Defaults sind für Full-HD-Naturaufnahmen mit viel
-  // Blattwerk-Detail zu niedrig (Matsch beim Zoomen) — 8 MBit/s Video ist ein guter Kompromiss.
-  const opts = { videoBitsPerSecond: 8e6, audioBitsPerSecond: 128e3 };
-  if (mime) opts.mimeType = mime;
-  try { _mr = new MediaRecorder(recStream, opts); }
-  catch (e) {
-    console.warn('cam mr opts', e);
-    try { _mr = mime ? new MediaRecorder(recStream, { mimeType: mime }) : new MediaRecorder(recStream); }
-    catch (e2) { console.warn('cam mr', e2); _stopCanvasRecPipeline(); return; }
-  }
-  _mrChunks = [];
-  _mr.ondataavailable = e => { if (e.data?.size) _mrChunks.push(e.data); };
-  _mr.onstop = () => {
-    _stopRecTimer();
-    _stopCanvasRecPipeline();
-    const blob = new Blob(_mrChunks, { type: mime || 'video/webm' });
+  _recordingStarting = true;
+  try {
+    // Hardware-Zoom einmalig aufs Minimum: voller Sensorausschnitt = maximale Digital-Reserve,
+    // und der Pipeline-Ruckler davon passiert VOR dem Aufnahmestart statt mittendrin.
+    // Reihenfolge wichtig: erst die Hardware umstellen und den Inhaltswechsel abwarten, DANN das
+    // Zoom-Modell (_hwZoom) und die CSS-Vorschau umrechnen — sonst zeigt die Vorschau für einen
+    // Augenblick doppelt gezoomt (CSS-Faktor springt hoch, während der Track noch gezoomt liefert).
+    if (_zoomSupported && _videoTrack && _hwZoom !== _zoomMin) {
+      try { _videoTrack.applyConstraints({ advanced: [{ zoom: _zoomMin }] }); } catch {}
+      await new Promise(r => setTimeout(r, 350));
+      _hwZoom = _zoomMin;
+      _renderZoom(_viewZoom);
+    }
+    // Ist eine Kamerafahrt-Richtung gewählt, den sichtbaren Zoom VOR dem Aufnahmestart auf den
+    // wahren Start-Endpunkt zurücksetzen (min bei "Rein", max bei "Raus") — sonst würde die Fahrt
+    // dort weitermachen, wo ein vorheriger manueller/Vorschau-Zoom gerade stand, im schlimmsten Fall
+    // schon am Ziel (dann zeigt die AUFNAHME von Anfang an den Endzustand, ohne jede Bewegung).
+    if (_zoomDir !== 'none') {
+      // Selber Deckel wie _startZoomAnim(true) gleich danach — sonst würde die Vorschau hier schon
+      // kurz auf den vollen (ungedeckelten) Hardware-Maximalwert springen, bevor die eigentliche
+      // Fahrt überhaupt beginnt (bei "Raus" besonders sichtbar: ein harter Zoom-Sprung im Bild,
+      // noch bevor die Aufnahme lief).
+      const { min: minZ, max: maxZ } = _recZoomRange();
+      _renderZoom(_zoomDir === 'in' ? minZ : maxZ);
+    }
+    _recCanvasStream = _startCanvasRecPipeline();
+    const recStream = _recCanvasStream || _stream; // Fallback: altes Direkt-Recording (z.B. sehr alte Browser)
+    let mime = '';
+    for (const t of ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { mime = t; break; }
+    }
+    // Bitrate explizit setzen: die Browser-Defaults sind für Full-HD-Naturaufnahmen mit viel
+    // Blattwerk-Detail zu niedrig (Matsch beim Zoomen) — 8 MBit/s Video ist ein guter Kompromiss.
+    const opts = { videoBitsPerSecond: 8e6, audioBitsPerSecond: 128e3 };
+    if (mime) opts.mimeType = mime;
+    try { _mr = new MediaRecorder(recStream, opts); }
+    catch (e) {
+      console.warn('cam mr opts', e);
+      try { _mr = mime ? new MediaRecorder(recStream, { mimeType: mime }) : new MediaRecorder(recStream); }
+      catch (e2) { console.warn('cam mr', e2); _stopCanvasRecPipeline(); return; }
+    }
     _mrChunks = [];
-    const cb = _onCapture; _close();
-    if (cb) cb({ blob, mime: mime || 'video/webm', kind: 'video' });
-  };
-  _mr.start();
-  _startZoomAnim(true); // true = immer volle Fahrt über die gesamte Aufnahme (siehe oben)
-  _startRecTimer();
-  const ind = document.getElementById('camRecIndicator'); if (ind) ind.hidden = false;
-  const cap = document.getElementById('camCapture'); if (cap) cap.classList.add('recording');
+    _mr.ondataavailable = e => { if (e.data?.size) _mrChunks.push(e.data); };
+    _mr.onstop = () => {
+      _stopRecTimer();
+      _stopCanvasRecPipeline();
+      const blob = new Blob(_mrChunks, { type: mime || 'video/webm' });
+      _mrChunks = [];
+      const cb = _onCapture; _close();
+      if (cb) cb({ blob, mime: mime || 'video/webm', kind: 'video' });
+    };
+    _mr.start();
+    _startZoomAnim(true); // true = immer volle Fahrt über die gesamte Aufnahme (siehe oben)
+    _startRecTimer();
+    const ind = document.getElementById('camRecIndicator'); if (ind) ind.hidden = false;
+    const cap = document.getElementById('camCapture'); if (cap) cap.classList.add('recording');
+  } finally {
+    // Egal ob erfolgreich gestartet, per catch/return abgebrochen oder eine Exception geflogen ist:
+    // die Sperre muss in jedem Fall wieder freigegeben werden, sonst bliebe der Aufnahme-Button
+    // nach einem Fehlerfall dauerhaft tot.
+    _recordingStarting = false;
+  }
 }
 
 // ---- Zeitraffer: Einzelbilder in festem Intervall sammeln, danach zu Video zusammensetzen ----
@@ -899,10 +929,13 @@ export function openCamera(onCapture, onGalleryTap) {
 
     // Während einer laufenden Videoaufnahme sind Moduswechsel, Kamera-Flip und Gerätewechsel
     // gesperrt: sie würden den Stream neu starten bzw. die Bedienlogik wechseln und die Aufnahme
-    // stillschweigend zerstören (der Recorder hängt an den alten Tracks). Kurzes Aufblinken der
-    // REC-Anzeige als Feedback, warum nichts passiert.
+    // stillschweigend zerstören (der Recorder hängt an den alten Tracks). Ein laufender Zeitraffer
+    // (_lapseTimer) ist genauso schützenswert — kein MediaRecorder aktiv, aber ein Geräte-/
+    // Kamerawechsel würde _stream/_videoTrack unter dem laufenden Zeitraffer austauschen, sodass
+    // die gesammelten Frames aus zwei verschiedenen physischen Kameras zusammengeschnitten würden.
+    // Kurzes Aufblinken der REC-Anzeige als Feedback, warum nichts passiert.
     function _guardRecording() {
-      if (!_isRecording()) return false;
+      if (!_isRecording() && !_lapseTimer) return false;
       const ind = document.getElementById('camRecIndicator');
       if (ind) { ind.style.transform = 'scale(1.25)'; setTimeout(() => { ind.style.transform = ''; }, 200); }
       return true;

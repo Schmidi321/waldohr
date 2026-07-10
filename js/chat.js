@@ -49,8 +49,12 @@ export async function sendVoice(blob, durationSec) {
   if (!blob || !isActive()) return null;
   const b64 = await _blobToBase64(blob);
   const ts = Date.now();
-  hub.broadcast({ type: 'chatvoice', data: b64, mime: blob.type || 'audio/webm', dur: Math.round(durationSec || 0), ts });
-  const msg = { kind: 'voice', blob, url: URL.createObjectURL(blob), durationSec: Math.round(durationSec || 0), ts, from: 'me' };
+  // Anders als filetransfer.js (das für genau dieses Problem in 16-KB-Stücke zerlegt) geht die
+  // Sprachnachricht hier unzerlegt als eine einzige Nachricht raus — bei langen Aufnahmen kann das
+  // ein Datenkanal-Größenlimit reißen. hub.broadcast() meldet das jetzt zurück, statt es
+  // stillschweigend zu verschlucken, damit wir es nicht fälschlich als "gesendet" anzeigen.
+  const delivered = hub.broadcast({ type: 'chatvoice', data: b64, mime: blob.type || 'audio/webm', dur: Math.round(durationSec || 0), ts });
+  const msg = { kind: 'voice', blob, url: URL.createObjectURL(blob), durationSec: Math.round(durationSec || 0), ts, from: 'me', failed: !delivered };
   _pushHistory(msg);
   return msg;
 }

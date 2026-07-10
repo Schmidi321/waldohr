@@ -173,6 +173,13 @@ export async function fetchMoonTimes(lat, lng) {
   } catch { return null; }
 }
 
+// Lokales Kalenderdatum statt UTC (toISOString) — Open-Meteo liefert hourly.time bei
+// timezone=auto im LOKALEN Datum des Standorts; toISOString() liefert das UTC-Datum, das
+// nahe lokaler Mitternacht (UTC+1/+2) noch auf dem Vortag steht und die Lookups unten scheitern lässt.
+function _localDateStr(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
 // Stündliche Slots für die aktuelle + nächste Stunden (Jetzt-Vorschau).
 let _todayCache = null;
 export async function fetchTodayHours(lat, lng) {
@@ -190,7 +197,7 @@ export async function fetchTodayHours(lat, lng) {
     if (!res.ok) return null;
     const j = await res.json();
     const times = j.hourly.time;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = _localDateStr(new Date());
     const nowH = new Date().getHours();
     const slots = [nowH, nowH + 1, nowH + 2, nowH + 3, nowH + 4, nowH + 5].filter(h => h < 24).map(h => {
       const t = today + 'T' + String(h).padStart(2, '0') + ':00';
@@ -227,7 +234,7 @@ export async function fetchTomorrowMorning(lat, lng) {
     if (!res.ok) return null;
     const j = await res.json();
     const times = j.hourly.time;
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    const tomorrow = _localDateStr(new Date(Date.now() + 86400000));
     const slots = [5, 6, 7, 8, 9, 10].map(h => {
       const t = tomorrow + 'T' + String(h).padStart(2, '0') + ':00';
       const i = times.indexOf(t);

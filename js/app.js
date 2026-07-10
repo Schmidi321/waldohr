@@ -186,7 +186,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v110';
+const APP_VERSION = 'v111';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -330,7 +330,10 @@ async function onWindow(samples, sampleRate, endMs) {
   let r = null;
   try { r = await rec.classify(samples, sampleRate); } catch (e) { console.warn('classify', e); }
   updateServerStatusChip();
-  if (!r) return;
+  // Zwischen Start und Ende von classify() (im Server-Modus ein echter Netzwerk-Roundtrip) kann
+  // der Nutzer das Lauschen bereits gestoppt haben — sonst würde ein spät eintreffender Treffer
+  // trotzdem noch gespeichert und an gekoppelte Partner gemeldet werden.
+  if (!r || !detectionActive) return;
   const det = {
     key: r.key, species: r.name, sci: r.sci, rarity: r.rarity, confidence: r.confidence,
     ts: Date.now(), source: r.source || 'mic'
@@ -357,7 +360,9 @@ function getAutoRecordConfidence() {
   catch { return 0.85; }
 }
 function getAutoRecordDuration() {
-  try { const v = parseInt(localStorage.getItem('waldohr.autoRecDur'), 10); return [3, 5, 10].includes(v) ? v : 3; }
+  // Muss mit den in den Einstellungen wählbaren Presets übereinstimmen (index.html/ui.js kennen
+  // auch 60 Sek) — sonst wird eine gewählte 60s-Aufnahme hier still auf 3s zurückgestuft.
+  try { const v = parseInt(localStorage.getItem('waldohr.autoRecDur'), 10); return [3, 5, 10, 60].includes(v) ? v : 3; }
   catch { return 3; }
 }
 const todayKey = () => { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); };
@@ -647,6 +652,10 @@ async function _toggleTrimPanel(row) {
   const existing = row.querySelector('.rec-trim-panel');
   if (existing) {
     const a = row.querySelector('audio'); if (a) a.pause();
+    // Öffnen+Schließen ohne dass die Wiedergabe je zu Ende lief würde den 'ended'-Listener von
+    // unten sonst für immer am (dauerhaften) Audio-Element hängen lassen — jedes erneute Öffnen
+    // hängte dann einen weiteren dazu (nie entfernt, {once:true} greift ja nur NACH dem Feuern).
+    if (a?._trimStopPreview) { a.removeEventListener('ended', a._trimStopPreview); a._trimStopPreview = null; }
     existing.remove(); return;
   }
   const audioEl = row.querySelector('audio');
@@ -707,7 +716,8 @@ async function _toggleTrimPanel(row) {
     playBtn.innerHTML = '&#9646;&#9646;';
     _playRaf = requestAnimationFrame(_tickPreview);
   });
-  audioEl.addEventListener('ended', _stopPreview);
+  audioEl.addEventListener('ended', _stopPreview, { once: true });
+  audioEl._trimStopPreview = _stopPreview; // Referenz für den manuellen Schließen-Pfad oben
   function makeDrag(handle, isStart) {
     handle.addEventListener('pointerdown', e => {
       e.preventDefault();
@@ -1320,8 +1330,8 @@ function makeSendToPartnerBtn(blob, kind, label) {
 
 // Baut eine Aufnahme/Foto-Zeile aus einem gespeicherten Anhang (nach Reload) — selbe Optik wie
 // frisch erzeugte Zeilen, aber aus dem in IndexedDB gesicherten Blob statt einer Live-Aufnahme.
-function attachmentRow(a) {
-  const url = URL.createObjectURL(a.blob);
+function attachmentRow(a, url) {
+  if (!url) url = URL.createObjectURL(a.blob);
   const row = document.createElement('div'); row.className = 'rec-row';
   let _audioEl = null;
   if (a.kind === 'audio') {
@@ -1359,19 +1369,29 @@ function attachmentRow(a) {
   return row;
 }
 
+// Blob-URLs der aktuell im #recList gerenderten Zeilen — beim nächsten Hydrieren (Backup-Import,
+// DB-Reset) VOR dem Neuaufbau freigeben, sonst bleibt bei jedem erneuten Aufruf der komplette
+// vorherige Satz (ein Foto/Video/WAV pro Aufnahme) unrevoked im Speicher hängen.
+let _recListUrls = [];
 // Baut die Liste eigener Aufnahmen/Fotos + die kleinen Abspiel-Badges auf den Sammlungskarten
 // aus der Datenbank neu auf — beim Boot UND nach jedem Löschen, damit beides synchron bleibt.
 async function hydrateAttachments() {
   const list = document.getElementById('recList');
+  for (const u of _recListUrls) { try { URL.revokeObjectURL(u); } catch {} }
+  _recListUrls = [];
   if (list) list.innerHTML = '';
-  clearRecordings();
+  clearRecordings(); // revoked die Badge-URLs bereits selbst (s. ui.js)
   try {
     const latestAudio = await latestAudioAttachmentsByKey();
     for (const a of latestAudio) registerRecording(a.key, URL.createObjectURL(a.blob));
   } catch (e) { console.warn('hydrate badges', e); }
   try {
     const all = await allAttachments();
-    if (list) for (const a of all) list.appendChild(attachmentRow(a));
+    if (list) for (const a of all) {
+      const url = URL.createObjectURL(a.blob);
+      _recListUrls.push(url);
+      list.appendChild(attachmentRow(a, url));
+    }
   } catch (e) { console.warn('hydrate recList', e); }
 }
 
@@ -2504,6 +2524,15 @@ function initPairing() {
       bubble.textContent = msg.text;
       wrap.appendChild(bubble);
     }
+    // Versand ohne Bestätigung vom Datenkanal (z.B. Sprachnachricht zu groß fürs Kanal-Limit) ->
+    // sichtbar machen, statt fälschlich als angekommen anzuzeigen (nur bei eigenen Nachrichten
+    // relevant, chat.js setzt 'failed' nur für den eigenen sendVoice-Fall).
+    if (msg.failed) {
+      const failLabel = document.createElement('div');
+      failLabel.className = 'pair-chat-fail';
+      failLabel.textContent = '⚠️ nicht angekommen';
+      wrap.appendChild(failLabel);
+    }
     row.appendChild(wrap);
     chatList.appendChild(row);
     chatList.scrollTop = chatList.scrollHeight;
@@ -2535,15 +2564,27 @@ function initPairing() {
   const voiceStatus = document.getElementById('pairVoiceStatus');
   const voiceTimer = document.getElementById('pairVoiceTimer');
   let voiceMr = null, voiceChunks = [], voiceStream = null, voiceOwnStream = false, voiceT0 = 0, voiceTimerInt = null, voiceMaxTimeout = null;
+  // Getrennt von voiceMr verfolgt, ob der Nutzer den Knopf GERADE JETZT noch gedrückt hält — nötig,
+  // weil ein schneller Tipp-und-Loslassen VOR dem Auflösen von getUserMedia() sonst unbemerkt
+  // bleibt: stopVoiceRecording() prüft nur voiceMr (zu dem Zeitpunkt noch null) und macht nichts,
+  // die Aufnahme startet danach trotzdem und läuft unbeaufsichtigt weiter.
+  let voiceWanted = false;
 
   async function startVoiceRecording() {
     if (voiceMr || !chat.isActive()) return;
+    voiceWanted = true;
     // Laufendes Mikro (Lauschen-Modus) wiederverwenden statt ein zweites Mal um Erlaubnis zu
     // fragen — nur wenn nötig eine eigene, separate Aufnahme anfordern.
     if (audio.running && audio.stream) { voiceStream = audio.stream; voiceOwnStream = false; }
     else {
       try { voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true }); voiceOwnStream = true; }
       catch (e) { console.warn('ptt mic', e); return; }
+    }
+    if (!voiceWanted) {
+      // Finger schon losgelassen, während getUserMedia() noch lief -> gar nicht erst aufnehmen.
+      if (voiceOwnStream) voiceStream.getTracks().forEach(t => t.stop());
+      voiceStream = null;
+      return;
     }
     let type = '';
     for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
@@ -2565,6 +2606,7 @@ function initPairing() {
   }
 
   function stopVoiceRecording() {
+    voiceWanted = false;
     if (!voiceMr) return;
     clearInterval(voiceTimerInt); voiceTimerInt = null;
     clearTimeout(voiceMaxTimeout); voiceMaxTimeout = null;
@@ -2677,6 +2719,11 @@ function initPairing() {
     // hergestellte Verbindungen laufen im Hintergrund weiter, wenn der Nutzer das Fenster nur
     // schließt, um wieder normal zu lauschen.
     if (pendingPc) { try { pendingPc.close(); } catch {} pendingPc = null; }
+    // Ein abgebrochener "QR zeigen"-Versuch (showBtn setzt _iAmHost=true optimistisch VOR dem
+    // eigentlichen Verbindungsaufbau) darf die Host-Rolle nicht über die Sitzung hinweg festhalten,
+    // wenn nie eine Verbindung zustande kam — sonst erklärt sich ein späteres Scannen als Speiche
+    // fälschlich selbst zur Zentrale. Nur zurücksetzen, wenn wirklich noch nichts verbunden ist.
+    if (hub.peerCount() === 0) _iAmHost = false;
     showScanAnswerBtn.hidden = true;
     modal.classList.remove('open');
   }
@@ -2770,29 +2817,39 @@ function initPairing() {
     if (currentScanOnDecoded) startScan(currentScanOnDecoded, currentScanStatusEl);
   };
 
+  // Generationszähler gegen überlappende startScan()-Aufrufe (z.B. schnelles Umschalten der
+  // Linsen-Auswahl, oder ein langsamer getUserMedia-Berechtigungsdialog): ohne ihn würde der
+  // zuletzt AUFGERUFENE, aber zuerst AUFGELÖSTE Versuch die schon aktuellen scanStream/stopScan
+  // überschreiben — der überholte Stream/Decode-Loop liefe dann unsichtbar und unstoppbar weiter.
+  let _scanGen = 0;
   async function startScan(onDecoded, statusEl) {
+    const gen = ++_scanGen;
     stopCamera();
     currentScanOnDecoded = onDecoded; currentScanStatusEl = statusEl;
     const camId = scanCamSelect && scanCamSelect.value ? scanCamSelect.value : null;
+    let stream;
     try {
       const videoConstraints = camId ? { deviceId: { exact: camId } } : { facingMode: 'environment' };
-      scanStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+      stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
     } catch (e) {
       // Eine bestimmte Linsen-deviceId kann inzwischen ungültig sein (z.B. Geräteliste hat sich
       // geändert) — statt direkt aufzugeben, mit der einfachen "irgendeine Rückkamera"-Anfrage
       // nochmal versuchen. Das ist der Sicherheitsnetz-Fallback für genau den gemeldeten Android-
       // Bug ("keine Kamera mehr angezeigt"), falls die gewählte deviceId doch nicht mehr passt.
-      if (!camId) { if (statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e?.message || ''); return; }
-      try { scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } }); }
-      catch (e2) { if (statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e2?.message || ''); return; }
+      if (!camId) { if (gen === _scanGen && statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e?.message || ''); return; }
+      try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } }); }
+      catch (e2) { if (gen === _scanGen && statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e2?.message || ''); return; }
     }
+    if (gen !== _scanGen) { stream.getTracks().forEach(t => t.stop()); return; } // von einem neueren Aufruf überholt
+    scanStream = stream;
     try {
       scanVideo.srcObject = scanStream;
       await scanVideo.play().catch(() => {});
+      if (gen !== _scanGen) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; return; }
       stopScan = scanQR(scanVideo, onDecoded);
       _populateScanCamSelect();
     } catch (e) {
-      if (statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e?.message || '');
+      if (gen === _scanGen && statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e?.message || '');
     }
   }
 
@@ -2950,7 +3007,11 @@ function initPairing() {
     try { attId = await addAttachment({ key: null, label, kind, blob, mime: mime || blob.type }); }
     catch (e) { console.warn('addAttachment (partner file)', e); }
     const list = document.getElementById('recList');
-    if (list) list.prepend(attachmentRow({ blob, kind, label, mime: mime || blob.type, key: null, id: attId, ts: Date.now() }));
+    if (list) {
+      const url = URL.createObjectURL(blob);
+      _recListUrls.push(url); // sonst würde diese URL beim nächsten hydrateAttachments() nicht mit-revoked
+      list.prepend(attachmentRow({ blob, kind, label, mime: mime || blob.type, key: null, id: attId, ts: Date.now() }, url));
+    }
     showInfoToast('📲 Von Partner ' + peerId + ' erhalten', (kind === 'video' ? 'Video' : 'Foto') + ' angekommen — in der Galerie.', '📲');
     if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
   }
