@@ -1,4 +1,5 @@
 // Morgenchor + Nacht-Modus + Fotografen-Wecker: automatisches Lauschen & Wecken.
+import { roundCoord } from './util.js';
 const LS_MC = 'waldohr.morgenchor';
 const LS_NM = 'waldohr.nacht';
 const LS_FW = 'waldohr.fotowecker';
@@ -39,8 +40,11 @@ export async function getSunriseFull(lat, lng) {
   const dateStr = new Date().toISOString().slice(0, 10);
   if (_sunriseCache?.dateStr === dateStr && _sunriseCache.full) return _sunriseCache.full;
   try {
+    // Nur auf 0,1° (≈ 11 km) gerundet an den Drittanbieter: verschiebt den Sonnenaufgang um
+    // höchstens ~30 s (für den ±1-min-Weckvergleich unten irrelevant), verrät aber nicht mehr
+    // den genauen Standort (Wohnhaus!) bei jedem Alarm-Check. Cache hängt nur am Datum.
     const r = await fetch(
-      `https://api.sunrise-sunset.org/json?lat=${lat.toFixed(4)}&lng=${lng.toFixed(4)}&date=${dateStr}&formatted=0`,
+      `https://api.sunrise-sunset.org/json?lat=${roundCoord(lat, 1)}&lng=${roundCoord(lng, 1)}&date=${dateStr}&formatted=0`,
       { signal: AbortSignal.timeout(6000) }
     );
     if (!r.ok) return null;

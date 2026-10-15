@@ -1,23 +1,18 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
-import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment, bearingDeg, haversineKm } from './db.js';
-import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, updatePeerMarker, getMicDeviceId, addFixMarker, setManualPosHandler, showManualPos, setFixArHandler } from './ui.js';
-import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, fetchMoonTimes, fetchTodayHours, weatherEmoji, weatherLabel, windDirLabel, moonPhase, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
+import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment, haversineKm } from './db.js';
+import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, getMicDeviceId, setManualPosHandler, showManualPos, updateScheduleChip, showFotoSegment, isFotoSegment, icon } from './ui.js';
+import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, fetchMoonTimes, fetchTodayHours, weatherLabel, windDirLabel, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
 import { routeTracker } from './route.js';
 import { checkAlarms, getFotoWecker, getDauerUeberwachung, getSunriseFull } from './alarm.js';
 import { openCamera } from './camera.js';
+import { openScan } from './scan.js';
 import { initOrni } from './ornithologie.js';
 import { exportBackup, importBackup } from './backup.js';
-import { renderQR, scanQR, createOfferer, createAnswerer, waitForOpen, monitorQuality } from './pairing.js';
-import * as locate from './locate.js';
-import * as ar from './ar.js';
-import * as chat from './chat.js';
-import * as session from './session.js';
-import * as filetransfer from './filetransfer.js';
-import * as hub from './peerhub.js';
+import { esc, roundCoord } from './util.js';
 
-// ---- In-App Lightbox für Fotos ----
+// ---- In-App Lightbox fÃ¼r Fotos ----
 function openPhotoLightbox(url) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center';
@@ -36,7 +31,7 @@ function openPhotoLightbox(url) {
   document.body.appendChild(ov);
 }
 
-// ---- Dauerüberwachung Timer ----
+// ---- DauerÃ¼berwachung Timer ----
 let _duTimeout = null, _duInterval = null;
 function startDauerUeberwachung() {
   stopDauerUeberwachung();
@@ -46,11 +41,11 @@ function startDauerUeberwachung() {
   const end = Date.now() + ms;
   _duInterval = setInterval(() => {
     const rem = Math.max(0, Math.ceil((end - Date.now()) / 60000));
-    if (audio.running) setUI('mic', 'Lauscht… noch ' + rem + ' Min');
+    if (audio.running) setUI('mic', 'Lauschtâ€¦ noch ' + rem + ' Min');
   }, 30000);
   _duTimeout = setTimeout(() => {
     stopDauerUeberwachung();
-    showInfoToast('⏱ Dauerüberwachung', 'Zeitlimit erreicht — Lauschen gestoppt.', '⏱');
+    showInfoToast('â± DauerÃ¼berwachung', 'Zeitlimit erreicht â€” Lauschen gestoppt.', 'â±');
     if (audio.running) { audio.stop(); detectionActive = false; setUI('off'); }
   }, ms);
 }
@@ -75,7 +70,7 @@ async function playFotoAlarm(vibrateOnly) {
   try {
     if (alarmCtx.state === 'suspended') await alarmCtx.resume();
     const t = alarmCtx.currentTime;
-    // C5→E5→G5→C6, zweimal wiederholt
+    // C5â†’E5â†’G5â†’C6, zweimal wiederholt
     [[523.25,0],[659.25,.28],[783.99,.56],[1046.5,.84],[523.25,1.5],[659.25,1.78],[783.99,2.06],[1046.5,2.34]].forEach(([freq, delay]) => {
       const osc = alarmCtx.createOscillator();
       const gain = alarmCtx.createGain();
@@ -89,32 +84,6 @@ async function playFotoAlarm(vibrateOnly) {
   } catch (e) { console.warn('alarm audio', e); }
 }
 
-// Akustisches Signal bei Verbindungsabbruch zum Partner — beim Fotografieren ist der Blick oft
-// nicht am Handy, ein reiner Toast würde dann leicht übersehen. full=true (letzte/einzige
-// Verbindung weg, Ortung/Chat/Feinabgleich stehen) bekommt ein deutlicheres Signal als der
-// Verlust eines von mehreren Partnern im Stern-Modell (dort läuft die Kopplung ja weiter).
-// Absteigende Töne (Gegenteil des aufsteigenden Erfolgs-Jingles oben) signalisieren "etwas fehlt".
-async function playDisconnectTone(full) {
-  try { if ('vibrate' in navigator) navigator.vibrate(full ? [200, 100, 200, 100, 400] : [150]); } catch {}
-  warmAlarmCtx();
-  if (!alarmCtx) return;
-  try {
-    if (alarmCtx.state === 'suspended') await alarmCtx.resume();
-    const t = alarmCtx.currentTime;
-    const notes = full ? [[783.99, 0], [587.33, .18], [392.0, .36]] : [[587.33, 0], [440.0, .14]];
-    notes.forEach(([freq, delay]) => {
-      const osc = alarmCtx.createOscillator();
-      const gain = alarmCtx.createGain();
-      osc.type = 'triangle'; osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0, t + delay);
-      gain.gain.linearRampToValueAtTime(0.3, t + delay + 0.02);
-      gain.gain.linearRampToValueAtTime(0, t + delay + 0.22);
-      osc.connect(gain); gain.connect(alarmCtx.destination);
-      osc.start(t + delay); osc.stop(t + delay + 0.25);
-    });
-  } catch (e) { console.warn('disconnect tone', e); }
-}
-
 const body = document.body;
 const statusTxt = document.getElementById('statusTxt');
 
@@ -122,7 +91,7 @@ const audio = new AudioEngine();
 let rec = null;
 let detectionActive = false;
 
-// Chip bleibt bewusst knapp ("GPS") — der volle Status (Genauigkeit, "verweigert" etc.)
+// Chip bleibt bewusst knapp ("GPS") â€” der volle Status (Genauigkeit, "verweigert" etc.)
 // steckt im title-Tooltip, die Farbe signalisiert den Zustand auf einen Blick.
 const locChip = document.getElementById('locChip');
 const setLoc = (state, detail) => {
@@ -130,21 +99,21 @@ const setLoc = (state, detail) => {
   if (locChip) { locChip.className = 'chip loc-' + state; locChip.title = detail || ''; }
 };
 
-// Standort-Erfassung: läuft unabhängig vom Mikro, sobald die App startet (nicht erst beim
-// Lauschen) — Karte & Kompass-Richtung sollen auch ohne aktives Mikro die Position kennen.
-// Manuell auf der Karte gesetzte eigene Position (Stufe 4): überschreibt GPS für die gemeinsame
-// Ruf-Ortung, solange man steht — der GPS-Fehler der Empfänger dominiert dort die Peilung.
+// Standort-Erfassung: lÃ¤uft unabhÃ¤ngig vom Mikro, sobald die App startet (nicht erst beim
+// Lauschen) â€” Karte & Kompass-Richtung sollen auch ohne aktives Mikro die Position kennen.
+// Manuell auf der Karte gesetzte eigene Position: Ã¼berschreibt GPS fÃ¼r die Koordinaten neuer
+// Funde, solange man steht â€” GPS liegt gerade im Wald oft etliche Meter daneben.
 let manualPos = null;
-// Die für Ortung/Kompass/AR maßgebliche eigene Position: manuell gesetzt hat Vorrang, sonst GPS.
+// Die fÃ¼r Fund-Koordinaten und die Karte maÃŸgebliche eigene Position: manuell gesetzt hat Vorrang, sonst GPS.
 function myPos() { return manualPos || geo.pos; }
 
 const geo = {
   watchId: null, pos: null, rawPos: null, accuracy: null,
-  _buf: [],  // jüngste Rohfixes {lat,lng,acc,t} zur Mittelung im Stand
-  // GPS-Mittelung: Fotografen stehen meist still — dann schwankt der reine GPS-Punkt trotzdem um
+  _buf: [],  // jÃ¼ngste Rohfixes {lat,lng,acc,t} zur Mittelung im Stand
+  // GPS-Mittelung: Fotografen stehen meist still â€” dann schwankt der reine GPS-Punkt trotzdem um
   // mehrere Meter. Solange die letzten Fixes eng beieinander liegen (Stand), wird accuracy-gewichtet
   // gemittelt (ruhigerer, genauerer Punkt). Bewegt man sich (neuer Fix weit weg vom Mittel), wird
-  // der Puffer verworfen und dem neuen Punkt sofort gefolgt — kein "Nachziehen".
+  // der Puffer verworfen und dem neuen Punkt sofort gefolgt â€” kein "Nachziehen".
   _averaged(lat, lng, acc) {
     const now = Date.now();
     const cur = { lat, lng, acc: acc || 20, t: now };
@@ -163,7 +132,7 @@ const geo = {
   start() {
     if (!('geolocation' in navigator)) { setLoc('off', 'kein GPS'); return; }
     if (this.watchId != null) return;
-    setLoc('searching', 'Standort: suche…');
+    setLoc('searching', 'Standort: sucheâ€¦');
     this.watchId = navigator.geolocation.watchPosition(
       p => {
         const had = !!this.pos;
@@ -171,12 +140,11 @@ const geo = {
         this.accuracy = p.coords.accuracy;
         this.pos = this._averaged(this.rawPos.lat, this.rawPos.lng, p.coords.accuracy);
         const nAvg = this._buf.length;
-        setLoc('active', 'Standort ±' + Math.round(p.coords.accuracy) + ' m' + (nAvg > 3 ? ' · ⌀' + nAvg : ''));
-        // Läuft man deutlich vom manuell gesetzten Punkt weg, ist dieser veraltet -> automatisch lösen.
-        if (manualPos && haversineKm(manualPos, this.rawPos) * 1000 > 30) { manualPos = null; showManualPos(null); showInfoToast('📍 Manuelle Position gelöst', 'Du hast dich bewegt — es zählt wieder das echte GPS.', '📍'); }
-        setLivePos(myPos());   // live fürs Kompass-Feature, ohne vollen Re-Render
-        if (locate.isActive() && myPos()) locate.setLocalPos(myPos());
-        if (!had) refresh();   // erster Fix: "Heute hier" sofort aktualisieren
+        setLoc('active', 'Standort Â±' + Math.round(p.coords.accuracy) + ' m' + (nAvg > 3 ? ' Â· âŒ€' + nAvg : ''));
+        // LÃ¤uft man deutlich vom manuell gesetzten Punkt weg, ist dieser veraltet -> automatisch lÃ¶sen.
+        if (manualPos && haversineKm(manualPos, this.rawPos) * 1000 > 30) { manualPos = null; showManualPos(null); showInfoToast('ðŸ“ Manuelle Position gelÃ¶st', 'Du hast dich bewegt â€” es zÃ¤hlt wieder das echte GPS.', 'ðŸ“'); }
+        setLivePos(myPos());   // live fÃ¼rs Kompass-Feature, ohne vollen Re-Render
+        if (!had) { refresh(); updateScheduleChip(); }   // erster Fix: "Heute hier" + Morgenchor-Startzeit sofort aktualisieren
       },
       e => { console.warn('geo', e); setLoc('off', e.code === 1 ? 'GPS verweigert' : 'kein GPS'); },
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 12000 }
@@ -185,14 +153,16 @@ const geo = {
   stop() { if (this.watchId != null) { navigator.geolocation.clearWatch(this.watchId); this.watchId = null; } setLoc('off', 'Standort aus'); }
 };
 
-// Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v112';
+// Beim VerÃ¶ffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
+const APP_VERSION = 'v113';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
   if (!splash) return;
   const ver = document.getElementById('splashVer');
   if (ver) ver.textContent = APP_VERSION;
+  const aboutVer = document.getElementById('aboutVer');
+  if (aboutVer) aboutVer.textContent = APP_VERSION;
   const hide = () => splash.classList.add('hide');
   if (btn) {
     setTimeout(() => btn.classList.add('show'), 2000);
@@ -211,24 +181,17 @@ async function boot() {
   initOrni();
   routeTracker.init(geo);
   routeTracker.onUpdate = pts => updateRouteMap(pts);
-  // 🎯-Karten-Marker antippen -> AR-Peilung dorthin öffnen (mit frischer eigener Position).
-  setFixArHandler(f => {
-    const data = { method: 'fix', species: f.species, lat: f.lat, lng: f.lng, uncertM: f.uncertM, dirSpreadDeg: f.dirSpreadDeg, rangeMinM: f.rangeMinM, rangeMaxM: f.rangeMaxM, calibrated: f.calibrated, nPhones: f.nPhones, myPos: myPos() };
-    if (ar.canShowAR(data)) ar.openAR(data);
-    else showInfoToast('🎯 Keine Peilung möglich', 'Eigene GPS-Position fehlt — Standort aktivieren.', '🎯');
-  });
-  // Manuelle Positions-Korrektur von der Karte (Stufe 4): pos=null hebt sie wieder auf.
+  // Manuelle Positions-Korrektur von der Karte: pos=null hebt sie wieder auf.
   setManualPosHandler(pos => {
     manualPos = pos;
     setLivePos(myPos());
-    if (locate.isActive() && myPos()) locate.setLocalPos(myPos());
-    if (pos) showInfoToast('📍 Position gesetzt', 'Deine Position wurde manuell gesetzt — genauer für die gemeinsame Ortung. Bewegst du dich, gilt wieder GPS.', '📍');
-    else showInfoToast('📍 GPS aktiv', 'Manuelle Position aufgehoben — es zählt wieder das echte GPS.', '📍');
+    if (pos) showInfoToast('ðŸ“ Position gesetzt', 'Deine Position wurde manuell gesetzt â€” neue Funde bekommen diese Koordinaten. Bewegst du dich, gilt wieder GPS.', 'ðŸ“');
+    else showInfoToast('ðŸ“ GPS aktiv', 'Manuelle Position aufgehoben â€” es zÃ¤hlt wieder das echte GPS.', 'ðŸ“');
     refresh();
   });
   try { await seedIfEmpty(); } catch (e) { console.warn('seed', e); }
   try { await migrateGeo(); } catch (e) { console.warn('migrateGeo', e); }
-  try { const n = await cleanupFakeGeo(); if (n) console.info(n + ' Fund(e) hatten eine falsche Fake-Position (Bug) — Koordinaten entfernt.'); } catch (e) { console.warn('cleanupFakeGeo', e); }
+  try { const n = await cleanupFakeGeo(); if (n) console.info(n + ' Fund(e) hatten eine falsche Fake-Position (Bug) â€” Koordinaten entfernt.'); } catch (e) { console.warn('cleanupFakeGeo', e); }
   await refresh();
   hydrateAttachments();
   geo.start();
@@ -236,11 +199,19 @@ async function boot() {
   setInterval(() => checkAlarms(geo.pos?.lat, geo.pos?.lng, onAlarm), 60000);
 
   rec = await createRecognizer();
-  if (rec.id === 'birdnet') statusTxt.textContent = 'BirdNET-Modell wird geladen…';
-  else if (rec.id === 'birdnet-server') statusTxt.textContent = 'Verbinde mit BirdNET-Server…';
+  if (rec.id === 'birdnet') statusTxt.textContent = 'BirdNET-Modell wird geladenâ€¦';
+  else if (rec.id === 'birdnet-server') statusTxt.textContent = 'Verbinde mit BirdNET-Serverâ€¦';
   try { await rec.load(); }
-  catch (e) { console.warn('Recognizer-Fallback auf Mock:', e); rec = new MockRecognizer(); await rec.load(); }
+  catch (e) {
+    console.warn('Recognizer-Fallback auf Mock:', e);
+    // Grund explizit setzen (nicht nur per Konstruktor-Argument): so stimmt der Demo-Hinweis auch,
+    // falls recognizer.js den Vertrag (fallbackReason) noch nicht oder anders umsetzt.
+    const reason = rec.id === 'birdnet-server' ? 'unreachable' : 'model-error';
+    rec = new MockRecognizer(reason); rec.fallbackReason = reason;
+    await rec.load();
+  }
   updateServerStatusChip();
+  updateDemoHint();
 
   audio.onWindow = onWindow;
   setUI('off');
@@ -250,9 +221,9 @@ async function boot() {
   wireSplash();
 }
 
-// Während der Nutzer gerade mit dem Finger auf dem Bildschirm scrollt, NICHT die Listen/Karten
-// neu aufbauen — sonst wird das gerade berührte DOM-Element ersetzt und die Wischgeste bricht ab
-// (spürbar v. a. auf der Statistik-Seite, die bei jeder neuen Erkennung sonst sofort neu rendert).
+// WÃ¤hrend der Nutzer gerade mit dem Finger auf dem Bildschirm scrollt, NICHT die Listen/Karten
+// neu aufbauen â€” sonst wird das gerade berÃ¼hrte DOM-Element ersetzt und die Wischgeste bricht ab
+// (spÃ¼rbar v. a. auf der Statistik-Seite, die bei jeder neuen Erkennung sonst sofort neu rendert).
 let touching = false, pendingRefresh = false;
 document.addEventListener('touchstart', () => { touching = true; }, { passive: true });
 document.addEventListener('touchend', () => { touching = false; if (pendingRefresh) { pendingRefresh = false; refresh(); } }, { passive: true });
@@ -268,7 +239,7 @@ async function refresh() {
   renderMap(qualifying);
 }
 
-// Kompass-Heading: passiv mithören — auf iOS greift das erst nach der Kompass-Freigabe im Detail-Sheet.
+// Kompass-Heading: passiv mithÃ¶ren â€” auf iOS greift das erst nach der Kompass-Freigabe im Detail-Sheet.
 let compassHeading = null;
 (function() {
   const ev = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
@@ -280,60 +251,113 @@ let compassHeading = null;
 
 function onAlarm(type) {
   if (type === 'fotowecker') {
-    showInfoToast('📷 Fotografen-Wecker', 'Zeit fürs Sonnenaufgang-Shooting! Viel Licht!', '📷');
+    showInfoToast('ðŸ“· Fotografen-Wecker', 'Zeit fÃ¼rs Sonnenaufgang-Shooting! Viel Licht!', 'ðŸ“·');
     playFotoAlarm(getFotoWecker().vibrateOnly);
     return;
   }
   if (type === 'nacht-end') {
-    showInfoToast('🦉 Nacht-Modus beendet', 'Geplante Endzeit erreicht — Lauschen gestoppt.', '🦉');
+    showInfoToast('ðŸ¦‰ Nacht-Modus beendet', 'Geplante Endzeit erreicht â€” Lauschen gestoppt.', 'ðŸ¦‰');
     if (audio.running) { stopDauerUeberwachung(); audio.stop(); detectionActive = false; setUI('off'); }
     return;
   }
   const isMC = type === 'morgenchor';
-  const icon = isMC ? '🌅' : '🦉';
-  const title = isMC ? '🌅 Morgenchor-Alarm' : '🦉 Nacht-Modus';
-  showInfoToast(title, isMC ? 'Sonnenaufgang naht — Lauschen gestartet!' : 'Geplante Zeit — Lauschen gestartet!', icon);
+  const icon = isMC ? 'ðŸŒ…' : 'ðŸ¦‰';
+  const title = isMC ? 'ðŸŒ… Morgenchor-Alarm' : 'ðŸ¦‰ Nacht-Modus';
+  showInfoToast(title, isMC ? 'Sonnenaufgang naht â€” Lauschen gestartet!' : 'Geplante Zeit â€” Lauschen gestartet!', icon);
   if (!audio.running) {
     tryFullscreen();
     audio.start(getMicDeviceId())
-      .then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); startDauerUeberwachung(); })
+      .then(() => { geo.start(); detectionActive = true; setUI('mic'); startDauerUeberwachung(); })
       .catch(e => {
         console.warn('alarm mic', e);
-        showInfoToast(title, 'Mikrofon-Freigabe nötig — tippe zum Starten.', icon, () => toggleDetection(), 'Lauschen starten');
+        showInfoToast(title, 'Mikrofon-Freigabe nÃ¶tig â€” tippe zum Starten.', icon, () => toggleDetection(), 'Lauschen starten');
       });
+  } else if (!detectionActive) {
+    // Mikro lief schon (z. B. fÃ¼r einen Tonclip), aber ohne Erkennung â€” jetzt mit einschalten.
+    detectionActive = true; setUI('mic');
   }
 }
 
-// BirdNET-Server-Verbindungsstatus (nur relevant im Server-Modus — Mock/On-Device brauchen kein
+// BirdNET-Server-Verbindungsstatus (nur relevant im Server-Modus â€” Mock/On-Device brauchen kein
 // Netzwerk und bleiben unsichtbar). Der Server-Modus hat anders als die anderen KEINEN robusten
-// Fallback zur Laufzeit (nur einmal beim Start geprüft), darum hier bei jedem Erkennungsversuch
-// neu bewertet — sonst merkt der Nutzer eine wegbrechende Verbindung (WLAN, Server down) nicht,
-// außer dass plötzlich keine Funde mehr kommen.
+// Fallback zur Laufzeit (nur einmal beim Start geprÃ¼ft), darum hier bei jedem Erkennungsversuch
+// neu bewertet â€” sonst merkt der Nutzer eine wegbrechende Verbindung (WLAN, Server down) nicht,
+// auÃŸer dass plÃ¶tzlich keine Funde mehr kommen.
 function updateServerStatusChip() {
   const chip = document.getElementById('serverStatusChip');
   if (!chip) return;
+  const txt = document.getElementById('serverChipTxt');
+  const setTxt = t => { if (txt) txt.textContent = t; };
+  chip.classList.remove('loc-active', 'loc-searching', 'srv-err', 'srv-demo');
+  // Demo-Fallback, obwohl ein Server eingetragen ist (nicht erreichbar / Adresse ungÃ¼ltig): Chip rot
+  // zeigen statt verstecken â€” sonst sÃ¤he es aus, als gÃ¤be es gar kein Server-Problem.
+  if (isDemoMode() && (rec.fallbackReason === 'unreachable' || rec.fallbackReason === 'invalid-url')) {
+    chip.hidden = false; chip.classList.add('srv-err'); setTxt('Demo');
+    chip.title = rec.fallbackReason === 'invalid-url' ? 'BirdNET-Server-Adresse ungÃ¼ltig â€” Demo-Modus' : 'BirdNET-Server nicht erreichbar â€” Demo-Modus';
+    return;
+  }
+  // Reiner Demo-Modus (kein Server eingetragen): gelber "Demo"-Chip in der Kopfzeile â€” auf jedem Tab
+  // sichtbar, nicht nur im Lauschen-Hinweis. Antippen Ã¶ffnet die Einstellungen (s. unten).
+  if (isDemoMode()) {
+    chip.hidden = false; chip.classList.add('srv-demo'); setTxt('Demo');
+    chip.title = 'Demo-Modus â€” fÃ¼r echte Erkennung BirdNET-Server in den Einstellungen eintragen';
+    return;
+  }
   if (!rec || rec.id !== 'birdnet-server') { chip.hidden = true; return; }
-  chip.hidden = false;
-  chip.classList.remove('loc-active', 'loc-searching', 'srv-err');
+  chip.hidden = false; setTxt('BirdNET');
   if (rec.status === 'ok') { chip.classList.add('loc-active'); chip.title = 'BirdNET-Server verbunden'; }
-  else if (rec.status === 'error') { chip.classList.add('srv-err'); chip.title = 'BirdNET-Server nicht erreichbar — Verbindung/Empfang prüfen'; }
-  else { chip.classList.add('loc-searching'); chip.title = 'Verbinde mit BirdNET-Server…'; }
+  else if (rec.status === 'error') { chip.classList.add('srv-err'); chip.title = 'BirdNET-Server nicht erreichbar â€” Verbindung/Empfang prÃ¼fen'; }
+  else { chip.classList.add('loc-searching'); chip.title = 'Verbinde mit BirdNET-Serverâ€¦'; }
+}
+// Server-/Demo-Chip: fÃ¼hrt direkt zu den Einstellungen (dort unter "Dienste & SchlÃ¼ssel").
+document.getElementById('serverStatusChip')?.addEventListener('click', () => {
+  document.getElementById('gearBtn')?.click();
+  const adv = document.querySelector('#settingsModal .setgroup-adv'); if (adv) adv.open = true;
+});
+
+// ---- Demo-Modus (Mock-Erkenner) ----
+// Ohne BirdNET-Server/-Modell wÃ¼rfelt der Mock zufÃ¤llige Arten. Das muss dauerhaft sichtbar sein
+// (kein wegklickbarer Toast) und darf die echten Daten nicht verfÃ¤lschen: Demo-Treffer erscheinen
+// nur markiert in der Live-Liste â€” kein DB-Eintrag, keine Auto-Aufnahme, kein Seltenheits-Alarm.
+function isDemoMode() { return !!rec && rec.id === 'mock'; }
+const DEMO_HINTS = {
+  'unreachable': 'BirdNET-Server nicht erreichbar â€” Demo-Modus. Erkannte Arten sind zufÃ¤llig und werden nicht gespeichert.',
+  'invalid-url': 'BirdNET-Server-Adresse ungÃ¼ltig â€” Demo-Modus. Bitte in den Einstellungen korrigieren (https://â€¦).',
+  'model-error': 'BirdNET-Modell konnte nicht geladen werden â€” Demo-Modus. Erkannte Arten sind zufÃ¤llig und werden nicht gespeichert.',
+};
+const DEMO_HINT_DEFAULT = 'Demo-Modus â€” erkannte Arten sind zufÃ¤llig. FÃ¼r echte Erkennung BirdNET-Server in den Einstellungen eintragen.';
+function updateDemoHint() {
+  let el = document.getElementById('demoHint');
+  if (!isDemoMode()) { if (el) el.hidden = true; return; }
+  if (!el) {
+    // Element erst hier erzeugen â€” direkt unter der Statuszeile im Lauschen-Tab, wo man beim Start
+    // des Mikros ohnehin hinschaut. Optik: eigene, gelb getÃ¶nte .demo-hint-Box mit Warn-Icon.
+    el = document.createElement('div');
+    el.id = 'demoHint'; el.className = 'demo-hint'; el.setAttribute('role', 'status');
+    el.innerHTML = icon('alert') + '<span></span>';
+    const anchor = document.querySelector('#v-listen .status');
+    if (anchor) anchor.after(el); else document.getElementById('v-listen')?.prepend(el);
+  }
+  // Text per textContent (nicht innerHTML) â€” die Texte sind fest, aber so bleibt es auch kÃ¼nftig sicher.
+  el.querySelector('span').textContent = DEMO_HINTS[rec.fallbackReason] || DEMO_HINT_DEFAULT;
+  el.hidden = false;
 }
 
-async function onWindow(samples, sampleRate, endMs) {
-  // Rohe Fenster IMMER an die gemeinsame Ruf-Ortung füttern (auch ohne aktive Erkennung) — die
-  // Klatsch-Kalibrierung braucht Audio unabhängig davon, ob gerade klassifiziert wird.
-  const win = { samples, sampleRate, rate: sampleRate, endMs: endMs || Date.now() };
-  if (locate.isActive()) locate.feedWindow(win);
+async function onWindow(samples, sampleRate) {
   if (!rec || !detectionActive) return;
-  if (rec.setGeo) rec.setGeo(geo.pos);   // Standort für bessere Treffer (Server-Modus)
+  if (rec.setGeo) rec.setGeo(geo.pos);   // Standort fÃ¼r bessere Treffer (Server-Modus)
   let r = null;
   try { r = await rec.classify(samples, sampleRate); } catch (e) { console.warn('classify', e); }
   updateServerStatusChip();
   // Zwischen Start und Ende von classify() (im Server-Modus ein echter Netzwerk-Roundtrip) kann
-  // der Nutzer das Lauschen bereits gestoppt haben — sonst würde ein spät eintreffender Treffer
-  // trotzdem noch gespeichert und an gekoppelte Partner gemeldet werden.
+  // der Nutzer das Lauschen bereits gestoppt haben â€” sonst wÃ¼rde ein spÃ¤t eintreffender Treffer
+  // trotzdem noch gespeichert werden.
   if (!r || !detectionActive) return;
+  // Demo-Treffer nur anzeigen (markiert), sonst nichts: weder speichern noch Auto-Aufnahme noch Refresh.
+  if (isDemoMode() || r.source === 'mock') {
+    liveAdd({ key: r.key, species: r.name, sci: r.sci, rarity: r.rarity, confidence: r.confidence, ts: Date.now(), source: 'mock', demo: true });
+    return;
+  }
   const det = {
     key: r.key, species: r.name, sci: r.sci, rarity: r.rarity, confidence: r.confidence,
     ts: Date.now(), source: r.source || 'mic'
@@ -344,24 +368,20 @@ async function onWindow(samples, sampleRate, endMs) {
   try { det.id = await addDetection(det); } catch (e) { console.warn('store', e); }
   liveAdd(det);
   maybeAutoRecord(det, samples, sampleRate);
-  if (locate.isActive()) {
-    if (myPos()) locate.setLocalPos(myPos());
-    locate.reportDetection(det, win); // mit Roh-Fenster -> Partner kann präzise kreuzkorrelieren
-  }
   refresh();
 }
 
 // ---- Automatische Aufnahme: ab einer einstellbaren Konfidenz (Default 85 %) wird der gerade
-// klassifizierte Ausschnitt direkt als WAV gespeichert — aber nur einmal pro Art und Kalendertag,
-// gegen Datenflut bei häufigen Arten. Tagesliste in localStorage, damit es auch über einen Reload
+// klassifizierte Ausschnitt direkt als WAV gespeichert â€” aber nur einmal pro Art und Kalendertag,
+// gegen Datenflut bei hÃ¤ufigen Arten. Tagesliste in localStorage, damit es auch Ã¼ber einen Reload
 // hinweg gilt.
 function getAutoRecordConfidence() {
   try { const v = parseFloat(localStorage.getItem('waldohr.autoRecConf')); return isNaN(v) ? 0.85 : v; }
   catch { return 0.85; }
 }
 function getAutoRecordDuration() {
-  // Muss mit den in den Einstellungen wählbaren Presets übereinstimmen (index.html/ui.js kennen
-  // auch 60 Sek) — sonst wird eine gewählte 60s-Aufnahme hier still auf 3s zurückgestuft.
+  // Muss mit den in den Einstellungen wÃ¤hlbaren Presets Ã¼bereinstimmen (index.html/ui.js kennen
+  // auch 60 Sek) â€” sonst wird eine gewÃ¤hlte 60s-Aufnahme hier still auf 3s zurÃ¼ckgestuft.
   try { const v = parseInt(localStorage.getItem('waldohr.autoRecDur'), 10); return [3, 5, 10, 60].includes(v) ? v : 3; }
   catch { return 3; }
 }
@@ -378,7 +398,7 @@ function markAutoRecorded(key) {
 
 function _makeAudioIcon(audioEl) {
   const el = document.createElement('div'); el.className = 'rec-media-icon'; el.style.cursor = 'pointer';
-  el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="22" height="22"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><svg viewBox="0 0 8 6" fill="currentColor" width="8" height="6" style="margin-top:3px;opacity:.55"><path d="M0 0l8 3-8 3z"/></svg><span class="_aDur" style="font-size:9px;color:var(--faint);font-variant-numeric:tabular-nums;line-height:1.3;margin-top:2px;display:block;text-align:center"></span></div>';
+  el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="22" height="22"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><svg viewBox="0 0 8 6" fill="currentColor" width="8" height="6" style="margin-top:3px;opacity:.55"><path d="M0 0l8 3-8 3z"/></svg><span class="_aDur" style="font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums;line-height:1.3;margin-top:2px;display:block;text-align:center"></span></div>';
   if (audioEl) {
     const ds = el.querySelector('._aDur');
     audioEl.addEventListener('loadedmetadata', () => { const s = Math.floor(audioEl.duration); if (isFinite(s) && s > 0 && ds) ds.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }, { once: true });
@@ -402,10 +422,10 @@ function _openAudioPlayerModal(audioEl, row) {
   const fmtT = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
   sheet.innerHTML = `
     <div style="width:36px;height:4px;border-radius:4px;background:var(--stroke-strong);margin:0 auto 14px"></div>
-    <div style="text-align:center;font-size:14px;font-weight:700;color:var(--ink);margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
+    <div style="text-align:center;font-size:14px;font-weight:700;color:var(--ink);margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</div>
     <canvas id="_apWave" style="width:100%;height:64px;border-radius:12px;background:rgba(163,230,53,.04);border:1px solid var(--stroke);display:block;margin-bottom:10px;cursor:pointer"></canvas>
     <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:14px;font-variant-numeric:tabular-nums">
-      <span id="_apCur">0:00</span><span id="_apDur">–:––</span>
+      <span id="_apCur">0:00</span><span id="_apDur">â€“:â€“â€“</span>
     </div>
     <div style="display:flex;justify-content:center">
       <button id="_apPlay" style="width:56px;height:56px;border-radius:50%;background:var(--lime);border:none;color:#04130d;display:flex;align-items:center;justify-content:center;cursor:pointer">
@@ -506,22 +526,27 @@ async function _saveAutoRecRow(det, blob, mime) {
   const now = new Date();
   const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const prefix = det.species.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  const gpsTag = geo.pos ? '_' + geo.pos.lat.toFixed(4) + '_' + geo.pos.lng.toFixed(4) : '';
+  // KEINE Koordinaten mehr im Dateinamen: heruntergeladene/geteilte Dateien wandern weiter (Messenger,
+  // Foren) und verrieten sonst metergenau den Fundort â€” bei seltenen Arten Brutplatz-Schutz. Die
+  // genaue Position bleibt in der Datenbank am Fund (det.lat/lng) erhalten.
   const ext = mime.includes('wav') ? 'wav' : mime.includes('mp4') ? 'm4a' : 'webm';
   const url = URL.createObjectURL(blob);
+  const ts = Date.now();
   const row = document.createElement('div'); row.className = 'rec-row';
   const a = document.createElement('audio'); a.src = url; a.preload = 'metadata'; a.hidden = true;
   wireAudioRouting(a);
-  const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
-  const dl = makeDownloadBtn(url, prefix + '_' + stamp + gpsTag + '.' + ext, det.species);
+  const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' Â· auto';
+  const dl = makeDownloadBtn(url, prefix + '_' + stamp + '.' + ext, det.species);
   let attId = null;
-  try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime }); }
+  try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime, ts }); }
   catch (e) { console.warn('addAttachment', e); }
+  _bindRecRow(row, { url, name: prefix + '_' + stamp + '.' + ext, attId, meta: { detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', ts } });
   const del = makeDeleteBtn(row, url, det.key, attId);
   row.append(_makeAudioIcon(a), lb, _spacer(), dl, _makeScissorsBtn(row), del, a);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
-  registerRecording(det.key, url);
-  if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
+  // Eigene URL fÃ¼rs Sammlungs-Badge (gehÃ¶rt ab dann ui.js, s. registerRecording).
+  registerRecording(det.key, URL.createObjectURL(blob));
+  if (!isGalleryVisible()) galleryBadgeAdd(1);
 }
 
 async function maybeAutoRecord(det, samples, sampleRate) {
@@ -529,7 +554,9 @@ async function maybeAutoRecord(det, samples, sampleRate) {
   if (autoRecordedToday().includes(det.key)) return;
   markAutoRecorded(det.key);
   const dur = getAutoRecordDuration();
-  const gpsStr = geo.pos ? geo.pos.lat.toFixed(5) + ',' + geo.pos.lng.toFixed(5) : '';
+  // WAV-Kommentar reist mit der Datei mit (Download/Teilen) -> nur auf â‰ˆ 1 km vergrÃ¶bert (2 Stellen),
+  // bei seltenen Arten/SÃ¤ugern gar nicht (Brut-/RÃ¼ckzugsplatz-Schutz, wie bei der Share-Karte).
+  const gpsStr = geo.pos && det.rarity === 'common' ? roundCoord(geo.pos.lat, 2).toFixed(2) + ',' + roundCoord(geo.pos.lng, 2).toFixed(2) : '';
 
   if (dur > 3 && audio.stream) {
     let mime = '';
@@ -574,18 +601,18 @@ function openDownloadSheet(url, filename, label) {
   const sheet = document.createElement('div');
   sheet.style.cssText = 'position:relative;z-index:1;width:100%;max-width:480px;margin:0 auto;background:linear-gradient(160deg,#0a2518,#061a0f);border-radius:24px 24px 0 0;border-top:1px solid var(--stroke);padding:0 20px calc(24px + env(safe-area-inset-bottom))';
   const ext = (filename.split('.').pop() || '').toUpperCase();
-  const ico = /^(JPG|JPEG|PNG|HEIC)$/.test(ext) ? '🖼' : /^(WAV|M4A|MP3|OGG|WEBM)$/.test(ext) ? '🎵' : /^(MP4|MOV)$/.test(ext) ? '🎬' : '📄';
+  const ico = /^(JPG|JPEG|PNG|HEIC)$/.test(ext) ? 'camera' : /^(WAV|M4A|MP3|OGG|WEBM)$/.test(ext) ? 'mic' : /^(MP4|MOV)$/.test(ext) ? 'film' : 'file';
   sheet.innerHTML = `
-    <div style="width:36px;height:4px;border-radius:4px;background:var(--stroke-strong);margin:12px auto 16px"></div>
+    <div style="width:40px;height:5px;border-radius:5px;background:var(--stroke-strong);margin:12px auto 16px"></div>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;padding:12px;background:var(--glass);border:1px solid var(--stroke);border-radius:16px">
-      <div style="font-size:26px;width:40px;text-align:center;flex-shrink:0">${ico}</div>
+      <div style="width:40px;height:40px;border-radius:12px;display:grid;place-items:center;flex-shrink:0;background:rgba(163,230,53,.1);color:var(--lime)">${icon(ico)}</div>
       <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${filename}</div>
-        ${label ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${label}</div>` : ''}
+        <div style="font-weight:600;font-size:13px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(filename)}</div>
+        ${label ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(label)}</div>` : ''}
       </div>
     </div>
     <div style="display:flex;flex-direction:column;gap:8px">
-      <a id="_dsDown" href="${url}" download="${filename}" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:14px;background:#a3e635;color:#04130d;border-radius:16px;font-weight:700;font-size:15px;text-decoration:none;font-family:inherit">
+      <a id="_dsDown" href="${esc(url)}" download="${esc(filename)}" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:14px;background:#a3e635;color:#04130d;border-radius:16px;font-weight:700;font-size:15px;text-decoration:none;font-family:inherit">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="17" height="17"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Herunterladen
       </a>
@@ -619,23 +646,57 @@ function makeDownloadBtn(url, filename, label) {
   const btn = document.createElement('button');
   btn.type = 'button'; btn.className = 'rec-dl'; btn.title = 'Herunterladen';
   btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-  btn.onclick = ev => { ev.stopPropagation(); openDownloadSheet(url, filename, label); };
+  // URL/Dateiname zum Klick-Zeitpunkt von der Zeile lesen (nicht die beim Erzeugen eingefangenen):
+  // nach dem Zuschneiden hat die Zeile eine neue blob:-URL (WAV), die alte ist da schon freigegeben.
+  btn.onclick = ev => {
+    ev.stopPropagation();
+    const row = btn.closest('.rec-row');
+    openDownloadSheet(row?._recUrl || url, row?._dlName || filename, label);
+  };
   return btn;
 }
 
-// Löschen-Button für eine Aufnahme/Foto-Zeile: entfernt die Zeile, gibt die Object-URL frei,
-// löscht das kleine Abspiel-Badge auf der Sammlungskarte (falls verknüpft) und den dauerhaft
-// gespeicherten Anhang in der Datenbank.
+// Aktueller Zustand einer Aufnahme/Foto-Zeile â€” EINE Quelle fÃ¼r Download, LÃ¶schen, Zuschneiden und
+// Badge-Abgleich. Vorher hatte jeder Button die URL/ID beim Erzeugen fest eingefangen; nach dem
+// Zuschneiden zeigten Download/LÃ¶schen dann auf eine bereits freigegebene URL bzw. die alte DB-ID.
+//   url  : blob:-URL, die NUR dieser Zeile gehÃ¶rt (Badges bekommen eigene, s. registerRecording)
+//   name : Download-Dateiname
+//   attId: ID des Anhangs in IndexedDB (null, falls Speichern fehlschlug)
+//   meta : { detId, key, label, kind, ts } â€” zum Neuanlegen des Anhangs nach dem Zuschneiden
+function _bindRecRow(row, { url, name, attId, meta }) {
+  row._recUrl = url; row._dlName = name; row._attId = attId ?? null; row._meta = meta || {};
+}
+
+// Sammlungs-Badge einer Art nach LÃ¶schen/Zuschneiden mit der DB abgleichen: es zeigt immer die
+// neueste noch vorhandene Aufnahme der Art â€” vorher verschwand es beim LÃ¶schen IRGENDEINER
+// Aufnahme, auch wenn noch andere derselben Art existierten.
+async function _resyncBadge(key) {
+  if (!key) return;
+  try {
+    const latest = (await latestAudioAttachmentsByKey()).find(a => a.key === key);
+    if (latest) registerRecording(key, URL.createObjectURL(latest.blob));
+    else unregisterRecording(key);
+  } catch (e) { console.warn('resync badge', e); unregisterRecording(key); }
+}
+
+// LÃ¶schen-Button fÃ¼r eine Aufnahme/Foto-Zeile: entfernt die Zeile, gibt die Object-URL frei,
+// lÃ¶scht den dauerhaft gespeicherten Anhang in der Datenbank und gleicht danach das kleine
+// Abspiel-Badge auf der Sammlungskarte ab.
 function makeDeleteBtn(row, url, key, attId) {
   const del = document.createElement('button');
-  del.className = 'rec-del'; del.type = 'button'; del.title = 'Löschen';
+  del.className = 'rec-del'; del.type = 'button'; del.title = 'LÃ¶schen';
   del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>';
-  del.onclick = ev => {
+  del.onclick = async ev => {
     ev.stopPropagation();
+    // Zeilen-Zustand hat Vorrang (nach Zuschneiden: neue URL + neue Anhang-ID).
+    const curUrl = row._recUrl || url;
+    const curId = row._attId !== undefined ? row._attId : attId;
+    const k = row._meta?.key ?? key;
     row.remove();
-    try { URL.revokeObjectURL(url); } catch {}
-    if (key) unregisterRecording(key);
-    if (attId != null) deleteAttachment(attId).catch(e => console.warn('deleteAttachment', e));
+    try { URL.revokeObjectURL(curUrl); } catch {}
+    if (curId != null) { try { await deleteAttachment(curId); } catch (e) { console.warn('deleteAttachment', e); } }
+    // Erst NACH dem LÃ¶schen in der DB abgleichen, sonst fÃ¤nde die Abfrage den Anhang noch.
+    await _resyncBadge(k);
   };
   return del;
 }
@@ -652,16 +713,16 @@ async function _toggleTrimPanel(row) {
   const existing = row.querySelector('.rec-trim-panel');
   if (existing) {
     const a = row.querySelector('audio'); if (a) a.pause();
-    // Öffnen+Schließen ohne dass die Wiedergabe je zu Ende lief würde den 'ended'-Listener von
-    // unten sonst für immer am (dauerhaften) Audio-Element hängen lassen — jedes erneute Öffnen
-    // hängte dann einen weiteren dazu (nie entfernt, {once:true} greift ja nur NACH dem Feuern).
+    // Ã–ffnen+SchlieÃŸen ohne dass die Wiedergabe je zu Ende lief wÃ¼rde den 'ended'-Listener von
+    // unten sonst fÃ¼r immer am (dauerhaften) Audio-Element hÃ¤ngen lassen â€” jedes erneute Ã–ffnen
+    // hÃ¤ngte dann einen weiteren dazu (nie entfernt, {once:true} greift ja nur NACH dem Feuern).
     if (a?._trimStopPreview) { a.removeEventListener('ended', a._trimStopPreview); a._trimStopPreview = null; }
     existing.remove(); return;
   }
   const audioEl = row.querySelector('audio');
   if (!audioEl?.src) return;
   const panel = document.createElement('div'); panel.className = 'rec-trim-panel';
-  panel.innerHTML = '<span class="tr-lbl">Lade…</span>';
+  panel.innerHTML = '<span class="tr-lbl">Ladeâ€¦</span>';
   row.appendChild(panel);
   let decoded;
   try {
@@ -717,7 +778,7 @@ async function _toggleTrimPanel(row) {
     _playRaf = requestAnimationFrame(_tickPreview);
   });
   audioEl.addEventListener('ended', _stopPreview, { once: true });
-  audioEl._trimStopPreview = _stopPreview; // Referenz für den manuellen Schließen-Pfad oben
+  audioEl._trimStopPreview = _stopPreview; // Referenz fÃ¼r den manuellen SchlieÃŸen-Pfad oben
   function makeDrag(handle, isStart) {
     handle.addEventListener('pointerdown', e => {
       e.preventDefault();
@@ -744,9 +805,31 @@ async function _toggleTrimPanel(row) {
     const trimmed = decoded.getChannelData(0).slice(Math.floor(start * sr), Math.floor(end * sr));
     const wav = encodeWav(trimmed, sr);
     const newUrl = URL.createObjectURL(wav);
-    if (audioEl.src.startsWith('blob:')) URL.revokeObjectURL(audioEl.src);
+    const oldUrl = row._recUrl || audioEl.src;
     audioEl.src = newUrl; audioEl.load();
+    // Dauer-Anzeige am Audio-Icon auf die neue LÃ¤nge bringen (der Listener dort feuert nur einmal).
+    audioEl.addEventListener('loadedmetadata', () => {
+      const ds = row.querySelector('._aDur'); const s = Math.floor(audioEl.duration);
+      if (ds && isFinite(s) && s > 0) ds.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    }, { once: true });
+    // Zeilen-Zustand umstellen: Download/LÃ¶schen lesen ab jetzt die neue URL; Endung jetzt immer .wav.
+    row._recUrl = newUrl;
+    if (row._dlName) row._dlName = row._dlName.replace(/\.[a-z0-9]+$/i, '') + '.wav';
+    // Die alte URL gehÃ¶rt nur dieser Zeile (Badges haben eigene) -> gefahrlos freigeben.
+    if (oldUrl && oldUrl !== newUrl && oldUrl.startsWith('blob:')) { try { URL.revokeObjectURL(oldUrl); } catch {} }
     panel.remove();
+    // Zuschnitt dauerhaft speichern â€” vorher lebte er nur bis zum nÃ¤chsten Reload. db.js kennt kein
+    // Update, darum: neuen Anhang (mit Original-Zeitstempel, damit die Sortierung gleich bleibt)
+    // ZUERST anlegen, erst danach den alten lÃ¶schen â€” scheitert das Anlegen, bleibt das Original.
+    const meta = row._meta || {};
+    try {
+      const newId = await addAttachment({ detId: meta.detId ?? null, key: meta.key ?? null, label: meta.label ?? null, kind: 'audio', blob: wav, mime: 'audio/wav', ts: meta.ts ?? Date.now() });
+      const oldId = row._attId;
+      row._attId = newId;
+      if (oldId != null) await deleteAttachment(oldId);
+      // Galt das Badge der Art dieser Aufnahme, soll es jetzt den Zuschnitt abspielen.
+      if (meta.key) await _resyncBadge(meta.key);
+    } catch (e) { console.warn('trim persist', e); }
   };
 }
 
@@ -769,7 +852,7 @@ function openVideoLightbox(url) {
   document.body.appendChild(ov);
 }
 
-// ---- Video-Vorschaubild (56×56 Thumbnail + Play-Icon) ----
+// ---- Video-Vorschaubild (56Ã—56 Thumbnail + Play-Icon) ----
 function _makeVideoThumb(url) {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'flex:0 0 56px;width:56px;height:56px;border-radius:11px;overflow:hidden;position:relative;background:#04130d;cursor:pointer;flex-shrink:0';
@@ -787,7 +870,7 @@ function _makeVideoThumb(url) {
 // ---- Spacer: schiebt Icons nach rechts ----
 function _spacer() { const s = document.createElement('span'); s.style.flex = '1'; return s; }
 
-// ---- Foto+Audio Mixer: Photo + Tonaufnahme → Video rendern (client-side, kein Server) ----
+// ---- Foto+Audio Mixer: Photo + Tonaufnahme â†’ Video rendern (client-side, kein Server) ----
 async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
   const W = 1440, H = 1440;
   const cv = document.createElement('canvas');
@@ -817,7 +900,7 @@ async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
   ctx.textAlign = 'center';
   ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 24;
   ctx.fillStyle = 'rgba(163,230,53,.97)'; ctx.font = '700 82px system-ui,sans-serif';
-  ctx.fillText('🌿 WaldOhr', W / 2, H - 98);
+  ctx.fillText('ðŸŒ¿ WaldOhr', W / 2, H - 98);
   ctx.shadowBlur = 12;
   ctx.fillStyle = 'rgba(255,255,255,.65)'; ctx.font = '500 34px system-ui,sans-serif';
   ctx.fillText(new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }), W / 2, H - 44);
@@ -834,7 +917,7 @@ async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
   src.buffer = audioBuffer;
   src.connect(dest);
 
-  // Canvas-Stream + Audio-Track zusammenführen
+  // Canvas-Stream + Audio-Track zusammenfÃ¼hren
   const videoStream = cv.captureStream(2);
   const combined = new MediaStream([...videoStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
 
@@ -881,8 +964,8 @@ async function openShareMixer(photoUrl, key, label) {
   const progFill = document.getElementById('mixerProgFill');
   const progLabel = document.getElementById('mixerProgLabel');
 
-  // Zustand zurücksetzen
-  if (renderBtn) { renderBtn.disabled = true; renderBtn.textContent = '🎬 Video rendern & teilen'; }
+  // Zustand zurÃ¼cksetzen
+  if (renderBtn) { renderBtn.disabled = true; renderBtn.textContent = 'Video erstellen & teilen'; }
   if (prog) prog.hidden = true;
   if (directBtn) directBtn.disabled = false;
 
@@ -897,12 +980,12 @@ async function openShareMixer(photoUrl, key, label) {
   // Audio-Liste laden
   const audioList = document.getElementById('mixerAudioList');
   if (audioList) {
-    audioList.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:10px 0">Lade Aufnahmen…</div>';
+    audioList.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:10px 0">Lade Aufnahmenâ€¦</div>';
     try {
       const all = await allAttachments();
       const audios = all.filter(a => a.kind === 'audio');
       if (!audios.length) {
-        audioList.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:10px 0">Keine Tonaufnahmen vorhanden — zuerst über REC aufnehmen.</div>';
+        audioList.innerHTML = '<div style="color:var(--faint);font-size:13px;padding:10px 0">Keine Tonaufnahmen vorhanden â€” zuerst einen Ruf aufnehmen (Live-Liste oder Galerie â†’ Tonclip).</div>';
       } else {
         audioList.innerHTML = '';
         for (const att of audios) {
@@ -910,7 +993,7 @@ async function openShareMixer(photoUrl, key, label) {
           row.className = 'mixer-audio-row';
           const lbl = att.label || 'Aufnahme';
           const when = att.ts ? new Date(att.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '';
-          row.innerHTML = `<span class="mr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v4M8 23h8"/></svg></span><span class="mr-label">${lbl}</span><span class="mr-dur">${when}</span>`;
+          row.innerHTML = `<span class="mr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v4M8 23h8"/></svg></span><span class="mr-label">${esc(lbl)}</span><span class="mr-dur">${esc(when)}</span>`;
           row.onclick = () => {
             audioList.querySelectorAll('.mixer-audio-row').forEach(r => r.classList.remove('on'));
             row.classList.add('on');
@@ -932,15 +1015,15 @@ async function openShareMixer(photoUrl, key, label) {
       if (!modal._selAudioBlob) return;
       if (prog) prog.hidden = false;
       if (progFill) progFill.style.width = '0%';
-      if (progLabel) progLabel.textContent = 'Foto wird geladen…';
+      if (progLabel) progLabel.textContent = 'Foto wird geladenâ€¦';
       renderBtn.disabled = true;
       if (directBtn) directBtn.disabled = true;
       try {
         const photoBlob = await fetch(modal._photoUrl).then(r => r.blob());
-        if (progLabel) progLabel.textContent = 'Audio wird dekodiert…';
+        if (progLabel) progLabel.textContent = 'Audio wird dekodiertâ€¦';
         const { blob: vidBlob, mime } = await _renderPhotoAudioVideo(photoBlob, modal._selAudioBlob, pct => {
           if (progFill) progFill.style.width = pct + '%';
-          if (progLabel) progLabel.textContent = 'Rendering… ' + pct + '%';
+          if (progLabel) progLabel.textContent = 'Renderingâ€¦ ' + pct + '%';
         });
         if (progFill) progFill.style.width = '100%';
         if (progLabel) progLabel.textContent = 'Fertig!';
@@ -951,7 +1034,7 @@ async function openShareMixer(photoUrl, key, label) {
         const fname = 'waldohr-' + stamp + '.' + ext;
         const file = new File([vidBlob], fname, { type: mime });
         if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ title: 'WaldOhr – ' + (modal._label || 'Video'), files: [file] });
+          await navigator.share({ title: 'WaldOhr â€“ ' + (modal._label || 'Video'), files: [file] });
         } else {
           const a = document.createElement('a'); a.href = URL.createObjectURL(vidBlob);
           a.download = fname; a.click();
@@ -966,7 +1049,7 @@ async function openShareMixer(photoUrl, key, label) {
     };
   }
 
-  // Scrim schließt Modal
+  // Scrim schlieÃŸt Modal
   const scrim = document.getElementById('mixerScrim');
   if (scrim) scrim.onclick = () => { modal.hidden = true; };
 
@@ -989,20 +1072,20 @@ function _openVideoReelModal(url, mime) {
   const fmtT = s => Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
   const playIco = '<svg viewBox="0 0 24 24" fill="#04130d" width="22" height="22"><path d="M8 5v14l11-7z"/></svg>';
   const pauseIco = '<svg viewBox="0 0 24 24" fill="#04130d" width="22" height="22"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
-  // iOS Safari (und manche WebViews) implementieren HTMLVideoElement.captureStream() nicht —
-  // dort ist clientseitiges Neu-Encodieren (Trimmen/Mischen) technisch unmöglich. Statt eines
+  // iOS Safari (und manche WebViews) implementieren HTMLVideoElement.captureStream() nicht â€”
+  // dort ist clientseitiges Neu-Encodieren (Trimmen/Mischen) technisch unmÃ¶glich. Statt eines
   // Fehlers beim Export erkennen wir das vorher und bieten Original-Teilen als Fallback an.
   const probeVid = document.createElement('video');
   const supportsCapture = typeof probeVid.captureStream === 'function' || typeof probeVid.mozCaptureStream === 'function';
-  const unsupportedNote = supportsCapture ? '' : `<div style="background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:12px;padding:10px 12px;font-size:12px;color:#fbbf24;margin-bottom:12px">⚠️ Dein Browser unterstützt kein Zuschneiden/Mischen von Videos. Du kannst das Original trotzdem teilen.</div>`;
+  const unsupportedNote = supportsCapture ? '' : `<div style="background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:12px;padding:10px 12px;font-size:12px;color:#fbbf24;margin-bottom:12px">Dein Browser unterstÃ¼tzt kein Zuschneiden/Mischen von Videos. Du kannst das Original trotzdem teilen.</div>`;
   sheet.innerHTML = `
     <div style="width:36px;height:4px;border-radius:4px;background:var(--stroke-strong);margin:0 auto 12px"></div>
-    <h3 style="font-size:16px;font-weight:700;margin:0 0 10px;text-align:center;color:var(--ink)">🎬 Reel erstellen</h3>
+    <h3 style="font-family:'Outfit',sans-serif;font-size:18px;font-weight:600;margin:0 0 10px;text-align:center;color:var(--ink)">Reel erstellen</h3>
     <div style="position:relative;margin-bottom:8px">
-      <video id="_rvVid" src="${url}" playsinline style="width:100%;border-radius:12px;max-height:200px;object-fit:contain;background:#000;display:block"></video>
+      <video id="_rvVid" src="${esc(url)}" playsinline style="width:100%;border-radius:12px;max-height:200px;object-fit:contain;background:#000;display:block"></video>
       <button id="_rvPlay" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:54px;height:54px;border-radius:50%;background:rgba(163,230,53,.92);border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.45)">${playIco}</button>
     </div>
-    <div id="_rvDurInfo" style="text-align:center;font-size:11px;color:var(--muted);margin-bottom:8px">Lade Video…</div>
+    <div id="_rvDurInfo" style="text-align:center;font-size:11px;color:var(--muted);margin-bottom:8px">Lade Videoâ€¦</div>
     <div id="_rvTrimWrap" style="position:relative;height:36px;background:rgba(163,230,53,.08);border-radius:10px;border:1px solid rgba(163,230,53,.2);margin-bottom:8px;touch-action:none">
       <div id="_rvKept" style="position:absolute;top:0;bottom:0;left:0;width:100%;background:rgba(163,230,53,.18);border-radius:10px"></div>
       <div id="_rvPos" style="position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,.85);display:none;z-index:3"></div>
@@ -1013,19 +1096,19 @@ function _openVideoReelModal(url, mime) {
       <span id="_rvSLbl">0:00</span><span id="_rvELbl">0:00</span>
     </div>
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-      <span style="font-size:13px;color:var(--ink);white-space:nowrap">🔊 Originalton</span>
+      <span style="font-size:13px;color:var(--ink);white-space:nowrap">Originalton</span>
       <input type="range" id="_rvVol" min="0" max="100" value="100" style="flex:1;accent-color:var(--lime)">
       <span id="_rvVolLbl" style="font-size:12px;color:var(--muted);width:38px;text-align:right;font-variant-numeric:tabular-nums">100%</span>
     </div>
-    <div style="font-size:13px;color:var(--ink);margin-bottom:6px">🎵 Tonaufnahme hinzufügen</div>
+    <div style="font-size:13px;color:var(--ink);margin-bottom:6px">Tonaufnahme hinzufÃ¼gen</div>
     <div id="_rvAudioList" style="max-height:150px;overflow-y:auto;margin-bottom:12px;scrollbar-width:none;display:flex;flex-direction:column;gap:6px">
-      <div style="color:var(--faint);font-size:12px;padding:8px 0">Lade Aufnahmen…</div>
+      <div style="color:var(--faint);font-size:12px;padding:8px 0">Lade Aufnahmenâ€¦</div>
     </div>
     ${unsupportedNote}
-    <button id="_rvExport" style="width:100%;padding:14px;border-radius:16px;background:var(--lime);color:#04130d;font-weight:700;font-size:15px;cursor:pointer;border:none;font-family:inherit;margin-bottom:6px">${supportsCapture ? '🎬 Reel exportieren' : '📤 Original teilen'}</button>
+    <button id="_rvExport" style="width:100%;padding:14px;border-radius:16px;background:var(--lime);color:#04130d;font-weight:700;font-size:15px;cursor:pointer;border:none;font-family:inherit;margin-bottom:6px">${supportsCapture ? 'Reel exportieren' : 'Original teilen'}</button>
     <div id="_rvProgress" style="display:none;margin-bottom:8px">
       <div class="mixer-prog-track"><div id="_rvProgFill" class="mixer-prog-fill" style="width:0%"></div></div>
-      <div id="_rvProgLabel" class="mixer-prog-label" style="margin-top:5px;text-align:center;font-size:12px;color:var(--muted)">Exportiere…</div>
+      <div id="_rvProgLabel" class="mixer-prog-label" style="margin-top:5px;text-align:center;font-size:12px;color:var(--muted)">Exportiereâ€¦</div>
     </div>
     <button id="_rvClose" style="width:100%;padding:11px;background:transparent;color:var(--muted);border:none;font-size:13px;cursor:pointer;font-family:inherit">Abbrechen</button>`;
   ov.appendChild(sheet);
@@ -1081,7 +1164,7 @@ function _openVideoReelModal(url, mime) {
       if (!_vidRaf) _vidRaf = requestAnimationFrame(tickVid);
     } else { vid.pause(); setPlayIcon(false); }
   }
-  // Sicherheitsnetz: stoppt zuverlässig am Trim-Ende, auch wenn der rAF gedrosselt wird
+  // Sicherheitsnetz: stoppt zuverlÃ¤ssig am Trim-Ende, auch wenn der rAF gedrosselt wird
   vid.addEventListener('timeupdate', () => {
     const dur = curDur(); if (!dur || vid.paused) return;
     if (vid.currentTime >= endFrac * dur - 0.01) { vid.pause(); vid.currentTime = startFrac * dur; setPlayIcon(false); }
@@ -1123,7 +1206,7 @@ function _openVideoReelModal(url, mime) {
       audioListEl.innerHTML = '';
       const noneRow = document.createElement('div');
       noneRow.className = 'mixer-audio-row on';
-      noneRow.innerHTML = '<span class="mr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 3l18 18M9 9v3a3 3 0 0 0 4.5 2.6M12 4v2M15 6v.5"/></svg></span><span class="mr-label">Kein zusätzlicher Ton</span>';
+      noneRow.innerHTML = '<span class="mr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 3l18 18M9 9v3a3 3 0 0 0 4.5 2.6M12 4v2M15 6v.5"/></svg></span><span class="mr-label">Kein zusÃ¤tzlicher Ton</span>';
       noneRow.onclick = () => {
         audioListEl.querySelectorAll('.mixer-audio-row').forEach(r => r.classList.remove('on'));
         noneRow.classList.add('on'); selAudioBlob = null; selAudioBuffer = null;
@@ -1132,7 +1215,7 @@ function _openVideoReelModal(url, mime) {
       if (!audios.length) {
         const hint = document.createElement('div');
         hint.style.cssText = 'color:var(--faint);font-size:12px;padding:6px 0';
-        hint.textContent = 'Keine Tonaufnahmen vorhanden — zuerst über REC aufnehmen.';
+        hint.textContent = 'Keine Tonaufnahmen vorhanden â€” zuerst Ã¼ber REC aufnehmen.';
         audioListEl.appendChild(hint);
       }
       for (const att of audios) {
@@ -1159,12 +1242,12 @@ function _openVideoReelModal(url, mime) {
     vid.pause(); setPlayIcon(false);
     exportBtn.disabled = true; progress.style.display = 'block';
     if (progFill) progFill.style.width = '0%';
-    if (progLabel) progLabel.textContent = 'Wird vorbereitet…';
+    if (progLabel) progLabel.textContent = 'Wird vorbereitetâ€¦';
 
     if (!supportsCapture) {
-      // Kein Trimmen/Mischen möglich -> Original-Datei unverändert teilen/herunterladen.
+      // Kein Trimmen/Mischen mÃ¶glich -> Original-Datei unverÃ¤ndert teilen/herunterladen.
       try {
-        if (progLabel) progLabel.textContent = 'Bereite Original zum Teilen vor…';
+        if (progLabel) progLabel.textContent = 'Bereite Original zum Teilen vorâ€¦';
         const origBlob = await fetch(url).then(r => r.blob());
         const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
         const ext = (mime || '').includes('mp4') ? 'mp4' : 'webm';
@@ -1192,14 +1275,14 @@ function _openVideoReelModal(url, mime) {
     let audioCtx = null, srcVid = null;
     try {
       // Quell-Video NICHT stummschalten: captureStream() liefert dann Video + Originalton in einem
-      // Stream (bewährter Weg). Lautstärke/Clip werden über WebAudio auf den erfassten Tonspur-Track
-      // gelegt — decodeAudioData scheitert an Video-Containern, createMediaStreamSource nicht.
+      // Stream (bewÃ¤hrter Weg). LautstÃ¤rke/Clip werden Ã¼ber WebAudio auf den erfassten Tonspur-Track
+      // gelegt â€” decodeAudioData scheitert an Video-Containern, createMediaStreamSource nicht.
       srcVid = document.createElement('video');
       srcVid.src = url; srcVid.preload = 'auto'; srcVid.playsInline = true; srcVid.muted = false;
       srcVid.style.cssText = 'position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
       document.body.appendChild(srcVid);
-      // play() SOFORT auslösen — noch innerhalb der Klick-Nutzergeste. Vorher wurde erst nach
-      // mehreren await-Schritten (loadeddata/seeked, bis zu 5,5 s) play() aufgerufen — auf echten
+      // play() SOFORT auslÃ¶sen â€” noch innerhalb der Klick-Nutzergeste. Vorher wurde erst nach
+      // mehreren await-Schritten (loadeddata/seeked, bis zu 5,5 s) play() aufgerufen â€” auf echten
       // Handys ist die Nutzergeste dann abgelaufen, die Autoplay-Policy blockiert die unstumme
       // Wiedergabe still, es kommen keine Frames rein und die Aufnahme bleibt leer.
       let playErr = null;
@@ -1210,16 +1293,16 @@ function _openVideoReelModal(url, mime) {
         setTimeout(res, 4000);
       });
       await playPromise;
-      if (playErr) throw new Error('Wiedergabe vom Browser blockiert — bitte erneut versuchen');
+      if (playErr) throw new Error('Wiedergabe vom Browser blockiert â€” bitte erneut versuchen');
       srcVid.pause();
       srcVid.currentTime = startTime;
       await new Promise(res => { srcVid.addEventListener('seeked', res, { once: true }); setTimeout(res, 1500); });
 
       const videoTrack = srcVid.captureStream().getVideoTracks()[0];
 
-      // Ton komplett über WebAudio: Originalton via MediaElementSource (lautstärkegeregelt) +
+      // Ton komplett Ã¼ber WebAudio: Originalton via MediaElementSource (lautstÃ¤rkegeregelt) +
       // optionaler Clip. decodeAudioData scheitert an Video-Containern und die Tonspur ist im
-      // Element-captureStream nicht enthalten — MediaElementSource ist der zuverlässige Weg.
+      // Element-captureStream nicht enthalten â€” MediaElementSource ist der zuverlÃ¤ssige Weg.
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') { try { await audioCtx.resume(); } catch {} }
       const dest = audioCtx.createMediaStreamDestination();
@@ -1250,7 +1333,7 @@ function _openVideoReelModal(url, mime) {
       const progInterval = setInterval(() => {
         const pct = Math.min(95, Math.round((Date.now() - t0) / 1000 / trimDur * 100));
         if (progFill) progFill.style.width = pct + '%';
-        if (progLabel) progLabel.textContent = 'Exportiere… ' + pct + '%';
+        if (progLabel) progLabel.textContent = 'Exportiereâ€¦ ' + pct + '%';
       }, 300);
       await new Promise((res, rej) => {
         mr.onstop = () => { clearInterval(progInterval); res(); };
@@ -1294,7 +1377,7 @@ function _openVideoReelModal(url, mime) {
   ov.addEventListener('click', e => { if (e.target === ov) dismiss(); });
 }
 
-// Teilen-Button für Foto-Zeilen: öffnet Mixer (Foto-Karte teilen ODER Foto+Audio→Video).
+// Teilen-Button fÃ¼r Foto-Zeilen: Ã¶ffnet Mixer (Foto-Karte teilen ODER Foto+Audioâ†’Video).
 function makeShareBtn(url, key, label) {
   const btn = document.createElement('button');
   btn.type = 'button'; btn.title = 'Teilen'; btn.className = 'rec-dl'; btn.style.color = 'var(--muted)';
@@ -1303,32 +1386,7 @@ function makeShareBtn(url, key, label) {
   return btn;
 }
 
-// Sende-Button für Foto-/Video-Zeilen: schickt die Datei direkt ans gekoppelte Partner-Handy,
-// komplett ohne Internet, über den bestehenden WebRTC-Datenkanal (js/filetransfer.js).
-function makeSendToPartnerBtn(blob, kind, label) {
-  const btn = document.createElement('button');
-  btn.type = 'button'; btn.title = 'Ans Partner-Handy senden'; btn.className = 'rec-dl'; btn.style.color = 'var(--muted)';
-  const idleIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><rect x="6" y="2" width="12" height="20" rx="2"/><line x1="10" y1="18" x2="14" y2="18"/></svg>';
-  btn.innerHTML = idleIcon;
-  btn.onclick = async ev => {
-    ev.stopPropagation();
-    if (!filetransfer.isActive()) { showInfoToast('📲 Nicht gekoppelt', 'Erst ein Partner-Handy koppeln, dann senden.', '📲'); return; }
-    btn.disabled = true; btn.textContent = '⏳';
-    try {
-      await filetransfer.sendFile(blob, kind, label || '');
-      const n = hub.peerCount();
-      const dest = n > 1 ? 'an alle ' + n + ' gekoppelten Handys' : 'ans Partner-Handy';
-      showInfoToast('📲 Gesendet', (kind === 'video' ? 'Video' : 'Foto') + ' ' + dest + ' geschickt.', '✅');
-    } catch (e) {
-      showInfoToast('📲 Fehler', e?.message || 'Senden fehlgeschlagen.', '⚠️');
-    } finally {
-      btn.disabled = false; btn.innerHTML = idleIcon;
-    }
-  };
-  return btn;
-}
-
-// Baut eine Aufnahme/Foto-Zeile aus einem gespeicherten Anhang (nach Reload) — selbe Optik wie
+// Baut eine Aufnahme/Foto-Zeile aus einem gespeicherten Anhang (nach Reload) â€” selbe Optik wie
 // frisch erzeugte Zeilen, aber aus dem in IndexedDB gesicherten Blob statt einer Live-Aufnahme.
 function attachmentRow(a, url) {
   if (!url) url = URL.createObjectURL(a.blob);
@@ -1353,32 +1411,34 @@ function attachmentRow(a, url) {
     row.appendChild(lb);
   }
   const mime = a.mime || '';
-  const ext = mime.includes('wav') ? 'wav' : mime.includes('mp4') ? 'm4a' : mime.includes('webm') ? 'webm'
-    : mime.includes('png') ? 'png' : mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'bin';
-  const stamp = new Date(a.ts).toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  // Endung nach Art des Anhangs (kind), nicht nur nach MIME: 'video/mp4' enthÃ¤lt "mp4" und bekam
+  // frÃ¼her die Audio-Endung .m4a â€” das Video lieÃŸ sich dann nach dem Download nicht mehr Ã¶ffnen.
+  const ext = a.kind === 'video' ? (mime.includes('mp4') ? 'mp4' : mime.includes('quicktime') ? 'mov' : 'webm')
+    : a.kind === 'audio' ? (mime.includes('wav') ? 'wav' : mime.includes('mp4') || mime.includes('aac') ? 'm4a' : mime.includes('ogg') ? 'ogg' : mime.includes('webm') ? 'webm' : 'bin')
+    : (mime.includes('png') ? 'png' : mime.includes('heic') ? 'heic' : mime.includes('webp') ? 'webp' : 'jpg');
+  const stamp = new Date(a.ts || Date.now()).toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const prefix = (a.label || 'waldohr').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  const dlName = prefix + '_' + stamp + '.' + ext;
+  _bindRecRow(row, { url, name: dlName, attId: a.id, meta: { detId: a.detId ?? null, key: a.key ?? null, label: a.label ?? null, kind: a.kind, ts: a.ts } });
   row.appendChild(_spacer());
-  const dl = makeDownloadBtn(url, prefix + '_' + stamp + '.' + ext, a.label);
+  const dl = makeDownloadBtn(url, dlName, a.label);
   row.appendChild(dl);
   if (a.kind === 'photo') row.appendChild(makeShareBtn(url, a.key, a.label));
   if (a.kind === 'video') row.appendChild(makeReelBtn(url, mime));
-  if (a.kind === 'photo' || a.kind === 'video') row.appendChild(makeSendToPartnerBtn(a.blob, a.kind, a.label));
   if (a.kind === 'audio') row.appendChild(_makeScissorsBtn(row));
   row.appendChild(makeDeleteBtn(row, url, a.key, a.id));
   if (_audioEl) row.appendChild(_audioEl);
   return row;
 }
 
-// Blob-URLs der aktuell im #recList gerenderten Zeilen — beim nächsten Hydrieren (Backup-Import,
-// DB-Reset) VOR dem Neuaufbau freigeben, sonst bleibt bei jedem erneuten Aufruf der komplette
-// vorherige Satz (ein Foto/Video/WAV pro Aufnahme) unrevoked im Speicher hängen.
-let _recListUrls = [];
 // Baut die Liste eigener Aufnahmen/Fotos + die kleinen Abspiel-Badges auf den Sammlungskarten
-// aus der Datenbank neu auf — beim Boot UND nach jedem Löschen, damit beides synchron bleibt.
+// aus der Datenbank neu auf â€” beim Boot UND nach jedem LÃ¶schen, damit beides synchron bleibt.
 async function hydrateAttachments() {
   const list = document.getElementById('recList');
-  for (const u of _recListUrls) { try { URL.revokeObjectURL(u); } catch {} }
-  _recListUrls = [];
+  // Blob-URLs ALLER bisher gerenderten Zeilen VOR dem Neuaufbau freigeben (Backup-Import, DB-Reset).
+  // Gelesen aus dem Zeilen-Zustand statt einer separaten Liste: so sind auch live erzeugte und
+  // zugeschnittene Zeilen (neue URL) erfasst, die eine Merkliste nie gekannt hÃ¤tte.
+  if (list) for (const r of list.querySelectorAll('.rec-row')) { if (r._recUrl) { try { URL.revokeObjectURL(r._recUrl); } catch {} } }
   if (list) list.innerHTML = '';
   clearRecordings(); // revoked die Badge-URLs bereits selbst (s. ui.js)
   try {
@@ -1387,27 +1447,51 @@ async function hydrateAttachments() {
   } catch (e) { console.warn('hydrate badges', e); }
   try {
     const all = await allAttachments();
-    if (list) for (const a of all) {
-      const url = URL.createObjectURL(a.blob);
-      _recListUrls.push(url);
-      list.appendChild(attachmentRow(a, url));
-    }
+    if (list) for (const a of all) list.appendChild(attachmentRow(a, URL.createObjectURL(a.blob)));
   } catch (e) { console.warn('hydrate recList', e); }
 }
 
 // ---- Mikrofon-Steuerung ----
-// 'off': alles aus  |  'mic-ready': Mikro läuft, aber keine Erkennung  |  'mic': REC aktiv + Erkennung
+// 'off': alles aus  |  'mic-ready': Mikro lÃ¤uft, aber keine Erkennung (intern, z. B. nach einem
+// Tonclip oder ZÃ¤hlungsende)  |  'mic': Mikro + Erkennung. Der Orb zeigt den ECHTEN Zustand â€” frÃ¼her
+// stand dort statisch "Lauschmodus / aktiv", auch wenn gar nichts lief.
+const orbBig = document.getElementById('orbBig'), orbSub = document.getElementById('orbSub');
+let _listenT0 = 0, _listenTimer = null;
+const _fmtRun = ms => { const s = Math.floor(ms / 1000); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s % 60).padStart(2, '0'); };
+function _orb(big, sub, pressed, label) {
+  if (orbBig) orbBig.textContent = big;
+  if (orbSub) orbSub.textContent = sub;
+  const orb = document.getElementById('orbBtn');
+  if (orb) { orb.setAttribute('aria-pressed', String(pressed)); orb.setAttribute('aria-label', label); }
+}
 function setUI(mode, msg) {
   body.classList.remove('listening', 'mic-ready');
-  if (mode === 'off') { statusTxt.textContent = msg || 'Tippe zum Lauschen'; renderLive(); return; }
-  if (mode === 'mic-ready') { body.classList.add('mic-ready'); statusTxt.textContent = msg || 'Mikrofon bereit – REC drücken'; renderLive(); return; }
+  if (mode !== 'mic') { clearInterval(_listenTimer); _listenTimer = null; _listenT0 = 0; }
+  // Die Statuszeile zeigt nur noch echte Meldungen (Fehler, Laden, Restzeit) â€” der Grundzustand
+  // steht schon im Orb, doppelt ("Tippe zum Lauschen" + "Antippen") war nur Rauschen.
+  if (mode === 'off') {
+    statusTxt.textContent = msg || '';
+    _orb('Antippen', 'zum Lauschen', false, 'Lauschen starten');
+    renderLive(); return;
+  }
+  if (mode === 'mic-ready') {
+    body.classList.add('mic-ready');
+    statusTxt.textContent = msg || 'Mikrofon an, Erkennung pausiert';
+    _orb('Bereit', 'Tippen zum Erkennen', false, 'Erkennung starten');
+    renderLive(); return;
+  }
   body.classList.add('listening');
-  statusTxt.textContent = msg || 'Lauscht über dein Mikrofon…';
+  statusTxt.textContent = msg || '';
+  // Laufzeit im Orb: zÃ¤hlt ab dem ersten 'mic', bleibt bei weiteren setUI('mic', â€¦)-Aufrufen erhalten.
+  if (!_listenT0) _listenT0 = Date.now();
+  const tick = () => _orb('Lauscht', _fmtRun(Date.now() - _listenT0), true, 'Lauschen stoppen');
+  tick();
+  if (!_listenTimer) _listenTimer = setInterval(tick, 1000);
   renderLive();
 }
 
-// Vollbildmodus: nur per Nutzergeste auslösbar. Bisher hing das nur am Mikro-Tap —
-// jetzt auf jeden ersten Tap irgendwo in der App, damit Vollbild zuverlässig ankommt,
+// Vollbildmodus: nur per Nutzergeste auslÃ¶sbar. Bisher hing das nur am Mikro-Tap â€”
+// jetzt auf jeden ersten Tap irgendwo in der App, damit Vollbild zuverlÃ¤ssig ankommt,
 // egal welchen Button der Nutzer zuerst antippt.
 function tryFullscreen() {
   const el = document.documentElement;
@@ -1419,6 +1503,7 @@ document.addEventListener('click', tryFullscreen);
 const routeToggleBtn = document.getElementById('routeToggleBtn');
 function updateRouteToggleBtn(active) {
   if (routeToggleBtn) routeToggleBtn.classList.toggle('active', active);
+  const t = document.getElementById('routeTxt'); if (t) t.textContent = active ? 'Route stoppen' : 'Route aufzeichnen';
 }
 
 function stopSession() {
@@ -1426,7 +1511,7 @@ function stopSession() {
   updateRouteToggleBtn(false);
   if (s && s.pointCount >= 2) {
     const dist = s.distKm < 1 ? Math.round(s.distKm * 1000) + ' m' : s.distKm.toFixed(2) + ' km';
-    showInfoToast('Route beendet', dist + ' · ' + s.pointCount + ' GPS-Punkte', '📍', () => {
+    showInfoToast('Route beendet', dist + ' Â· ' + s.pointCount + ' GPS-Punkte', 'ðŸ“', () => {
       const gpx = routeTracker.exportGpx(); if (!gpx) return;
       const a = document.createElement('a'); a.href = 'data:application/gpx+xml;charset=utf-8,' + encodeURIComponent(gpx); a.download = 'waldohr-route-' + new Date().toISOString().slice(0, 10) + '.gpx'; a.click();
     }, 'GPX exportieren');
@@ -1434,59 +1519,62 @@ function stopSession() {
   updateRouteMap([]);
 }
 
-// Timing-Knopf (neben Galerie): öffnet Alarme/Zeitplanung-Modal.
+// Zeitplan-Chip unter dem Orb: Ã¶ffnet "Automatisch lauschen". warmAlarmCtx() nutzt die Nutzergeste,
+// um den AudioContext fÃ¼r spÃ¤tere AlarmtÃ¶ne freizuschalten (Browser blockieren Ton ohne Geste).
 const timingBtn = document.getElementById('timingBtn');
-if (timingBtn) timingBtn.onclick = () => { warmAlarmCtx(); openTimingModal(geo.pos); };
+if (timingBtn) timingBtn.onclick = () => { warmAlarmCtx(); openTimingModal(); };
+// Der Fotografen-Wecker lebt jetzt im Foto-Tab â€” gleiche Freischaltung beim Einschalten dort.
+document.getElementById('fwEnabled')?.addEventListener('change', warmAlarmCtx);
 
 // Route-Toggle im Karte-Tab: Route manuell starten/stoppen ohne Mikro. Teilt sich den Tracker mit
-// der Transekt-Zählung (Ornithologie-Tab) — läuft die gerade, hier nicht einfach mitbeenden/
-// überschreiben, sondern klar sagen, wo man zuerst stoppen muss.
+// der Transekt-ZÃ¤hlung (Ornithologie-Tab) â€” lÃ¤uft die gerade, hier nicht einfach mitbeenden/
+// Ã¼berschreiben, sondern klar sagen, wo man zuerst stoppen muss.
 if (routeToggleBtn) routeToggleBtn.onclick = () => {
   if (routeTracker._timer) {
     if (routeTracker.owner !== 'route') {
-      showInfoToast('🗺️ Transekt-Zählung läuft', 'Erst dort beenden, dann lässt sich die Route separat starten.', '🗺️');
+      showInfoToast('ðŸ—ºï¸ Transekt-ZÃ¤hlung lÃ¤uft', 'Erst dort beenden, dann lÃ¤sst sich die Route separat starten.', 'ðŸ—ºï¸');
       return;
     }
     stopSession();
   } else {
     geo.start();
     if (!routeTracker.start('route')) {
-      showInfoToast('🗺️ Transekt-Zählung läuft', 'Erst dort beenden, dann lässt sich die Route separat starten.', '🗺️');
+      showInfoToast('ðŸ—ºï¸ Transekt-ZÃ¤hlung lÃ¤uft', 'Erst dort beenden, dann lÃ¤sst sich die Route separat starten.', 'ðŸ—ºï¸');
       return;
     }
     updateRouteToggleBtn(true);
-    showInfoToast('Route gestartet', 'GPS-Track wird aufgezeichnet.', '📍');
+    showInfoToast('Route gestartet', 'GPS-Track wird aufgezeichnet.', 'ðŸ“');
   }
 };
 
-function toggleDetection() {
-  if (!audio.running) {
-    tryFullscreen();
-    audio.start(getMicDeviceId()).then(() => { geo.start(); detectionActive = true; setUI('mic'); if (recBtn) recBtn.classList.add('rec-on'); startDauerUeberwachung(); })
-      .catch(e => { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); });
-    return;
-  }
-  detectionActive = !detectionActive;
-  setUI(detectionActive ? 'mic' : 'mic-ready');
-  if (recBtn) recBtn.classList.toggle('rec-on', detectionActive);
-}
-
-const orbBtn = document.getElementById('orbBtn');
-if (orbBtn) orbBtn.addEventListener('click', async ev => {
-  if (ev.target.closest('.rec-pill')) return;
-  if (audio.running) {
+// EIN Start statt Orb + REC: ein Tipp startet Mikrofon UND Erkennung, der nÃ¤chste stoppt beides
+// (inkl. laufendem Tonclip, der dabei noch gespeichert wird). Lief das Mikro schon ohne Erkennung
+// ('mic-ready', z. B. wÃ¤hrend eines Tonclips), schaltet der Tipp nur die Erkennung dazu.
+let _orbBusy = false;
+async function toggleDetection() {
+  if (_orbBusy) return;   // getUserMedia kann Sekunden dauern â€” Doppeltipp nicht doppelt starten
+  if (audio.running && detectionActive) {
     if (recorder.mr && recorder.mr.state === 'recording') recorder.mr.stop();
     stopDauerUeberwachung(); audio.stop(); detectionActive = false; setUI('off');
     return;
   }
+  if (audio.running) { detectionActive = true; setUI('mic'); return; }
   tryFullscreen();
-  try { await audio.start(getMicDeviceId()); geo.start(); setUI('mic-ready'); startDauerUeberwachung(); }
-  catch (e) { console.warn('mic', e); setUI('off', 'Mikro nicht erlaubt'); }
-});
+  _orbBusy = true;
+  _orb('Startet â€¦', 'Mikrofon', false, 'Lauschen startet');
+  try { await audio.start(getMicDeviceId()); geo.start(); detectionActive = true; setUI('mic'); startDauerUeberwachung(); }
+  catch (e) { console.warn('mic', e); setUI('off', 'Mikrofon nicht erlaubt â€” bitte in den Browser-Einstellungen freigeben'); }
+  finally { _orbBusy = false; }
+}
+
+const orbBtn = document.getElementById('orbBtn');
+if (orbBtn) {
+  orbBtn.addEventListener('click', () => toggleDetection());
+  // role="button" auf einem div: Enter/Leertaste wie bei einem echten Button.
+  orbBtn.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggleDetection(); } });
+}
 
 // ---- Tonaufnahme (manuell) ----
-const recBtn = document.getElementById('recBtn');
-if (recBtn && !window.MediaRecorder) recBtn.style.display = 'none';
 
 let _recPopupEl = null, _recPopupTimer = null, _recLevelRaf = null, _recPopupT0 = 0;
 function _showRecPopup(state) {
@@ -1500,7 +1588,7 @@ function _showRecPopup(state) {
         <svg viewBox="0 0 24 24" fill="#ef4444" stroke="#ef4444" stroke-width="0.5" width="56" height="56"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="#ef4444" stroke-width="1.8"/><line x1="12" y1="19" x2="12" y2="23" stroke="#ef4444" stroke-width="1.8"/><line x1="8" y1="23" x2="16" y2="23" stroke="#ef4444" stroke-width="1.8"/></svg>
       </div>
       <div id="_recPopupTime" style="font-size:30px;font-weight:700;color:#ef4444;font-family:'Outfit',sans-serif;letter-spacing:2px">0:00</div>
-      <div id="_recPopupStatus" style="font-size:12px;color:rgba(239,68,68,.6);margin-top:6px;letter-spacing:.5px">Vorbereitung…</div>
+      <div id="_recPopupStatus" style="font-size:12px;color:rgba(239,68,68,.6);margin-top:6px;letter-spacing:.5px">Vorbereitungâ€¦</div>
       <div style="width:140px;height:6px;background:rgba(239,68,68,.12);border-radius:4px;margin:12px auto 0;overflow:hidden"><div id="_recLevelFill" style="height:100%;width:0%;border-radius:4px;background:linear-gradient(90deg,#22c55e,#a3e635);transition:width 80ms linear"></div></div>
     </div>`;
     document.body.appendChild(_recPopupEl);
@@ -1529,7 +1617,7 @@ function _showRecPopup(state) {
   }
   if (state === 'recording') {
     const s = document.getElementById('_recPopupStatus');
-    if (s) s.textContent = 'Aufnahme läuft';
+    if (s) s.textContent = 'Aufnahme lÃ¤uft';
   }
 }
 function _hideRecPopup() {
@@ -1538,25 +1626,42 @@ function _hideRecPopup() {
   if (_recLevelRaf) { cancelAnimationFrame(_recLevelRaf); _recLevelRaf = null; }
 }
 
+// Nach einem Clip, fÃ¼r den der Recorder das Mikro selbst eingeschaltet hat, es wieder freigeben â€”
+// auÃŸer jemand nutzt es inzwischen (Lauschen per Orb/REC/Punkt-ZÃ¤hlung gestartet). Vorher lief das
+// Mikro nach so einem Clip unsichtbar weiter (UI zeigte "aus", Mikro-Indikator des Systems an).
+function _releaseMicIfUnused() {
+  if (!audio.running || detectionActive || body.classList.contains('mic-ready') || body.classList.contains('listening')) return;
+  audio.stop(); setUI('off');
+}
+
 const recorder = {
-  mr: null, chunks: [], timer: null, t0: 0,
+  mr: null, chunks: [], timer: null, t0: 0, starting: false,
   fmt() { const s = Math.floor((Date.now() - this.t0) / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
   setBtn(on) {
     const cb = document.getElementById('clipBtn'); if (cb) cb.classList.toggle('rec-on', on);
+    // Die Live-Zeile der aufgenommenen Art zeigt den aktiven Zustand (ui.js liest body.dataset.recKey).
+    if (on && this.key) body.dataset.recKey = this.key; else delete body.dataset.recKey;
+    renderLive();
   },
   async toggle(label, key) {
     if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
+    // WÃ¤hrend der (teils sekundenlangen) Mikro-Initialisierung einen zweiten Tap ignorieren â€”
+    // sonst starteten zwei parallele audio.start()/MediaRecorder.
+    if (this.starting) return;
+    let startedMic = false;
     if (!audio.running) {
       // Popup ZUERST anzeigen, dem Browser per setTimeout sicher einen Render-Tick geben und ERST
       // DANN die (auf manchen Handys >10 s langsame) Mikrofon-Initialisierung starten. setTimeout
-      // statt requestAnimationFrame, weil rAF auf manchen Geräten (Fullscreen-/Render-Pausen)
-      // sekundenlang aussetzen kann — dann erschiene das Popup gar nicht.
+      // statt requestAnimationFrame, weil rAF auf manchen GerÃ¤ten (Fullscreen-/Render-Pausen)
+      // sekundenlang aussetzen kann â€” dann erschiene das Popup gar nicht.
+      this.starting = true;
       _showRecPopup('preparing');
       await new Promise(r => setTimeout(r, 60));
-      try { await audio.start(getMicDeviceId()); geo.start(); }
+      try { await audio.start(getMicDeviceId()); geo.start(); startedMic = true; }
       catch (e) { console.warn('mic', e); statusTxt.textContent = 'Mikro nicht erlaubt'; _hideRecPopup(); return; }
+      finally { this.starting = false; }
     }
-    if (!audio.stream) { _hideRecPopup(); return; }
+    if (!audio.stream) { _hideRecPopup(); if (startedMic) _releaseMicIfUnused(); return; }
     let type = '';
     for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
       if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { type = t; break; }
@@ -1564,20 +1669,29 @@ const recorder = {
     try { this.mr = type ? new MediaRecorder(audio.stream, { mimeType: type }) : new MediaRecorder(audio.stream); }
     catch (e) {
       console.warn('rec', e);
-      if (statusTxt) statusTxt.textContent = 'Aufnahme nicht möglich';
+      if (statusTxt) statusTxt.textContent = 'Aufnahme nicht mÃ¶glich';
       _hideRecPopup();
-      setTimeout(() => { if (statusTxt && statusTxt.textContent === 'Aufnahme nicht möglich') statusTxt.textContent = ''; }, 3000);
+      if (startedMic) _releaseMicIfUnused();
+      setTimeout(() => { if (statusTxt && statusTxt.textContent === 'Aufnahme nicht mÃ¶glich') statusTxt.textContent = ''; }, 3000);
       return;
     }
-    this.chunks = []; this.label = label || null; this.key = key || null;
-    this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
-    this.mr.onstop = () => { this.setBtn(false); _hideRecPopup(); this.save(); };
-    this.mr.start();
+    // Pro Aufnahme eigene Puffer/Beschriftung (Closure statt this.*): save() wartet auf enhanceBlob â€”
+    // ein schnell nachgestarteter zweiter Clip Ã¼berschrieb vorher this.chunks/label/key, und der
+    // erste wurde mit Ton/Namen des zweiten (oder gar nicht) gespeichert.
+    const mr = this.mr, chunks = [], recLabel = label || null, recKey = key || null;
+    this.chunks = chunks; this.label = recLabel; this.key = recKey;
+    mr.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    mr.onstop = () => {
+      this.setBtn(false); _hideRecPopup();
+      if (startedMic) _releaseMicIfUnused();
+      this.save(chunks, recLabel, recKey);
+    };
+    mr.start();
     this.t0 = Date.now(); this.setBtn(true); _showRecPopup('recording');
   },
-  async save() {
-    if (!this.chunks.length) return;
-    const raw = new Blob(this.chunks, { type: this.chunks[0].type || 'audio/webm' });
+  async save(chunks = this.chunks, label = this.label, key = this.key) {
+    if (!chunks.length) return;
+    const raw = new Blob(chunks, { type: chunks[0].type || 'audio/webm' });
     // Aufnahme lauter & klarer machen: tiefes Rauschen raus, Pegel normalisieren, als WAV sichern.
     let url, ext, saveBlob, mime;
     try {
@@ -1590,45 +1704,44 @@ const recorder = {
       url = URL.createObjectURL(raw); ext = raw.type.includes('mp4') ? 'm4a' : 'webm';
     }
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    const prefix = this.label ? this.label.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'waldohr';
+    const prefix = label ? label.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'waldohr';
     const name = prefix + '_' + stamp + '.' + ext;
+    const ts = Date.now();
     const row = document.createElement('div'); row.className = 'rec-row';
     const a = document.createElement('audio'); a.src = url; a.preload = 'metadata'; a.hidden = true;
     wireAudioRouting(a);
-    const dl = makeDownloadBtn(url, name, this.label);
+    const dl = makeDownloadBtn(url, name, label);
     row.appendChild(_makeAudioIcon(a));
-    if (this.label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = this.label; row.appendChild(lb); }
+    if (label) { const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = label; row.appendChild(lb); }
     row.appendChild(_spacer());
     row.appendChild(dl);
     row.appendChild(_makeScissorsBtn(row));
     let attId = null;
-    try { attId = await addAttachment({ key: this.key, label: this.label, kind: 'audio', blob: saveBlob, mime }); }
+    try { attId = await addAttachment({ key, label, kind: 'audio', blob: saveBlob, mime, ts }); }
     catch (e) { console.warn('addAttachment', e); }
-    row.appendChild(makeDeleteBtn(row, url, this.key, attId));
+    _bindRecRow(row, { url, name, attId, meta: { detId: null, key, label, kind: 'audio', ts } });
+    row.appendChild(makeDeleteBtn(row, url, key, attId));
     row.appendChild(a);
     const list = document.getElementById('recList'); if (list) list.prepend(row);
-    if (this.key) registerRecording(this.key, url);
-    if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
+    // Eigene URL fÃ¼rs Badge â€” die Zeilen-URL darf beim LÃ¶schen/Zuschneiden freigegeben werden.
+    if (key) registerRecording(key, URL.createObjectURL(saveBlob));
+    if (!isGalleryVisible()) galleryBadgeAdd(1);
   }
 };
-if (recBtn) recBtn.onclick = () => toggleDetection();
 const clipBtn = document.getElementById('clipBtn');
 if (clipBtn && !window.MediaRecorder) clipBtn.style.display = 'none';
 if (clipBtn) clipBtn.onclick = () => recorder.toggle();
 const photoFab = document.getElementById('photoFab');
-// Galerie beim Öffnen der Kamera schließen (lag sonst sichtbar unter/über dem Kamera-Fenster).
-// Nach dem Auslösen NICHT mehr automatisch zurück zur Galerie springen — die Kamera bleibt jetzt
-// bewusst offen (mehrere Fotos hintereinander ohne erneutes Öffnen), das Galerie-Icon in der
-// Kamera selbst blinkt kurz als Bestätigung und ist antippbar, um gezielt zurückzuspringen.
-if (photoFab) photoFab.onclick = () => {
-  closeGallery();
-  openCamera(capture => _saveCapture({ ...capture, label: null, key: null }), openGallery);
-};
-const galleryModal = document.getElementById('galleryModal');
-const galleryBtn = document.getElementById('galleryBtn');
-const galleryClose = document.getElementById('galleryClose');
-const galleryScrim = document.getElementById('galleryScrim');
+// "Kamera Ã¶ffnen" im Foto-Tab. Nach dem AuslÃ¶sen bleibt die Kamera bewusst offen (mehrere Fotos
+// hintereinander); das Galerie-Icon in der Kamera blinkt kurz als BestÃ¤tigung und fÃ¼hrt zurÃ¼ck.
+if (photoFab) photoFab.onclick = () => _openCameraFor(null, null);
 
+// ---- Galerie = Foto-Tab, Segment "Galerie" ----
+// FrÃ¼her ein eigenes Modal; openGallery() wechselt jetzt in den Foto-Tab (auch das Galerie-Icon
+// in der Kamera, s. _openCameraFor). Das ZÃ¤hler-Badge sitzt am Foto-Tab der Navigation.
+function isGalleryVisible() {
+  return !!document.getElementById('v-foto')?.classList.contains('active') && isFotoSegment('galerie');
+}
 const LS_BADGE = 'waldohr.gallery.newCount';
 function galleryBadgeAdd(n) {
   try {
@@ -1653,29 +1766,53 @@ function galleryBadgeClear() {
   }
 })();
 
-const openGallery = () => { galleryModal && galleryModal.classList.add('open'); galleryBadgeClear(); };
-const closeGallery = () => galleryModal && galleryModal.classList.remove('open');
-if (galleryBtn) galleryBtn.onclick = openGallery;
-if (galleryClose) galleryClose.onclick = closeGallery;
-if (galleryScrim) galleryScrim.onclick = closeGallery;
+function openGallery() {
+  showFotoSegment('galerie');
+  if (!document.getElementById('v-foto')?.classList.contains('active')) document.querySelector('.nav button[data-v="foto"]')?.click();
+  galleryBadgeClear();
+}
+// Badge lÃ¶schen, sobald die Galerie tatsÃ¤chlich zu sehen ist (Tab- oder Segmentwechsel).
+document.addEventListener('waldohr:tab', e => {
+  if (e.detail !== 'foto') return;
+  if (isFotoSegment('galerie')) galleryBadgeClear();
+  if (isFotoSegment('licht')) loadPhotoWeather();
+});
+document.addEventListener('waldohr:fotoseg', e => {
+  if (e.detail === 'galerie') galleryBadgeClear();
+  if (e.detail === 'licht') loadPhotoWeather();
+});
 
-// ---- Foto-Wetter Popup ----
-const photoWeatherBtn = document.getElementById('photoWeatherBtn');
-const photoWeatherModal = document.getElementById('photoWeatherModal');
-const photoWeatherScrim = document.getElementById('photoWeatherScrim');
-if (photoWeatherScrim) photoWeatherScrim.onclick = () => photoWeatherModal?.classList.remove('open');
-if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
-  photoWeatherModal?.classList.add('open');
+// ---- Licht & Wetter (Foto-Tab, Segment "Licht") ----
+// Linien-Icons statt Wetter-Emoji (die je Plattform anders aussehen). WMO-Code â†’ Icon-Gruppe.
+function wxIcon(wmo) {
+  const n = wmo == null ? 3 : wmo;
+  const name = n === 0 || n === 1 ? 'sun' : n === 2 ? 'partly' : n === 3 ? 'cloud' : n === 45 || n === 48 ? 'fog'
+    : (n >= 71 && n <= 77) || n === 85 || n === 86 ? 'snow' : n >= 95 ? 'storm' : n >= 51 ? 'rain' : 'cloud';
+  return icon(name);
+}
+const _pwRow = (ico, lbl, val, cls = '') => `<div class="pw-row"><span class="pw-icon${cls ? ' ' + cls : ''}">${ico}</span><span class="pw-lbl">${lbl}</span><span class="pw-val">${val}</span></div>`;
+const _slot = s => `<div class="tmw-slot"><div class="tmw-h">${s.hour}:00</div><div class="tmw-ico">${wxIcon(s.visKm < 2 ? 45 : s.wmo)}</div><div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}Â°</div><div class="tmw-cc">${s.cloudcover} % Wolken</div><div class="tmw-rain">${s.precipProb > 0 ? s.precipProb + ' % Regen' : ''}</div></div>`;
+let _pwLoadedAt = 0, _pwBusy = false;
+async function loadPhotoWeather(force) {
+  // Nicht bei jedem Tab-Wechsel neu laden â€” Wetter Ã¤ndert sich nicht minÃ¼tlich (10 Min Puffer).
+  if (_pwBusy || (!force && Date.now() - _pwLoadedAt < 10 * 60000)) return;
   const content = document.getElementById('photoWeatherContent');
   const locEl = document.getElementById('pwLocation');
   if (!content) return;
-  content.innerHTML = '<div class="pw-loading">Lade Wetterdaten…</div>';
+  _pwBusy = true;
+  try { await _renderPhotoWeather(content, locEl); _pwLoadedAt = geo.pos ? Date.now() : 0; }
+  finally { _pwBusy = false; }
+}
+const photoWeatherBtn = document.getElementById('photoWeatherBtn');
+if (photoWeatherBtn) photoWeatherBtn.onclick = () => loadPhotoWeather(true);
+async function _renderPhotoWeather(content, locEl) {
+  content.innerHTML = '<div class="pw-loading">Lade Wetterdatenâ€¦</div>';
   if (locEl) locEl.textContent = '';
   const lat = geo.pos?.lat, lng = geo.pos?.lng;
 
-  // Location name (async, fills in when ready)
+  // Ortsname (asynchron, erscheint, sobald da)
   if (lat != null && locEl) {
-    reverseGeocode(lat, lng).then(name => { if (name && locEl) locEl.textContent = '📍 ' + name; });
+    reverseGeocode(lat, lng).then(name => { if (name && locEl) locEl.textContent = name; });
   }
 
   const [pw, sun, moonTimes, todaySlots] = await Promise.all([
@@ -1684,104 +1821,119 @@ if (photoWeatherBtn) photoWeatherBtn.onclick = async () => {
     lat != null ? fetchMoonTimes(lat, lng) : Promise.resolve(null),
     lat != null ? fetchTodayHours(lat, lng) : Promise.resolve(null),
   ]);
-  const fmt = d => d instanceof Date ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '–';
-  const fmtDate = d => d instanceof Date ? d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) : '–';
+  const fmt = d => d instanceof Date ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : 'â€“';
+  const fmtDate = d => d instanceof Date ? d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) : 'â€“';
   let html = '';
   if (sun) {
     const sr = sun.sunrise;
     const blueEnd = sr ? new Date(sr.getTime() - 20 * 60000) : null;
     const goldenEnd = sr ? new Date(sr.getTime() + 45 * 60000) : null;
-    html += '<div class="pw-section">Licht-Zeiten</div>';
-    if (sun.civilBegin) html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Blaue Stunde</span><span class="pw-val">${fmt(sun.civilBegin)} – ${blueEnd ? fmt(blueEnd) : '–'}</span></div>`;
-    if (sr) html += `<div class="pw-row"><span class="pw-icon">🌄</span><span class="pw-lbl">Sonnenaufgang</span><span class="pw-val">${fmt(sr)}</span></div>`;
-    if (sr) html += `<div class="pw-row"><span class="pw-icon">🌅</span><span class="pw-lbl">Goldene Stunde</span><span class="pw-val">${fmt(sr)} – ${goldenEnd ? fmt(goldenEnd) : '–'}</span></div>`;
+    html += '<div class="pw-section">Morgens</div>';
+    if (sun.civilBegin) html += _pwRow(icon('moon'), 'Blaue Stunde', `${fmt(sun.civilBegin)} â€“ ${blueEnd ? fmt(blueEnd) : 'â€“'}`, 'cool');
+    if (sr) html += _pwRow(icon('sunrise'), 'Sonnenaufgang', fmt(sr), 'warm');
+    if (sr) html += _pwRow(icon('sun'), 'Goldene Stunde', `${fmt(sr)} â€“ ${goldenEnd ? fmt(goldenEnd) : 'â€“'}`, 'warm');
     if (sun.sunset) {
-      html += '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;padding:6px 0 2px;opacity:.7">Abends</div>';
+      html += '<div class="pw-section">Abends</div>';
       const goldenBegin = new Date(sun.sunset.getTime() - 45 * 60000);
-      html += `<div class="pw-row"><span class="pw-icon">🌇</span><span class="pw-lbl">Goldene Stunde</span><span class="pw-val">${fmt(goldenBegin)} – ${fmt(sun.sunset)}</span></div>`;
-      html += `<div class="pw-row"><span class="pw-icon">🌆</span><span class="pw-lbl">Sonnenuntergang</span><span class="pw-val">${fmt(sun.sunset)}</span></div>`;
-      if (sun.civilEnd) html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Blaue Stunde</span><span class="pw-val">${fmt(sun.sunset)} – ${fmt(sun.civilEnd)}</span></div>`;
+      html += _pwRow(icon('sun'), 'Goldene Stunde', `${fmt(goldenBegin)} â€“ ${fmt(sun.sunset)}`, 'warm');
+      html += _pwRow(icon('sunset'), 'Sonnenuntergang', fmt(sun.sunset), 'warm');
+      if (sun.civilEnd) html += _pwRow(icon('moon'), 'Blaue Stunde', `${fmt(sun.sunset)} â€“ ${fmt(sun.civilEnd)}`, 'cool');
     }
   }
   if (pw) {
     const fogRisk = pw.visKm < 1 ? 'Nebel' : pw.visKm < 5 && pw.humidity > 85 ? 'Dunst' : pw.humidity > 92 ? 'Nebelgefahr' : null;
-    const tip = pw.cloudcover < 20 && pw.windKmh < 10 ? 'Optimale Bedingungen für Langzeitbelichtung!'
-      : pw.cloudcover > 70 ? 'Weiches Diffuslicht durch Bewölkung — ideal für Porträtfotos.'
-      : pw.windKmh > 25 ? 'Starker Wind — kurze Belichtungszeit wählen.'
-      : 'Gute Bedingungen für Naturfotografie.';
-    html += '<div class="pw-section">Aktuell</div>';
-    html += `<div class="pw-row"><span class="pw-icon">${weatherEmoji(pw.wmo)}</span><span class="pw-lbl">${weatherLabel(pw.wmo)}</span><span class="pw-val">${pw.temp}°C</span></div>`;
-    html += `<div class="pw-row"><span class="pw-icon">💨</span><span class="pw-lbl">Wind</span><span class="pw-val">${pw.windKmh} km/h ${windDirLabel(pw.windDir)}</span></div>`;
-    html += `<div class="pw-row"><span class="pw-icon">💧</span><span class="pw-lbl">Luftfeuchte</span><span class="pw-val">${pw.humidity}%${pw.humidity > 85 ? ' ⚠' : ''}</span></div>`;
-    if (fogRisk) html += `<div class="pw-row"><span class="pw-icon">🌫️</span><span class="pw-lbl">Nebel</span><span class="pw-val" style="color:var(--amber)">${fogRisk} · ${pw.visKm} km</span></div>`;
-    else         html += `<div class="pw-row"><span class="pw-icon">👁</span><span class="pw-lbl">Sichtweite</span><span class="pw-val">${pw.visKm} km</span></div>`;
-    html += `<div class="pw-row"><span class="pw-icon">☁️</span><span class="pw-lbl">Bewölkung</span><span class="pw-val">${pw.cloudcover}%</span></div>`;
-    html += `<div class="pw-row"><span class="pw-icon">☀️</span><span class="pw-lbl">UV-Index</span><span class="pw-val">${pw.uvIndex} – ${uvLabel(pw.uvIndex)}</span></div>`;
-    html += `<div class="pw-tip">💡 ${tip}</div>`;
-    if (todaySlots?.length) {
-      html += '<div class="tmw-slots" style="margin-top:8px">'
-        + todaySlots.map(s => {
-            const fog = s.visKm < 2 ? ' 🌫️' : s.visKm < 5 ? ' 🌁' : '';
-            return `<div class="tmw-slot"><div class="tmw-h">${s.hour}:00</div><div class="tmw-ico">${weatherEmoji(s.wmo)}${fog}</div><div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}°</div><div class="tmw-cc">${s.cloudcover}%☁️</div><div class="tmw-rain">${s.precipProb > 0 ? '💧' + s.precipProb + '%' : ''}</div></div>`;
-          }).join('') + '</div>';
-    }
+    const tip = pw.cloudcover < 20 && pw.windKmh < 10 ? 'Optimale Bedingungen fÃ¼r Langzeitbelichtung.'
+      : pw.cloudcover > 70 ? 'Weiches Diffuslicht durch BewÃ¶lkung â€” ideal fÃ¼r PortrÃ¤tfotos.'
+      : pw.windKmh > 25 ? 'Starker Wind â€” kurze Belichtungszeit wÃ¤hlen.'
+      : 'Gute Bedingungen fÃ¼r Naturfotografie.';
+    html += '<div class="pw-section">Jetzt</div>';
+    html += _pwRow(wxIcon(pw.wmo), esc(weatherLabel(pw.wmo) || 'Wetter'), pw.temp + ' Â°C');
+    html += _pwRow(icon('wind'), 'Wind', `${pw.windKmh} km/h ${windDirLabel(pw.windDir)}`);
+    html += _pwRow(icon('drop'), 'Luftfeuchte', pw.humidity + ' %');
+    if (fogRisk) html += `<div class="pw-row"><span class="pw-icon warm">${icon('fog')}</span><span class="pw-lbl">Nebel</span><span class="pw-val warn">${fogRisk} Â· ${pw.visKm} km</span></div>`;
+    else html += _pwRow(icon('eye'), 'Sichtweite', pw.visKm + ' km');
+    html += _pwRow(icon('cloud'), 'BewÃ¶lkung', pw.cloudcover + ' %');
+    html += _pwRow(icon('sun'), 'UV-Index', `${pw.uvIndex} Â· ${uvLabel(pw.uvIndex)}`);
+    html += `<div class="pw-tip">${icon('camera')}<span>${tip}</span></div>`;
+    if (todaySlots?.length) html += '<div class="pw-section">Heute stÃ¼ndlich</div><div class="tmw-slots">' + todaySlots.map(_slot).join('') + '</div>';
   }
-  // Mond-Kalender
+  // Mond-Kalender (moonPhaseLabel liefert "Name Emoji" â€” nur der Name wird angezeigt)
   const mc = moonCalendar();
+  const phaseName = moonPhaseLabel(mc.phase).replace(/\s*[\p{Extended_Pictographic}ï¸]+\s*$/u, '');
   html += '<div class="pw-section">Mond</div>';
-  html += `<div class="pw-row"><span class="pw-icon">${moonPhaseLabel(mc.phase).split(' ')[1] || '🌙'}</span><span class="pw-lbl">Phase</span><span class="pw-val">${moonPhaseLabel(mc.phase).replace(/\s[\S]+$/, '')} · ${mc.ageInDays} Tage</span></div>`;
-  const mrStr = moonTimes === null ? 'GPS nötig' : (moonTimes.moonrise ? fmt(moonTimes.moonrise) : 'Heute nicht');
-  const msStr = moonTimes === null ? 'GPS nötig' : (moonTimes.moonset ? fmt(moonTimes.moonset) : 'Heute nicht');
-  html += `<div class="pw-row"><span class="pw-icon">🌙</span><span class="pw-lbl">Mondaufgang</span><span class="pw-val">${mrStr}</span></div>`;
-  html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Monduntergang</span><span class="pw-val">${msStr}</span></div>`;
-  html += `<div class="pw-row"><span class="pw-icon">🌕</span><span class="pw-lbl">Nächster Vollmond</span><span class="pw-val">${fmtDate(mc.nextFull)} (in ${mc.daysToFull} d)</span></div>`;
-  html += `<div class="pw-row"><span class="pw-icon">🌑</span><span class="pw-lbl">Nächster Neumond</span><span class="pw-val">${fmtDate(mc.nextNew)} (in ${mc.daysToNew} d)</span></div>`;
+  html += _pwRow(icon('moon'), 'Phase', `${phaseName} Â· ${mc.ageInDays} Tage`);
+  const mrStr = moonTimes === null ? 'GPS nÃ¶tig' : (moonTimes.moonrise ? fmt(moonTimes.moonrise) : 'heute nicht');
+  const msStr = moonTimes === null ? 'GPS nÃ¶tig' : (moonTimes.moonset ? fmt(moonTimes.moonset) : 'heute nicht');
+  html += _pwRow(icon('moon'), 'Mondaufgang', mrStr);
+  html += _pwRow(icon('moon'), 'Monduntergang', msStr);
+  html += _pwRow(icon('moon'), 'NÃ¤chster Vollmond', `${fmtDate(mc.nextFull)} (in ${mc.daysToFull} T.)`);
+  html += _pwRow(icon('moon'), 'NÃ¤chster Neumond', `${fmtDate(mc.nextNew)} (in ${mc.daysToNew} T.)`);
 
-  if (!pw && !sun) html = '<div class="pw-loading">GPS benötigt – Standort erlauben, dann erneut öffnen.</div>';
+  if (!pw && !sun) html = '<div class="pw-loading">Standort benÃ¶tigt â€” GPS erlauben, dann aktualisieren.</div>';
   content.innerHTML = html;
 
-  // Morgen-Früh-Prognose nachreichen
+  // Morgen-FrÃ¼h-Prognose nachreichen
   if (lat != null) {
     const tmwEl = document.createElement('div');
-    tmwEl.innerHTML = '<div class="pw-section" style="margin-top:10px">Morgen früh</div><div class="pw-loading">Prognose wird geladen …</div>';
+    tmwEl.innerHTML = '<div class="pw-section">Morgen frÃ¼h</div><div class="pw-loading">Prognose wird geladen â€¦</div>';
     content.appendChild(tmwEl);
     fetchTomorrowMorning(lat, lng).then(slots => {
-      if (!slots || !slots.length) { tmwEl.innerHTML = '<div class="pw-section" style="margin-top:10px">Morgen früh</div><div class="pw-loading">Keine Prognose verfügbar.</div>'; return; }
-      tmwEl.innerHTML = '<div class="pw-section" style="margin-top:10px">Morgen früh</div><div class="tmw-slots">'
-        + slots.map(s => {
-            const fog = s.visKm < 2 ? ' 🌫️' : s.visKm < 5 ? ' 🌁' : '';
-            return `<div class="tmw-slot"><div class="tmw-h">${s.hour}:00</div><div class="tmw-ico">${weatherEmoji(s.wmo)}${fog}</div><div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}°</div><div class="tmw-cc">${s.cloudcover}%☁️</div><div class="tmw-rain">${s.precipProb > 0 ? '💧' + s.precipProb + '%' : ''}</div></div>`;
-          }).join('') + '</div>';
+      if (!slots || !slots.length) { tmwEl.innerHTML = '<div class="pw-section">Morgen frÃ¼h</div><div class="pw-loading">Keine Prognose verfÃ¼gbar.</div>'; return; }
+      tmwEl.innerHTML = '<div class="pw-section">Morgen frÃ¼h</div><div class="tmw-slots">' + slots.map(_slot).join('') + '</div>';
     }).catch(() => { tmwEl.remove(); });
   }
-};
+}
 
 // Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen und
-// verknüpft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
+// verknÃ¼pft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
 window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);
+// Richtungs-Scan (js/scan.js): nutzt das laufende Lausch-Mikrofon mit, sonst ein eigenes.
+window.__waldohrScanDirection = name => openScan({ species: name || '', engine: audio });
+document.getElementById('scanBtn')?.addEventListener('click', () => openScan({ engine: audio }));
 
-// API for Punkt-Zählung cross-tab flow (ornithologie.js)
+// API for Punkt-ZÃ¤hlung cross-tab flow (ornithologie.js)
 let _triggerRaf = null, _triggerMr = null;
 window.__waldohr = {
   startDetection: async () => {
     detectionActive = true;
     setUI('mic');
-    if (recBtn) recBtn.classList.add('rec-on');
     if (!audio.running) {
       // Erst die UI (Timer/Banner) zeichnen lassen, dann das blockierende getUserMedia starten.
       // setTimeout statt rAF (rAF kann auf manchen Handys sekundenlang aussetzen).
       await new Promise(r => setTimeout(r, 60));
       try { await audio.start(getMicDeviceId()); geo.start(); }
-      catch (e) { detectionActive = false; setUI('off'); if (recBtn) recBtn.classList.remove('rec-on'); throw e; }
+      catch (e) { detectionActive = false; setUI('off'); throw e; }
     }
   },
-  stopDetection: () => {
+  // opts.releaseMic: Erkennung UND Mikrofon aus (Ende von Punkt-ZÃ¤hlung/Transekt, wenn vorher nicht
+  // gelauscht wurde) â€” wie der Orb-Stopp: laufenden Clip sauber beenden (wird gespeichert), Dauer-
+  // Ã¼berwachung stoppen, Mikro freigeben, UI auf "aus". Ohne opts unverÃ¤ndert: Mikro bleibt bereit.
+  stopDetection: (opts) => {
     detectionActive = false;
+    if (opts && opts.releaseMic) {
+      if (recorder.mr && recorder.mr.state === 'recording') recorder.mr.stop();
+      // Trigger-Aufnahme hÃ¤ngt am selben Stream â€” ohne Mikro sinnlos, also mitbeenden (speichert noch).
+      if (_triggerRaf) { cancelAnimationFrame(_triggerRaf); _triggerRaf = null; }
+      if (_triggerMr && _triggerMr.state === 'recording') _triggerMr.stop();
+      _triggerMr = null;
+      stopDauerUeberwachung();
+      if (audio.running) audio.stop();
+      setUI('off');
+      return;
+    }
     setUI(audio.running ? 'mic-ready' : 'off');
-    if (recBtn) recBtn.classList.remove('rec-on');
   },
   isDetecting: () => audio.running && detectionActive,
-  switchTab: v => { document.querySelector(`.nav button[data-v="${v}"]`)?.click(); },
+  isMicRunning: () => !!audio.running,
+  // FÃ¼r den Feldbuch-Export "Heute hier": maÃŸgebliche eigene Position (manuell gesetzt vor GPS).
+  getPos: () => myPos() || null,
+  // Akzeptiert 'listen' wie 'v-listen' (ornithologie.js Ã¼bergibt die View-ID mit "v-"-PrÃ¤fix, die
+  // Nav-Buttons tragen data-v ohne) â€” vorher sprang der Start einer ZÃ¤hlung nie zu Lauschen.
+  switchTab: v => {
+    const id = String(v || '').replace(/^v-/, '');
+    if (!/^[a-z0-9-]+$/i.test(id)) return;
+    document.querySelector(`.nav button[data-v="${id}"]`)?.click();
+  },
   openDownload: (url, filename, label) => openDownloadSheet(url, filename, label),
   startTriggerRec: (threshold) => {
     if (_triggerRaf) return;
@@ -1801,7 +1953,6 @@ window.__waldohr = {
       tMr.ondataavailable = e => { if (e.data?.size) tChunks.push(e.data); };
       tMr.onstop = async () => {
         _triggerMr = null;
-        if (recBtn) recBtn.classList.remove('rec-on');
         if (!tChunks.length) return;
         const raw = new Blob(tChunks, { type: tChunks[0].type || 'audio/webm' });
         let saveBlob, mime, url, ext;
@@ -1820,13 +1971,14 @@ window.__waldohr = {
         const lb = document.createElement('span'); lb.className = 'rec-label'; lb.textContent = 'Trigger'; row.appendChild(lb);
         row.appendChild(_spacer()); row.appendChild(dl); row.appendChild(_makeScissorsBtn(row));
         let attId = null;
-        try { attId = await addAttachment({ key: null, label: 'Trigger', kind: 'audio', blob: saveBlob, mime }); } catch {}
+        const ts = Date.now();
+        try { attId = await addAttachment({ key: null, label: 'Trigger', kind: 'audio', blob: saveBlob, mime, ts }); } catch {}
+        _bindRecRow(row, { url, name, attId, meta: { detId: null, key: null, label: 'Trigger', kind: 'audio', ts } });
         row.appendChild(makeDeleteBtn(row, url, null, attId)); row.appendChild(a);
         const list = document.getElementById('recList'); if (list) list.prepend(row);
-        if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
+        if (!isGalleryVisible()) galleryBadgeAdd(1);
       };
       tMr.start();
-      if (recBtn) recBtn.classList.add('rec-on');
       setTimeout(() => { if (tMr && tMr.state === 'recording') { tMr.stop(); tMr = null; tSilenceAt = null; } }, 60000);
     }
     function tTick() {
@@ -1852,14 +2004,16 @@ window.__waldohr = {
   },
 };
 
-// ---- Kamera-Aufnahme: Foto oder Video, über eigene Kamera-UI ----
-// Natives <input capture> bleibt als Fallback erhalten (camera.js greift darauf zurück falls getUserMedia verweigert).
+// ---- Kamera-Aufnahme: Foto oder Video, Ã¼ber eigene Kamera-UI ----
+// Natives <input capture> bleibt als Fallback erhalten (camera.js greift darauf zurÃ¼ck falls getUserMedia verweigert).
 const photoInput = document.getElementById('photoInput');
 async function _saveCapture({ blob, mime, kind, label, key }) {
   const url = URL.createObjectURL(blob);
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const prefix = label ? label.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'waldohr';
-  const ext = mime.includes('mp4') ? 'mp4' : mime.includes('webm') ? 'webm' : 'jpg';
+  // Endung nach kind (wie in attachmentRow): Fotos aus dem nativen Fallback kÃ¶nnen PNG/HEIC sein.
+  const ext = kind === 'video' ? (mime.includes('mp4') ? 'mp4' : mime.includes('quicktime') ? 'mov' : 'webm')
+    : (mime.includes('png') ? 'png' : mime.includes('heic') ? 'heic' : mime.includes('webp') ? 'webp' : 'jpg');
   const row = document.createElement('div'); row.className = 'rec-row';
   if (kind === 'video') {
     const thumb = _makeVideoThumb(url);
@@ -1876,36 +2030,46 @@ async function _saveCapture({ blob, mime, kind, label, key }) {
   row.appendChild(dl);
   if (kind === 'photo') row.appendChild(makeShareBtn(url, key, label));
   if (kind === 'video') row.appendChild(makeReelBtn(url, mime));
-  row.appendChild(makeSendToPartnerBtn(blob, kind, label));
   let attId = null;
-  try { attId = await addAttachment({ key: key || null, label: label || null, kind, blob, mime }); }
+  const ts = Date.now();
+  try { attId = await addAttachment({ key: key || null, label: label || null, kind, blob, mime, ts }); }
   catch (e) { console.warn('addAttachment', e); }
+  _bindRecRow(row, { url, name: prefix + '_' + stamp + '.' + ext, attId, meta: { detId: null, key: key || null, label: label || null, kind, ts } });
   row.appendChild(makeDeleteBtn(row, url, key || null, attId));
   const list = document.getElementById('recList'); if (list) list.prepend(row);
-  openGallery();
-  if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
+  // Nach einem Foto bleibt die Kamera bewusst offen (mehrere Fotos hintereinander) â€” dann darf die
+  // Galerie NICHT aufgehen: sie liegt Ã¼ber der Kamera und verdeckt AuslÃ¶ser und Zoom-Regler, die
+  // Kamera wirkt "kaputt". BestÃ¤tigung gibt dort das blinkende Galerie-Icon. Nach Video/Zeitraffer
+  // ist die Kamera schon geschlossen, dann zeigt die Galerie das Ergebnis direkt.
+  if (!document.getElementById('cameraModal')?.classList.contains('open')) openGallery();
+  if (!isGalleryVisible()) galleryBadgeAdd(1);
 }
-// Natives Input als letzter Fallback (wenn getUserMedia blockiert wird)
+// Natives Input als letzter Fallback (wenn getUserMedia blockiert wird): camera.js klickt dann nur
+// #photoInput an und kennt die Art nicht. Darum merkt sich _openCameraFor() Beschriftung/Art bei
+// JEDEM Kamera-Ã–ffnen (auch null beim freien Foto-Knopf, damit keine alte Art hÃ¤ngen bleibt) â€” vorher
+// gab es dafÃ¼r nur einen nie aufgerufenen photoInput._setFallback-Hook, Fallback-Fotos blieben unbeschriftet.
+let _fallbackLabel = null, _fallbackKey = null;
+function _openCameraFor(label, key) {
+  _fallbackLabel = label || null; _fallbackKey = key || null;
+  openCamera(capture => _saveCapture({ ...capture, label: label || null, key: key || null }), openGallery);
+}
 if (photoInput) {
-  let _fallbackLabel = null, _fallbackKey = null;
   photoInput.onchange = async () => {
     const file = photoInput.files?.[0]; photoInput.value = '';
-    if (!file) return;
-    await _saveCapture({ blob: file, mime: file.type || 'image/jpeg', kind: 'photo', label: _fallbackLabel, key: _fallbackKey });
+    const label = _fallbackLabel, key = _fallbackKey;
     _fallbackLabel = null; _fallbackKey = null;
+    if (!file) return;
+    await _saveCapture({ blob: file, mime: file.type || 'image/jpeg', kind: 'photo', label, key });
   };
-  photoInput._setFallback = (l, k) => { _fallbackLabel = l; _fallbackKey = k; };
 }
-// Kamera-Knopf an Live-Zeile / Seltenheits-Toast → öffnet eigene Kamera-UI
-window.__waldohrCapturePhoto = (name, key) => {
-  openCamera(capture => _saveCapture({ ...capture, label: name || null, key: key || null }), openGallery);
-};
+// Kamera-Knopf an Live-Zeile / Seltenheits-Toast â†’ Ã¶ffnet eigene Kamera-UI
+window.__waldohrCapturePhoto = (name, key) => _openCameraFor(name, key);
 
-// ---- Wiedergabe über Lautsprecher statt Hörer ----
-// Läuft das Mikro noch (laufende Erkennung), routen iOS/Android die Audioausgabe beim
-// gleichzeitigen Abspielen oft leise über den Hörer statt den Lautsprecher (geteilte
-// "Aufnahme+Wiedergabe"-Audiosession). Pausiert den AudioContext kurz fürs Abspielen einer
-// Referenz-/eigenen Aufnahme — verhindert nebenbei auch, dass das eigene Mikro die gerade
+// ---- Wiedergabe Ã¼ber Lautsprecher statt HÃ¶rer ----
+// LÃ¤uft das Mikro noch (laufende Erkennung), routen iOS/Android die Audioausgabe beim
+// gleichzeitigen Abspielen oft leise Ã¼ber den HÃ¶rer statt den Lautsprecher (geteilte
+// "Aufnahme+Wiedergabe"-Audiosession). Pausiert den AudioContext kurz fÃ¼rs Abspielen einer
+// Referenz-/eigenen Aufnahme â€” verhindert nebenbei auch, dass das eigene Mikro die gerade
 // abgespielte Aufnahme als neue Live-Erkennung missversteht.
 window.__waldohrSuspendMicForPlayback = async () => {
   try { if (audio.ctx && audio.ctx.state === 'running') { await audio.ctx.suspend(); return true; } } catch (e) { console.warn('suspend', e); }
@@ -1969,18 +2133,18 @@ function startSpectrogram() {
   frame();
 }
 
-// ---- "Heute hier" zurücksetzen ----
+// ---- "Heute hier" zurÃ¼cksetzen ----
 const hereResetBtn = document.getElementById('hereResetBtn');
 if (hereResetBtn) hereResetBtn.onclick = async () => {
   let dets = [];
   try { dets = await allDetections(); } catch (e) { console.warn('read', e); }
   const ids = todayNearbyDetections(dets, geo.pos).map(d => d.id).filter(id => id != null);
   if (!ids.length) return;
-  if (!confirm(ids.length + ' heutige Funde hier löschen?')) return;
+  if (!confirm(ids.length + ' heutige Funde hier lÃ¶schen?')) return;
   try { await deleteByIds(ids); } catch (e) { console.warn('delete', e); }
   await hydrateAttachments();
   refresh();
-  showInfoToast('Funde gelöscht', ids.length + ' heutige Fund(e) hier wurden entfernt.', '🗑️');
+  showInfoToast('Funde gelÃ¶scht', ids.length + ' heutige Fund(e) hier wurden entfernt.', 'ðŸ—‘ï¸');
 };
 
 // ---- Sicherung (Export/Import der kompletten lokalen Datenbank) ----
@@ -1990,12 +2154,12 @@ const backupImportFile = document.getElementById('backupImportFile');
 const backupStatus = document.getElementById('backupStatus');
 if (backupExportBtn) backupExportBtn.onclick = async () => {
   backupExportBtn.disabled = true;
-  if (backupStatus) { backupStatus.hidden = false; backupStatus.textContent = 'Sicherung wird erstellt…'; }
+  if (backupStatus) { backupStatus.hidden = false; backupStatus.textContent = 'Sicherung wird erstelltâ€¦'; }
   try {
     const res = await exportBackup((done, total) => {
-      if (backupStatus) backupStatus.textContent = `Sicherung wird erstellt… ${done}/${total}`;
+      if (backupStatus) backupStatus.textContent = `Sicherung wird erstelltâ€¦ ${done}/${total}`;
     });
-    if (backupStatus) backupStatus.textContent = `✅ Fertig: ${res.detCount} Funde, ${res.attCount} Anhänge (${res.filename})`;
+    if (backupStatus) backupStatus.textContent = `Fertig: ${res.detCount} Funde, ${res.attCount} AnhÃ¤nge (${res.filename})`;
   } catch (e) {
     console.warn('backup export', e);
     if (backupStatus) backupStatus.textContent = 'Fehler beim Erstellen der Sicherung: ' + (e?.message || '');
@@ -2008,1031 +2172,34 @@ if (backupImportFile) backupImportFile.onchange = async () => {
   const file = backupImportFile.files?.[0];
   backupImportFile.value = '';
   if (!file) return;
-  if (!confirm('Sicherung "' + file.name + '" wiederherstellen? Die enthaltenen Funde & Anhänge werden zu den vorhandenen Daten HINZUGEFÜGT (nichts wird gelöscht).')) return;
-  if (backupStatus) { backupStatus.hidden = false; backupStatus.textContent = 'Sicherung wird eingelesen…'; }
+  if (!confirm('Sicherung "' + file.name + '" wiederherstellen? Die enthaltenen Funde & AnhÃ¤nge werden zu den vorhandenen Daten HINZUGEFÃœGT (nichts wird gelÃ¶scht).')) return;
+  if (backupStatus) { backupStatus.hidden = false; backupStatus.textContent = 'Sicherung wird eingelesenâ€¦'; }
   try {
     const res = await importBackup(file, (done, total) => {
-      if (backupStatus) backupStatus.textContent = `Anhänge werden wiederhergestellt… ${done}/${total}`;
+      if (backupStatus) backupStatus.textContent = `AnhÃ¤nge werden wiederhergestelltâ€¦ ${done}/${total}`;
     });
     await hydrateAttachments();
     refresh();
-    if (backupStatus) backupStatus.textContent = `✅ Wiederhergestellt: ${res.detCount} Funde, ${res.attCount} Anhänge`;
-    showInfoToast('Sicherung wiederhergestellt', res.detCount + ' Funde, ' + res.attCount + ' Anhänge importiert.', '💾');
+    if (backupStatus) backupStatus.textContent = `Wiederhergestellt: ${res.detCount} Funde, ${res.attCount} AnhÃ¤nge`;
+    showInfoToast('Sicherung wiederhergestellt', res.detCount + ' Funde, ' + res.attCount + ' AnhÃ¤nge importiert.', 'ðŸ’¾');
   } catch (e) {
     console.warn('backup import', e);
     if (backupStatus) backupStatus.textContent = 'Fehler: ' + (e?.message || 'Wiederherstellung fehlgeschlagen');
   }
 };
 
-// ---- Gesamte Datenbank zurücksetzen ----
+// ---- Gesamte Datenbank zurÃ¼cksetzen ----
 const dbResetBtn = document.getElementById('dbResetBtn');
 if (dbResetBtn) dbResetBtn.onclick = async () => {
-  if (!confirm('Wirklich ALLE Funde unwiderruflich löschen? Das betrifft die komplette Datenbank (Karte, Sammlung, Statistik, eigene Aufnahmen & Fotos).')) return;
+  if (!confirm('Wirklich ALLE Funde unwiderruflich lÃ¶schen? Das betrifft die komplette Datenbank (Karte, Sammlung, Statistik, eigene Aufnahmen & Fotos).')) return;
   try { await clearAll(); } catch (e) { console.warn('clearAll', e); }
   await hydrateAttachments();
   refresh();
-  showInfoToast('Daten gelöscht', 'Alle Funde, Aufnahmen und Fotos wurden entfernt.', '🗑️');
+  showInfoToast('Daten gelÃ¶scht', 'Alle Funde, Aufnahmen und Fotos wurden entfernt.', 'ðŸ—‘ï¸');
 };
 
 function registerSW() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
-
-// ---- Ergebnis-Popup der gemeinsamen Ruf-Ortung (js/locate.js) ----
-// Kompass-Visualisierung: zeigt die Verbindungslinie zwischen den beiden Handys (Norden oben,
-// zuverlässig aus GPS berechnet) mit einem Leuchtpunkt an der näheren Seite. BEWUSST keine
-// einzelne "Pfeil zeigt genau zum Vogel"-Darstellung — mit nur zwei Empfängern ist die Vorne-
-// /Hinten-Seite der Basislinie physikalisch nicht auflösbar (bräuchte einen dritten Referenzpunkt),
-// eine scheinbar präzise Pfeilrichtung wäre also die Hälfte der Zeit einfach falsch.
-function _compassSvg(r) {
-  const size = 140, cx = size / 2, cy = size / 2, R = 54;
-  const rad = deg => (deg - 90) * Math.PI / 180; // 0° = oben (Norden)
-  const peerAngle = r.bearingToPeer;
-  const px = cx + R * Math.cos(rad(peerAngle)), py = cy + R * Math.sin(rad(peerAngle));
-  const meCloser = r.firstHeard === 'me', peerCloser = r.firstHeard === 'peer';
-  const meR = 8 + (meCloser ? 5 : 0), peerR = 8 + (peerCloser ? 5 : 0);
-  const ticks = [0, 90, 180, 270].map(a => {
-    const x1 = cx + (R + 6) * Math.cos(rad(a)), y1 = cy + (R + 6) * Math.sin(rad(a));
-    const x2 = cx + (R + 14) * Math.cos(rad(a)), y2 = cy + (R + 14) * Math.sin(rad(a));
-    const lx = cx + (R + 24) * Math.cos(rad(a)), ly = cy + (R + 24) * Math.sin(rad(a));
-    const label = ['N', 'O', 'S', 'W'][a / 90];
-    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--faint)" stroke-width="1.5"/><text x="${lx}" y="${ly + 4}" text-anchor="middle" font-size="11" fill="var(--faint)" font-family="Inter,sans-serif">${label}</text>`;
-  }).join('');
-  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" style="display:block;margin:6px auto">
-    <circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="var(--stroke)" stroke-width="1.5"/>
-    ${ticks}
-    <line x1="${cx}" y1="${cy}" x2="${px}" y2="${py}" stroke="var(--lime)" stroke-width="2" stroke-dasharray="${peerCloser || meCloser ? '0' : '3,3'}" opacity=".7"/>
-    <circle cx="${cx}" cy="${cy}" r="${meR}" fill="${meCloser ? '#67e8f9' : 'var(--glass-strong)'}" stroke="#04130d" stroke-width="2"/>
-    <circle cx="${px}" cy="${py}" r="${peerR}" fill="${peerCloser ? 'var(--amber,#fbbf24)' : 'var(--glass-strong)'}" stroke="#04130d" stroke-width="2"/>
-    <text x="${cx}" y="${cy + meR + 13}" text-anchor="middle" font-size="9" fill="var(--muted)" font-family="Inter,sans-serif">Du</text>
-    <text x="${px}" y="${py + peerR + 13}" text-anchor="middle" font-size="9" fill="var(--muted)" font-family="Inter,sans-serif">Partner</text>
-  </svg>`;
-}
-
-// ---- Letzte Ortung merken (AR-Wiedereinstieg) ----
-// Das Ergebnis-Popup verschwindet nach ~25 s — wer es verpasst, kommt über den
-// "Letzte Ortung"-Button im Kopplungs-Fenster oder den 🎯-Karten-Marker wieder an die AR-Peilung.
-let _lastArResult = null;
-function _storeArResult(r) {
-  if (!ar.canShowAR(r)) return;
-  _lastArResult = { r, ts: Date.now() };
-  const b = document.getElementById('pairArBtn');
-  if (b) b.hidden = false;
-}
-function _openLastAr() {
-  if (!_lastArResult) return;
-  if (Date.now() - _lastArResult.ts > 10 * 60000) {
-    showInfoToast('🎯 Ortung veraltet', 'Die letzte Ortung ist älter als 10 Minuten — der Vogel ist vermutlich weitergezogen.', '🎯');
-    return;
-  }
-  // Eigene Position frisch einsetzen (man ist evtl. weitergegangen; bei Fix-Ergebnissen zählt sie)
-  const r = { ..._lastArResult.r, myPos: myPos() || _lastArResult.r.myPos };
-  if (ar.canShowAR(r)) ar.openAR(r);
-}
-document.getElementById('pairArBtn')?.addEventListener('click', _openLastAr);
-
-// ---- Partner-seitiges Feinabgleich-Popup ----
-// Auf den Handys, die NICHT den Feinabgleich gestartet haben: großes, klares Popup mit
-// Klatsch-Aufforderung. Das Mikrofon startet locate.js selbst (setMicController), hier nur die UI.
-let _calibPromptEl = null, _calibPromptTimer = null;
-function _calibPromptBox(html) {
-  if (!_calibPromptEl) {
-    _calibPromptEl = document.createElement('div');
-    _calibPromptEl.style.cssText = 'position:fixed;inset:0;z-index:350;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.78);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
-    document.body.appendChild(_calibPromptEl);
-  }
-  _calibPromptEl.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:28px 24px;text-align:center;max-width:290px;width:88%">${html}</div>`;
-}
-function closeCalibPrompt() {
-  if (_calibPromptTimer) { clearTimeout(_calibPromptTimer); _calibPromptTimer = null; }
-  if (_calibPromptEl) { _calibPromptEl.remove(); _calibPromptEl = null; }
-}
-function onCalibEvent(ev) {
-  if (ev.kind === 'prep') {
-    const actionTxt = ev.mode === 'clap' ? 'Das Mikrofon startet automatisch — gleich klatscht ihr gemeinsam <b>einmal</b>.' : 'Das Mikrofon startet automatisch — gleich ertönt ein kurzer <b>Kalibrier-Ton</b>.';
-    _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">🎯</div><div style="font-size:17px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:8px">Feinabgleich</div><div style="font-size:13px;color:var(--ink);line-height:1.5">Alle Handys <b>flach nebeneinander</b> legen und die <b>Lautstärke aufdrehen</b>. ' + actionTxt + '</div>');
-  } else if (ev.kind === 'count') {
-    const countTxt = ev.mode === 'clap' ? 'Gleich klatschen …' : 'Gleich ertönt der Ton …';
-    _calibPromptBox('<div style="font-size:15px;color:var(--muted);margin-bottom:6px">' + countTxt + '</div><div style="font-size:72px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif;line-height:1">' + (ev.n || '') + '</div>');
-  } else if (ev.kind === 'clap') {
-    const clapMode = ev.mode === 'clap';
-    _calibPromptBox('<div style="font-size:44px;margin-bottom:8px">' + (clapMode ? '👏' : '🔊') + '</div><div style="font-size:20px;font-weight:800;color:var(--lime);font-family:\'Outfit\',sans-serif">' + (clapMode ? 'Jetzt klatschen!' : 'Kalibrier-Ton…') + '</div><div style="font-size:12px;color:var(--muted);margin-top:6px">Handys ruhig nebeneinander liegen lassen</div>');
-  } else if (ev.kind === 'done') {
-    _calibPromptBox('<div style="font-size:38px;margin-bottom:8px">✅</div><div style="font-size:16px;font-weight:700;color:var(--lime);font-family:\'Outfit\',sans-serif;margin-bottom:6px">Feinabgleich fertig</div><div style="font-size:12px;color:var(--muted);line-height:1.5">Die gemeinsame Ruf-Ortung ist jetzt deutlich genauer.</div>');
-    if (_calibPromptTimer) clearTimeout(_calibPromptTimer);
-    _calibPromptTimer = setTimeout(closeCalibPrompt, 2500);
-  } else if (ev.kind === 'end') {
-    // Ende ohne vorheriges 'done' = nicht erfolgreich abgeschlossen -> kurz stehen lassen, dann zu.
-    if (_calibPromptEl && !_calibPromptTimer) _calibPromptTimer = setTimeout(closeCalibPrompt, 1500);
-  }
-}
-
-function showLocateResult(r) {
-  // Der 3-Geräte-Fix hat ein eigenes, einfacheres Popup (eindeutige Position statt Seiten-Deutung)
-  if (r.method === 'fix') { showFixResult(r); return; }
-  // Nur ein Ortungs-Popup gleichzeitig — ein später eintreffender Fix ersetzt das paarweise Ergebnis
-  document.getElementById('_locResultOv')?.remove();
-  const ov = document.createElement('div');
-  ov.id = '_locResultOv';
-  ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
-  const partnerLabel = hub.peerCount() > 1 ? 'Partner ' + r.peerId : 'dein Partner';
-  // Ohne direkten Uhren-Abgleich (z.B. Speiche-zu-Speiche im Stern-Modell, über die Zentrale
-  // weitergeleitet) gibt es ehrlich keine "wer war näher"-Aussage — lieber das offen zeigen als
-  // eine falsche Vermutung ("gleichzeitig") vorzutäuschen.
-  const whoLine = r.firstHeard === 'me' ? '💡 Du hast ihn zuerst gehört — Quelle vermutlich näher an dir'
-    : r.firstHeard === 'peer' ? `💡 ${partnerLabel} hat ihn zuerst gehört — Quelle vermutlich näher an ${hub.peerCount() > 1 ? 'ihm/ihr' : 'ihm'}`
-    : r.firstHeard === 'both' ? '💡 Fast gleichzeitig gehört — Quelle vermutlich mittig zwischen euch'
-    : `💡 Auch von ${partnerLabel} gehört — ohne direkten Uhren-Abgleich lässt sich nicht sagen, wer näher dran war.`;
-  const hasGeo = r.bearingToPeer != null && r.baselineM != null;
-  // Zu kurze Basislinie (s. locate.js MIN_BASELINE_M): keine Richtung vortäuschen, die reines
-  // GPS-Rauschen wäre — stattdessen offen zum Auseinandergehen auffordern.
-  const compassBlock = r.tooClose
-    ? `${_compassSvg(r)}<div style="font-size:12px;color:var(--rose,#fb7185);margin-top:6px;font-weight:600">⚠️ Nur ${r.baselineM} m auseinander — bitte weiter auseinandergehen (mind. ${locate.MIN_BASELINE_M} m) für eine verlässliche Peilung.</div>`
-    : hasGeo
-    ? `${_compassSvg(r)}<div style="font-size:11px;color:var(--faint);margin-top:2px">Nur die Seite (näher an dir/Partner) ist zuverlässig — eine genaue Pfeilrichtung würde mehr Präzision vortäuschen, als zwei Mikrofone hergeben. ${r.sideHint || ''}</div>`
-    : `<div style="font-size:12px;color:var(--muted);margin-top:10px">Kein GPS bei einem der Geräte — keine Peilung möglich.</div>`;
-  // Qualität der Messung transparent machen: audio-korreliert (Kreuzkorrelation der rohen
-  // Wellenformen) ist auf Millisekunden genau, die reinen Fenster-Zeitstempel nur sehr grob.
-  const quality = r.method === 'corr'
-    ? (r.calibrated ? 'audio-korreliert + feinabgeglichen' : 'audio-korreliert')
-    : 'grob, nur Fenster-Zeitstempel';
-  const deltaLine = r.deltaMs != null ? 'gemeinsam geortet — Zeitversatz ' + r.deltaMs + ' ms (' + quality + ')' : 'gemeinsam geortet mit ' + partnerLabel;
-  const calibHint = r.method === 'corr' && !r.calibrated
-    ? '<div style="font-size:11px;color:var(--faint);margin-top:8px">Tipp: 🎯 Audio-Feinabgleich im Kopplungs-Fenster (Handys nebeneinander + klatschen) macht die "wer ist näher"-Aussage nochmal deutlich verlässlicher.</div>'
-    : '';
-  // Warum diesmal nur der grobe Fallback (kein AR): macht die von Nutzern beobachtete
-  // Unregelmäßigkeit ("mal geht AR, mal nicht") nachvollziehbar statt eines stillen Unterschieds.
-  const whyCoarseTexts = {
-    unsynced: 'Noch kein Uhren-Abgleich mit diesem Partner — kurz warten oder neu koppeln.',
-    throttled: 'Genauere Peilung ist kurz gedrosselt (Bandbreite sparen) — beim nächsten Ruf wieder aktiv.',
-    nowin: 'Kein Audio-Schnipsel vom Partner für diesen Ruf erhalten.',
-    weak: 'Die Kreuzkorrelation war diesmal nicht eindeutig genug (z. B. Hintergrundgeräusche).',
-  };
-  const whyCoarseBlock = r.method === 'clock' && whyCoarseTexts[r.whyCoarse]
-    ? `<div style="font-size:11px;color:var(--faint);margin-top:8px">ℹ️ Nur grob geortet: ${whyCoarseTexts[r.whyCoarse]}</div>`
-    : '';
-  ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:26px 26px 20px;text-align:center;max-width:280px;width:88%">
-    <div style="font-size:18px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;margin-bottom:4px">${r.species}</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">${deltaLine}</div>
-    <div style="font-size:13px;color:var(--ink);line-height:1.4">${whoLine}</div>
-    ${r.firstHeard != null ? compassBlock : ''}
-    ${calibHint}
-    ${whyCoarseBlock}
-    ${ar.canShowAR(r) ? '<button id="_locResultAr" style="width:100%;margin-top:14px;padding:11px;border-radius:14px;background:linear-gradient(140deg,var(--lime),var(--emerald));color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:\'Outfit\',sans-serif">📷 AR-Peilung — Kamera zeigt die Richtung</button>' : ''}
-    <button id="_locResultClose" style="width:100%;margin-top:${ar.canShowAR(r) ? '8' : '14'}px;padding:11px;border-radius:14px;background:${ar.canShowAR(r) ? 'var(--glass-strong,rgba(255,255,255,.08))' : 'var(--lime)'};color:${ar.canShowAR(r) ? 'var(--ink)' : '#04130d'};font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
-  </div>`;
-  document.body.appendChild(ov);
-  _storeArResult(r);
-  const close = () => ov.remove();
-  ov.querySelector('#_locResultClose').onclick = close;
-  const arBtn = ov.querySelector('#_locResultAr');
-  if (arBtn) arBtn.onclick = () => { close(); ar.openAR(r); };
-  // Mit AR-Option länger stehen lassen — der Griff zur Kamera braucht einen Moment
-  setTimeout(close, ar.canShowAR(r) ? 25000 : 14000);
-}
-
-// 3-Geräte-Fix: eindeutige Position (Hyperbel-Schnitt auf der Zentrale, js/locate.js) — zeigt
-// Entfernung + Himmelsrichtung von der eigenen Position und bietet die AR-Peilung mit EINER Zone
-// samt Entfernung an. Artname kann vom Partner-Gerät stammen -> escapen (fremder Input).
-function showFixResult(r) {
-  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  document.getElementById('_locResultOv')?.remove();
-  const my = myPos();
-  const arData = { ...r, myPos: my || null };
-  _storeArResult(arData);
-  // Fix zusätzlich als Marker auf die Fundkarte legen (Stufe 4) — mit allen Daten, damit die
-  // AR-Peilung später direkt vom Karten-Marker aus geöffnet werden kann.
-  addFixMarker({ lat: r.lat, lng: r.lng, uncertM: r.uncertM, species: r.species, dirSpreadDeg: r.dirSpreadDeg, rangeMinM: r.rangeMinM, rangeMaxM: r.rangeMaxM, calibrated: r.calibrated, nPhones: r.nPhones });
-  let distLine = 'Eigene GPS-Position fehlt — Richtung/Entfernung nicht anzeigbar.';
-  if (my) {
-    const dM = Math.round(haversineKm(my, r) * 1000);
-    const b = Math.round(bearingDeg(my, r));
-    const dirs = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
-    const rangeTxt = !(r.rangeMinM && r.rangeMaxM) ? '~' + dM + ' m'
-      : r.rangeMaxM >= 450 ? 'mind. ' + r.rangeMinM + ' m'
-      : r.rangeMaxM > r.rangeMinM * 1.3 ? '~' + r.rangeMinM + '–' + r.rangeMaxM + ' m'
-      : '~' + dM + ' m';
-    distLine = 'Richtung ' + dirs[Math.round(b / 45) % 8] + ' (' + b + '° · auf ±' + (r.dirSpreadDeg || 15) + '° sicher) · Entfernung ' + rangeTxt;
-  }
-  const ov = document.createElement('div');
-  ov.id = '_locResultOv';
-  ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
-  ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:26px 26px 20px;text-align:center;max-width:290px;width:88%">
-    <div style="font-size:12px;color:var(--lime);font-weight:700;letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px">🎯 Eindeutig geortet · ${r.nPhones || 3} Handys</div>
-    <div style="font-size:19px;font-weight:700;color:var(--ink);font-family:'Outfit',sans-serif;margin-bottom:6px">${esc(r.species)}</div>
-    <div style="font-size:13px;color:var(--ink);line-height:1.5">${distLine}</div>
-    ${r.calibrated ? '' : '<div style="font-size:11px;color:var(--faint);margin-top:8px">Ohne 🎯 Feinabgleich ist die Position etwas gröber.</div>'}
-    ${ar.canShowAR(arData) ? '<button id="_fixAr" style="width:100%;margin-top:14px;padding:11px;border-radius:14px;background:linear-gradient(140deg,var(--lime),var(--emerald));color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:\'Outfit\',sans-serif">📷 AR-Peilung — hinschauen</button>' : ''}
-    <button id="_fixClose" style="width:100%;margin-top:8px;padding:11px;border-radius:14px;background:var(--glass-strong,rgba(255,255,255,.08));color:var(--ink);font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Alles klar</button>
-  </div>`;
-  document.body.appendChild(ov);
-  const close = () => ov.remove();
-  ov.querySelector('#_fixClose').onclick = close;
-  const arBtn = ov.querySelector('#_fixAr');
-  if (arBtn) arBtn.onclick = () => { close(); ar.openAR(arData); };
-  setTimeout(close, 25000);
-}
-
-// Gemeinsamer Session-Bericht: führt die eigenen Funde seit Sessionbeginn mit denen des Partners
-// zusammen. Partner-Daten kommen über den Datenkanal (js/session.js) -> IMMER per textContent
-// rendern, nie per innerHTML, genau wie beim Chat (fremder Input ist nicht vertrauenswürdig).
-function showSessionReport(myDets, peerResults) {
-  const ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
-  const card = document.createElement('div');
-  card.style.cssText = "background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:22px 22px 18px;max-width:340px;width:90%;max-height:80vh;display:flex;flex-direction:column;font-family:'Outfit',sans-serif";
-  const title = document.createElement('div');
-  title.style.cssText = 'font-size:18px;font-weight:700;color:var(--lime)';
-  title.textContent = '📋 Gemeinsamer Bericht';
-  const sub = document.createElement('div');
-  sub.style.cssText = "font-size:12px;color:var(--muted);margin:4px 0 12px;font-family:'Inter',sans-serif";
-  sub.textContent = peerResults.length
-    ? 'Funde von dir + ' + peerResults.length + ' Partner-Handy' + (peerResults.length === 1 ? '' : 's') + ' zusammengeführt'
-    : 'Kein Partner hat geantwortet — zeigt nur deine eigenen Funde';
-
-  // Artname -> Map(Quelle -> Anzahl); Quelle ist 'me' oder eine peerId.
-  const tally = new Map();
-  const addDets = (dets, source) => {
-    for (const d of dets) {
-      const sp = typeof d.species === 'string' && d.species ? d.species : 'Unbekannt';
-      let bySource = tally.get(sp);
-      if (!bySource) { bySource = new Map(); tally.set(sp, bySource); }
-      bySource.set(source, (bySource.get(source) || 0) + 1);
-    }
-  };
-  addDets(myDets, 'me');
-  for (const { peerId, dets } of peerResults) addDets(dets, peerId);
-  const totalFor = bySource => [...bySource.values()].reduce((a, b) => a + b, 0);
-  const sorted = [...tally.entries()].sort((a, b) => totalFor(b[1]) - totalFor(a[1]));
-
-  const list = document.createElement('div');
-  list.style.cssText = "overflow-y:auto;display:flex;flex-direction:column;gap:8px;font-family:'Inter',sans-serif";
-  if (!sorted.length) {
-    const empty = document.createElement('div');
-    empty.style.cssText = 'font-size:13px;color:var(--muted);text-align:center;padding:20px 0';
-    empty.textContent = 'Noch keine Funde in dieser Session.';
-    list.appendChild(empty);
-  }
-  for (const [species, bySource] of sorted) {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px;background:var(--glass);border-radius:12px;padding:9px 12px';
-    const nameSpan = document.createElement('span'); nameSpan.style.cssText = 'color:var(--ink)'; nameSpan.textContent = species;
-    const countSpan = document.createElement('span'); countSpan.style.cssText = 'color:var(--muted);font-size:11.5px;white-space:nowrap';
-    const parts = ['du ' + (bySource.get('me') || 0)];
-    for (const { peerId } of peerResults) parts.push('Partner ' + peerId + ' ' + (bySource.get(peerId) || 0));
-    countSpan.textContent = totalFor(bySource) + '× (' + parts.join(', ') + ')';
-    row.append(nameSpan, countSpan);
-    list.appendChild(row);
-  }
-
-  const totalAll = myDets.length + peerResults.reduce((a, p) => a + p.dets.length, 0);
-  const totalLine = document.createElement('div');
-  totalLine.style.cssText = "font-size:11.5px;color:var(--faint);margin:10px 0 2px;font-family:'Inter',sans-serif";
-  totalLine.textContent = 'Insgesamt ' + totalAll + ' Funde, ' + sorted.length + ' Arten';
-
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.textContent = 'Schließen';
-  closeBtn.style.cssText = "width:100%;margin-top:12px;padding:11px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:14px;border:none;cursor:pointer;font-family:'Outfit',sans-serif";
-  closeBtn.onclick = () => ov.remove();
-
-  card.append(title, sub, list, totalLine, closeBtn);
-  ov.appendChild(card);
-  document.body.appendChild(ov);
-}
-
-// ---- Partner koppeln (WebRTC + QR) + gemeinsame Ruf-Ortung sobald verbunden ----
-function initPairing() {
-  const openBtn = document.getElementById('pairOpenBtn');
-  const modal = document.getElementById('pairModal');
-  if (!openBtn || !modal) return;
-  const scrim = document.getElementById('pairScrim');
-  const closeBtn = document.getElementById('pairCloseBtn');
-  const choice = document.getElementById('pairChoice');
-  const showBtn = document.getElementById('pairShowBtn');
-  const scanBtn = document.getElementById('pairScanBtn');
-  const showStep = document.getElementById('pairShowStep');
-  const scanStep = document.getElementById('pairScanStep');
-  const answerStep = document.getElementById('pairAnswerStep');
-  const connectedStep = document.getElementById('pairConnectedStep');
-  const status = document.getElementById('pairStatus');
-  const qrCanvas = document.getElementById('pairQrCanvas');
-  const scanVideo = document.getElementById('pairScanVideo');
-  const scanCamSelect = document.getElementById('pairScanCamSelect');
-  const scanStatus = document.getElementById('pairScanStatus');
-  const answerQrCanvas = document.getElementById('pairAnswerQrCanvas');
-  const answerStatus = document.getElementById('pairAnswerStatus');
-  const showScanAnswerBtn = document.getElementById('pairShowScanAnswerBtn');
-  const chatList = document.getElementById('pairChatList');
-  const chatInput = document.getElementById('pairChatInput');
-  const chatSend = document.getElementById('pairChatSend');
-
-  let scanStream = null, stopScan = null, pendingPc = null, modulesAttached = false;
-  // Eine Verbindung pro gekoppeltem Gerät (Stern-Modell: mehr als eine gleichzeitig möglich) —
-  // peerId -> { pc, stopQuality, reconnectTimer }.
-  const connections = new Map();
-  const peerSignalLevels = new Map(); // peerId -> Signal-Level, fürs schwächste Glied im Chip
-  // Explizite Host-Rolle: wer die Kopplung als Erster startet (QR-Code zeigt, während man noch
-  // mit niemandem verbunden ist), bleibt für die ganze Sitzung "die Zentrale" — unabhängig von
-  // js/peerhub.js' rein technischer isHost()-Erkennung (2+ gleichzeitige Verbindungen), die bei
-  // GENAU ZWEI gekoppelten Handys (der häufigste Fall!) für BEIDE Seiten false ist, weil keine
-  // Seite mehr als eine Verbindung hält — dort zeigten bisher beide Geräte identisch "Partner 1"
-  // an, ohne dass irgendwer als Host erkennbar war. _isHostNow() kombiniert beides: die eigene
-  // Zentrale-Rolle ODER (Fallback für Stern-Erweiterungen durch ein Speichen-Handy) die technische
-  // Mehrfach-Verbindung.
-  let _iAmHost = false;
-  function _isHostNow() { return _iAmHost || hub.isHost(); }
-
-  function stopCamera() {
-    if (stopScan) { stopScan(); stopScan = null; }
-    if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
-    scanVideo.srcObject = null;
-  }
-
-  // Verbindungs-Badge oben in der Topbar (Lauschen-Tab) — zeigt Status + grobe Verbindungsqualität
-  // (Paketlaufzeit, nicht echte WLAN-Signalstärke — die ist über Web-APIs nicht abfragbar). Bei
-  // mehreren gekoppelten Geräten (Stern-Modell) zeigt der Text die Anzahl, das Signal-Icon das
-  // schwächste Glied unter allen gleichzeitigen Verbindungen.
-  const pairChip = document.getElementById('pairStatusChip');
-  const pairChipBadge = document.getElementById('pairStatusBadge');
-  // Kleines Rollen-Abzeichen (★ = du bist die Zentrale, Zahl = deine Partner-Nummer als Speiche)
-  // auf dem Icon selbst — Nutzer-Wunsch: Host und eigene Nummer müssen auf einen Blick erkennbar
-  // sein, ohne dass das Icon dafür groß mit Text wird. Wird auf dem Haupt-Icon UND allen
-  // Mini-Icons der anderen Tabs angewendet (updateMiniChips ruft dieselbe Funktion auf).
-  function _applyRoleBadge(badgeEl) {
-    if (!badgeEl) return;
-    if (_isHostNow()) { badgeEl.hidden = false; badgeEl.textContent = '★'; badgeEl.classList.add('host'); return; }
-    const myId = hub.myAssignedId();
-    if (myId != null) { badgeEl.hidden = false; badgeEl.textContent = String(myId); badgeEl.classList.remove('host'); return; }
-    badgeEl.hidden = true; badgeEl.classList.remove('host');
-  }
-  function setPairChip(visible, title) {
-    if (!pairChip) return;
-    pairChip.hidden = !visible;
-    if (title) pairChip.title = title;
-    _applyRoleBadge(pairChipBadge);
-  }
-  // Signalqualität nur noch als dezente Warnfarbe (schwache Verbindung -> rose) statt Signalbalken
-  // — Details (Ping in ms) stehen weiterhin im Kopplungs-Fenster, das Icon bleibt aufgeräumt.
-  function updatePairSignal(level) {
-    if (pairChip) pairChip.classList.toggle('sig-bad', level === 1);
-    document.querySelectorAll('.pair-mini-chip').forEach(c => c.classList.toggle('sig-bad', level === 1));
-  }
-  function updatePeerSignal(peerId, level) {
-    peerSignalLevels.set(peerId, level);
-    const levels = [...peerSignalLevels.values()].filter(l => l != null);
-    updatePairSignal(levels.length ? Math.min(...levels) : null);
-  }
-  function pairStatusText() {
-    if (_isHostNow()) return 'Zentrale · ' + hub.peerCount() + ' verbunden';
-    const myId = hub.myAssignedId();
-    const idTxt = myId != null ? 'Du: Partner ' + myId : 'Verbunden';
-    return hub.remotePeerCount() > 1 ? idTxt + ' · mit Zentrale verbunden' : idTxt;
-  }
-  function refreshPeerChip() {
-    const n = hub.peerCount();
-    setPairChip(n > 0, n > 0 ? pairStatusText() : null);
-    updateMiniChips();
-    // Messenger-Schnellzugriff in der Topbar nur zeigen, solange gekoppelt
-    const cq = document.getElementById('chatQuickBtn');
-    if (cq) cq.hidden = n === 0;
-    if (n === 0) closeChatModal();
-    // Feinabgleich ist nur der Zentrale vorbehalten (s. calibBtn weiter unten) — Speichen sehen
-    // den Knopf gar nicht erst, brauchen ihn ja auch nicht.
-    const cb = document.getElementById('pairCalibBtn');
-    if (cb) cb.hidden = !_isHostNow();
-    const cbHint = document.getElementById('pairCalibHint');
-    if (cbHint) cbHint.hidden = !_isHostNow();
-    // "Weiteres Handy koppeln" ebenfalls nur die Zentrale — sonst könnte eine Speiche selbst zu
-    // einer zweiten Verbindung kommen (zum neuen Gerät), wodurch hub.isHost() (rein topologisch:
-    // 2+ Verbindungen) für DIESE Speiche plötzlich auch true würde: beide Seiten zeigten dann
-    // gleichzeitig den ★-Host-Badge, ohne dass irgendwer es so gewollt hätte (genau der gemeldete
-    // "beide sind Host"-Fall). Ein sauberer Stern bleibt nur erhalten, wenn ausschließlich die
-    // echte Zentrale neue Handys einlädt.
-    const ad = document.getElementById('pairAddDeviceBtn');
-    if (ad) ad.hidden = !_isHostNow();
-    // Der Hinweistext ERKLÄRT, warum der Knopf fehlt — er gehört also der Speiche (die den Knopf
-    // NICHT sieht), nicht der Zentrale (die ihn hat und keine Erklärung braucht). Umgekehrte
-    // Bedingung zu `ad.hidden`, anders als beim Feinabgleich-Hinweis oben (der IMMER neben seinem
-    // sichtbaren Knopf steht).
-    const adHint = document.getElementById('pairAddDeviceHint');
-    if (adHint) adHint.hidden = _isHostNow();
-  }
-
-  // ---- Messenger-Popup: Chat lebt in einem eigenen Fenster (Topbar-Icon 💬 mit Ungelesen-Badge,
-  // zusätzlich erreichbar über das Kopplungs-Fenster) statt im Kopplungs-Fenster selbst ----
-  const chatModal = document.getElementById('chatModal');
-  const chatBadge = document.getElementById('chatBadge');
-  let chatUnread = 0;
-  function chatBadgeSet(n) {
-    chatUnread = n;
-    if (chatBadge) { chatBadge.hidden = n === 0; chatBadge.textContent = n > 9 ? '9+' : String(n); }
-  }
-  function openChatModal() {
-    if (!chatModal) return;
-    chatModal.classList.add('open');
-    chatBadgeSet(0);
-    const list = document.getElementById('pairChatList');
-    if (list) list.scrollTop = list.scrollHeight;
-    setTimeout(() => document.getElementById('pairChatInput')?.focus(), 250);
-  }
-  function closeChatModal() { chatModal?.classList.remove('open'); }
-  document.getElementById('chatQuickBtn')?.addEventListener('click', openChatModal);
-  document.getElementById('pairOpenChatBtn')?.addEventListener('click', () => { modal.classList.remove('open'); openChatModal(); });
-  document.getElementById('chatCloseBtn')?.addEventListener('click', closeChatModal);
-  document.getElementById('chatScrim')?.addEventListener('click', closeChatModal);
-  // Entfernungs-Zusatz je Partner-Zeile: zeigt den aktuellen GPS-Abstand und warnt, wenn er unter
-  // der für eine sinnvolle Peilung nötigen Mindestdistanz liegt (js/locate.js MIN_BASELINE_M) —
-  // beantwortet "bitte weit auseinandergehen" PROAKTIV, bevor überhaupt ein gemeinsamer Fund
-  // versucht wird, statt erst hinterher mit einem unbrauchbaren Ergebnis zu überraschen.
-  function _distanceSuffix(peerId) {
-    const info = locate.getPeerGeoInfo(peerId);
-    if (!info) return '';
-    const tooClose = info.baselineM < locate.MIN_BASELINE_M;
-    return ` <span style="color:${tooClose ? 'var(--rose,#fb7185)' : 'var(--faint)'}">· ${info.baselineM} m${tooClose ? ' — bitte weiter auseinandergehen (mind. ' + locate.MIN_BASELINE_M + ' m)' : ''}</span>`;
-  }
-  function renderPeerList() {
-    const el = document.getElementById('pairPeerList');
-    if (!el) return;
-    el.innerHTML = '';
-    if (_isHostNow()) {
-      const head = document.createElement('div');
-      head.className = 'pair-peer-row pair-peer-head';
-      head.textContent = '⭐ Du bist die Zentrale';
-      el.appendChild(head);
-      for (const { id } of hub.peerList()) {
-        const row = document.createElement('div');
-        row.className = 'pair-peer-row';
-        row.innerHTML = '🟢 Partner ' + id + _distanceSuffix(id);
-        el.appendChild(row);
-      }
-    } else if (hub.peerCount() === 1) {
-      const row = document.createElement('div');
-      row.className = 'pair-peer-row';
-      const myId = hub.myAssignedId();
-      const who = myId != null ? ' — du bist Partner ' + myId : '';
-      const peerId = hub.peerList()[0]?.id;
-      // Mit genau einem Peer und selbst nicht Host: der eine Peer MUSS die Zentrale sein (2-
-      // Geräte-Fall bzw. der Stern, mit dem man als Speiche verbunden ist) — rein lokal ableitbar.
-      row.innerHTML = '⭐ Verbunden mit der Zentrale' + who + (peerId != null ? _distanceSuffix(peerId) : '');
-      el.appendChild(row);
-    }
-  }
-  // Mini-Symbol auf den anderen Tabs (Karte/Sammlung/Statistik/Ornithologie) — dort reicht ein
-  // reines Icon ohne Text/Signalbalken, Details gibt's per Tap zurück zum Kopplungs-Fenster.
-  function updateMiniChips() {
-    const chips = document.querySelectorAll('.pair-mini-chip');
-    const connected = hub.peerCount() > 0;
-    const title = connected ? pairStatusText() : '';
-    chips.forEach(chip => {
-      chip.hidden = !connected;
-      chip.title = title;
-      _applyRoleBadge(chip.querySelector('.role-badge'));
-    });
-  }
-  document.querySelectorAll('.pair-mini-chip').forEach(chip => { chip.onclick = () => openBtn.click(); });
-  hub.onTopoChange(() => { refreshPeerChip(); renderPeerList(); });
-  if (pairChip) pairChip.onclick = () => {
-    document.querySelector('.nav button[data-v="orni"]')?.click();
-    document.querySelector('#orniToggle button[data-tab="monitoring"]')?.click();
-    openBtn.click();
-  };
-
-  // Partner-Text ist fremder Input -> IMMER textContent, nie innerHTML (siehe die BirdNET-XSS-Lücke,
-  // die wir schon einmal an anderer Stelle gefunden & gefixt haben — hier von Anfang an sauber).
-  function appendChatBubble(msg) {
-    if (!chatList) return;
-    const row = document.createElement('div');
-    row.className = 'pair-chat-row ' + (msg.from === 'me' ? 'me' : 'peer');
-    // Bei mehr als einem gekoppelten Gerät (Stern-Modell) dazuschreiben, von wem die Nachricht
-    // kam — bei nur einem Partner ist das redundant (klar, wer sonst).
-    const wrap = document.createElement('div');
-    wrap.className = 'pair-chat-col';
-    if (msg.from !== 'me' && hub.peerCount() > 1) {
-      const fromLabel = document.createElement('div');
-      fromLabel.className = 'pair-chat-from';
-      fromLabel.textContent = 'Partner ' + msg.from;
-      wrap.appendChild(fromLabel);
-    }
-    if (msg.kind === 'voice') {
-      const bubble = document.createElement('div');
-      bubble.className = 'pair-chat-bubble pair-chat-voice';
-      const audioEl = document.createElement('audio');
-      audioEl.src = msg.url; audioEl.preload = 'metadata';
-      const playBtn = document.createElement('button');
-      playBtn.type = 'button'; playBtn.className = 'pair-chat-voice-btn';
-      playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
-      playBtn.onclick = () => {
-        if (audioEl.paused) { audioEl.play().catch(() => {}); playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>'; }
-        else { audioEl.pause(); }
-      };
-      audioEl.onended = () => { playBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'; };
-      const durSpan = document.createElement('span');
-      durSpan.className = 'pair-chat-voice-dur';
-      durSpan.textContent = '🎙️ ' + (msg.durationSec || 0) + 's';
-      bubble.append(playBtn, durSpan, audioEl);
-      wrap.appendChild(bubble);
-    } else {
-      const bubble = document.createElement('div');
-      bubble.className = 'pair-chat-bubble';
-      bubble.textContent = msg.text;
-      wrap.appendChild(bubble);
-    }
-    // Versand ohne Bestätigung vom Datenkanal (z.B. Sprachnachricht zu groß fürs Kanal-Limit) ->
-    // sichtbar machen, statt fälschlich als angekommen anzuzeigen (nur bei eigenen Nachrichten
-    // relevant, chat.js setzt 'failed' nur für den eigenen sendVoice-Fall).
-    if (msg.failed) {
-      const failLabel = document.createElement('div');
-      failLabel.className = 'pair-chat-fail';
-      failLabel.textContent = '⚠️ nicht angekommen';
-      wrap.appendChild(failLabel);
-    }
-    row.appendChild(wrap);
-    chatList.appendChild(row);
-    chatList.scrollTop = chatList.scrollHeight;
-  }
-
-  function onChatMessage(msg) {
-    appendChatBubble(msg);
-    // Wenn das Messenger-Fenster gerade nicht offen ist: Toast (tippen öffnet den Chat) + Badge.
-    if (!chatModal || !chatModal.classList.contains('open')) {
-      chatBadgeSet(chatUnread + 1);
-      const preview = msg.kind === 'voice' ? '🎙️ Sprachnachricht (' + (msg.durationSec || 0) + 's)' : msg.text;
-      const title = hub.peerCount() > 1 ? '💬 Nachricht von Partner ' + msg.from : '💬 Nachricht vom Partner';
-      showInfoToast(title, preview, '💬', openChatModal, 'Antworten');
-    }
-  }
-
-  function sendChat() {
-    if (!chatInput) return;
-    const msg = chat.send(chatInput.value);
-    if (!msg) return;
-    appendChatBubble(msg);
-    chatInput.value = '';
-  }
-  if (chatSend) chatSend.onclick = sendChat;
-  if (chatInput) chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); } });
-
-  // ---- Push-to-Talk: Knopf halten = aufnehmen, loslassen = sofort senden (wie Walkie-Talkie) ----
-  const voiceBtn = document.getElementById('pairVoiceBtn');
-  const voiceStatus = document.getElementById('pairVoiceStatus');
-  const voiceTimer = document.getElementById('pairVoiceTimer');
-  let voiceMr = null, voiceChunks = [], voiceStream = null, voiceOwnStream = false, voiceT0 = 0, voiceTimerInt = null, voiceMaxTimeout = null;
-  // Getrennt von voiceMr verfolgt, ob der Nutzer den Knopf GERADE JETZT noch gedrückt hält — nötig,
-  // weil ein schneller Tipp-und-Loslassen VOR dem Auflösen von getUserMedia() sonst unbemerkt
-  // bleibt: stopVoiceRecording() prüft nur voiceMr (zu dem Zeitpunkt noch null) und macht nichts,
-  // die Aufnahme startet danach trotzdem und läuft unbeaufsichtigt weiter.
-  let voiceWanted = false;
-
-  async function startVoiceRecording() {
-    if (voiceMr || !chat.isActive()) return;
-    voiceWanted = true;
-    // Laufendes Mikro (Lauschen-Modus) wiederverwenden statt ein zweites Mal um Erlaubnis zu
-    // fragen — nur wenn nötig eine eigene, separate Aufnahme anfordern.
-    if (audio.running && audio.stream) { voiceStream = audio.stream; voiceOwnStream = false; }
-    else {
-      try { voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true }); voiceOwnStream = true; }
-      catch (e) { console.warn('ptt mic', e); return; }
-    }
-    if (!voiceWanted) {
-      // Finger schon losgelassen, während getUserMedia() noch lief -> gar nicht erst aufnehmen.
-      if (voiceOwnStream) voiceStream.getTracks().forEach(t => t.stop());
-      voiceStream = null;
-      return;
-    }
-    let type = '';
-    for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
-      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) { type = t; break; }
-    }
-    try { voiceMr = type ? new MediaRecorder(voiceStream, { mimeType: type }) : new MediaRecorder(voiceStream); }
-    catch (e) { console.warn('ptt mr', e); if (voiceOwnStream) voiceStream.getTracks().forEach(t => t.stop()); voiceStream = null; return; }
-    voiceChunks = [];
-    voiceMr.ondataavailable = e => { if (e.data?.size) voiceChunks.push(e.data); };
-    voiceMr.start();
-    voiceT0 = Date.now();
-    voiceBtn.classList.add('recording');
-    if (voiceStatus) voiceStatus.hidden = false;
-    voiceTimerInt = setInterval(() => {
-      const s = Math.floor((Date.now() - voiceT0) / 1000);
-      if (voiceTimer) voiceTimer.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
-    }, 200);
-    voiceMaxTimeout = setTimeout(stopVoiceRecording, chat.MAX_VOICE_SECONDS * 1000);
-  }
-
-  function stopVoiceRecording() {
-    voiceWanted = false;
-    if (!voiceMr) return;
-    clearInterval(voiceTimerInt); voiceTimerInt = null;
-    clearTimeout(voiceMaxTimeout); voiceMaxTimeout = null;
-    voiceBtn.classList.remove('recording');
-    if (voiceStatus) voiceStatus.hidden = true;
-    const durationSec = (Date.now() - voiceT0) / 1000;
-    const mr = voiceMr; voiceMr = null;
-    mr.onstop = async () => {
-      if (voiceOwnStream && voiceStream) voiceStream.getTracks().forEach(t => t.stop());
-      voiceStream = null;
-      if (!voiceChunks.length || durationSec < 0.4) return; // zu kurz, vermutlich Fehlklick
-      const blob = new Blob(voiceChunks, { type: voiceChunks[0].type || 'audio/webm' });
-      const msg = await chat.sendVoice(blob, durationSec);
-      if (msg) appendChatBubble(msg);
-    };
-    try { mr.stop(); } catch {}
-  }
-
-  if (voiceBtn) {
-    voiceBtn.addEventListener('pointerdown', e => { e.preventDefault(); startVoiceRecording(); });
-    voiceBtn.addEventListener('pointerup', stopVoiceRecording);
-    voiceBtn.addEventListener('pointerleave', stopVoiceRecording);
-    voiceBtn.addEventListener('pointercancel', stopVoiceRecording);
-  }
-
-  // Sobald eine Verbindung steht, bei js/peerhub.js registrieren — die eigentlichen Module
-  // (locate/chat/session/filetransfer) werden nur EINMAL angehängt (nicht pro Gerät), da sie über
-  // js/peerhub.js automatisch mit ALLEN aktuell gekoppelten Geräten sprechen. Läuft im Hintergrund
-  // weiter, auch wenn der Nutzer das Kopplungs-Fenster schließt und normal weiterlauscht.
-  function onPeerConnected(dc, pc) {
-    const peerId = hub.addPeer(dc);
-    const entry = { pc, stopQuality: null, reconnectTimer: null };
-    connections.set(peerId, entry);
-
-    if (!modulesAttached) {
-      modulesAttached = true;
-      locate.attach(showLocateResult, updatePeerMarker, onCalibEvent);
-      chat.attach(onChatMessage);
-      session.attach();
-      session.startSession();
-      filetransfer.attach(onFileReceived, onFileProgress);
-      if (chatList) chatList.innerHTML = '';
-    }
-    if (myPos()) locate.setLocalPos(myPos()); // damit auch ein NEU dazugekoppeltes Gerät die eigene Position bekommt
-    refreshPeerChip();
-    renderPeerList();
-
-    entry.stopQuality = monitorQuality(pc, ({ level }) => updatePeerSignal(peerId, level));
-    // Ein kompletter, stiller Neuaufbau ist mit dem QR-Kopplungsansatz nicht möglich (kein
-    // laufender Signalisierungskanal für ein neues Angebot/Antwort nach dem einmaligen Scan).
-    // ABER: kurze Wackler (WLAN-Hänger, Bildschirm aus) kann WebRTC oft selbst überstehen, wenn
-    // man ihm etwas Zeit gibt, statt sofort alles zu kappen — 'disconnected' heißt nicht
-    // zwangsläufig 'endgültig weg', erst 'failed'/'closed' oder ein anhaltendes 'disconnected'.
-    pc.addEventListener('connectionstatechange', () => {
-      const state = pc.connectionState;
-      if (state === 'connected') {
-        if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
-        refreshPeerChip();
-      } else if (state === 'disconnected') {
-        refreshPeerChip();
-        if (!entry.reconnectTimer) {
-          entry.reconnectTimer = setTimeout(() => {
-            entry.reconnectTimer = null;
-            if (pc.connectionState !== 'connected') onPeerDisconnected(peerId);
-          }, 12000);
-        }
-      } else if (state === 'failed' || state === 'closed') {
-        if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
-        onPeerDisconnected(peerId);
-      }
-    });
-  }
-
-  function onPeerDisconnected(peerId) {
-    const entry = connections.get(peerId);
-    if (entry?.stopQuality) entry.stopQuality();
-    connections.delete(peerId);
-    peerSignalLevels.delete(peerId);
-    hub.removePeer(peerId);
-    updatePeerMarker(peerId, null);
-    refreshPeerChip();
-    renderPeerList();
-    if (connections.size === 0) {
-      modulesAttached = false;
-      _iAmHost = false; // frische Kopplung soll die Host-Rolle wieder neu ermitteln, nicht die alte mitschleppen
-      locate.detach();
-      chat.detach();
-      session.detach();
-      filetransfer.detach();
-      playDisconnectTone(true);
-      showInfoToast('📡 Verbindung zum Partner verloren', 'Nicht automatisch behebbar — bitte neu koppeln.', '📡', () => openBtn.click(), 'Neu koppeln');
-    } else {
-      playDisconnectTone(false);
-      showInfoToast('📡 Partner ' + peerId + ' getrennt', connections.size + ' Verbindung' + (connections.size === 1 ? '' : 'en') + ' noch aktiv.', '📡');
-    }
-  }
-
-  function showStep_(name) {
-    choice.hidden = name !== 'choice';
-    showStep.hidden = name !== 'show';
-    scanStep.hidden = name !== 'scan';
-    answerStep.hidden = name !== 'answer';
-    connectedStep.hidden = name !== 'connected';
-    if (name !== 'scan') stopCamera();
-  }
-
-  function closeModal() {
-    stopCamera();
-    // Eine noch unfertige NEUE Kopplung (Schritt 'show'/'scan'/'answer') abbrechen — bereits
-    // hergestellte Verbindungen laufen im Hintergrund weiter, wenn der Nutzer das Fenster nur
-    // schließt, um wieder normal zu lauschen.
-    if (pendingPc) { try { pendingPc.close(); } catch {} pendingPc = null; }
-    // Ein abgebrochener "QR zeigen"-Versuch (showBtn setzt _iAmHost=true optimistisch VOR dem
-    // eigentlichen Verbindungsaufbau) darf die Host-Rolle nicht über die Sitzung hinweg festhalten,
-    // wenn nie eine Verbindung zustande kam — sonst erklärt sich ein späteres Scannen als Speiche
-    // fälschlich selbst zur Zentrale. Nur zurücksetzen, wenn wirklich noch nichts verbunden ist.
-    if (hub.peerCount() === 0) _iAmHost = false;
-    showScanAnswerBtn.hidden = true;
-    modal.classList.remove('open');
-  }
-
-  openBtn.onclick = () => {
-    // Wenn schon mindestens eine Verbindung steht, nur den Status zeigen statt sie zu kappen —
-    // nur bei einem NEUEN Kopplungsversuch (noch nicht verbunden) eine evtl. unfertige
-    // Verbindung aufräumen.
-    if (hub.peerCount() > 0) {
-      renderPeerList();
-      showStep_('connected');
-    } else {
-      if (pendingPc) { try { pendingPc.close(); } catch {} pendingPc = null; }
-      showStep_('choice');
-    }
-    modal.classList.add('open');
-  };
-  closeBtn.onclick = closeModal;
-  if (scrim) scrim.onclick = closeModal;
-
-  // ---- Weiteres Handy koppeln (Stern-Modell) — bestehende Verbindungen bleiben unangetastet ----
-  const addDeviceBtn = document.getElementById('pairAddDeviceBtn');
-  if (addDeviceBtn) addDeviceBtn.onclick = () => {
-    // Der Knopf ist für Speichen schon ausgeblendet (refreshPeerChip) — diese Prüfung ist die
-    // zweite, verbindliche Absicherung (s. Kommentar dort, warum nur die Zentrale einladen darf).
-    if (!_isHostNow()) return;
-    if (pendingPc) { try { pendingPc.close(); } catch {} pendingPc = null; }
-    showStep_('choice');
-  };
-
-  // Auf Handys mit mehreren Rückkamera-Objektiven (Ultra-Weit/Normal/Tele) per Auswahl das
-  // passende für den QR-Scan wählen lassen — Ultra-Weit fokussiert oft schlechter aus der Nähe,
-  // Tele kann bei sehr kleinen/dichten Codes schärfer sein. Labels sind erst NACH einer erteilten
-  // Kamera-Erlaubnis aussagekräftig, darum wird hier erst nach dem ersten Stream aufgezählt.
-  let currentScanOnDecoded = null, currentScanStatusEl = null;
-  // Zeigt ALLE Rückkamera-Objektive zur Auswahl — wichtig, wenn eine Linse (z. B. die
-  // Hauptkamera) defekt ist oder schlecht fokussiert und der QR-Code darüber nicht scharf wird.
-  // Bewusst NICHT auf sauber als Ultra/Normal/Tele erkannte Objektive beschränkt (die Labels
-  // fehlen auf vielen Geräten): sobald es mehr als eine Rückkamera gibt, werden alle gelistet,
-  // mit sprechendem Namen wo möglich, sonst „Kamera 1/2/3". Labels sind erst nach erteilter
-  // Kamera-Erlaubnis gefüllt, darum erst nach dem ersten Stream aufzählen.
-  // Bucketet + dedupliziert wie camera.js' _dedupeLenses (getrennte Kopie, kein gemeinsames Util-
-  // Modul für dieses eine Duzend Zeilen): viele Android-Geräte melden dieselbe physische Linse
-  // mehrfach als eigenständiges enumerateDevices()-Objekt — ohne Dedup nach dem ANGEZEIGTEN Namen
-  // erschien z.B. "Hauptkamera" mehrfach identisch in der Auswahl.
-  function _dedupeLenses(devices) {
-    const seenCategory = new Set();
-    const seenLabel = new Set();
-    let mainAssigned = false, genericN = 0;
-    const out = [];
-    for (const d of devices) {
-      const rawLabel = d.label || '';
-      const lbl = rawLabel.toLowerCase();
-      let category = null;
-      if (/ultra/.test(lbl)) category = '📷 Ultra-Weit';
-      else if (/telephoto|tele|[3-9](\.\d)?x\b/.test(lbl)) category = '🔭 Tele';
-      else if (/macro/.test(lbl)) category = '🌸 Makro';
-      // Eindeutiges Schlüsselwort (Ultra/Tele/Makro) -> zuverlässiges Signal, per Kategorie dedupen.
-      if (category) {
-        if (seenCategory.has(category)) continue;
-        seenCategory.add(category);
-        out.push({ deviceId: d.deviceId, name: category });
-        continue;
-      }
-      // Kein eindeutiges Schlüsselwort — v.a. Android, wo ALLE Rücklinsen oft nur generisch
-      // "Camera 0, facing back"/"Camera 1, facing back" o.ä. heißen. Ein Substring-Match auf
-      // "back"/"rear"/"main" würde die dann fälschlich als EIN Gerät kollabieren und echte
-      // zusätzliche Linsen (Weitwinkel/Tele ohne Namen) verstecken — darum hier nur bei
-      // WORTWÖRTLICH identischem Rohtext als Duplikat werten.
-      if (rawLabel && seenLabel.has(rawLabel)) continue;
-      if (rawLabel) seenLabel.add(rawLabel);
-      let name;
-      if (!mainAssigned) { name = '📷 Haupt'; mainAssigned = true; }
-      else { genericN++; name = '📷 Kamera ' + (genericN + 1); }
-      out.push({ deviceId: d.deviceId, name });
-    }
-    return out;
-  }
-  async function _populateScanCamSelect() {
-    if (!scanCamSelect) return;
-    try {
-      const all = await navigator.mediaDevices.enumerateDevices();
-      const back = all.filter(d => d.kind === 'videoinput' && !/front|facetime|user|selfie/i.test(d.label));
-      const chosen = _dedupeLenses(back);
-      // Nur eine (oder unbenannte einzelne) Kamera: keine Auswahl nötig.
-      if (chosen.length < 2) { scanCamSelect.hidden = true; return; }
-      const prevValue = scanCamSelect.value;
-      scanCamSelect.innerHTML = chosen.map(c => `<option value="${c.deviceId}">${c.name}</option>`).join('');
-      if (prevValue && chosen.some(c => c.deviceId === prevValue)) scanCamSelect.value = prevValue;
-      scanCamSelect.hidden = false;
-    } catch (e) { console.warn('scan cam enumerate', e); }
-  }
-  if (scanCamSelect) scanCamSelect.onchange = () => {
-    if (currentScanOnDecoded) startScan(currentScanOnDecoded, currentScanStatusEl);
-  };
-
-  // Generationszähler gegen überlappende startScan()-Aufrufe (z.B. schnelles Umschalten der
-  // Linsen-Auswahl, oder ein langsamer getUserMedia-Berechtigungsdialog): ohne ihn würde der
-  // zuletzt AUFGERUFENE, aber zuerst AUFGELÖSTE Versuch die schon aktuellen scanStream/stopScan
-  // überschreiben — der überholte Stream/Decode-Loop liefe dann unsichtbar und unstoppbar weiter.
-  let _scanGen = 0;
-  async function startScan(onDecoded, statusEl) {
-    const gen = ++_scanGen;
-    stopCamera();
-    currentScanOnDecoded = onDecoded; currentScanStatusEl = statusEl;
-    const camId = scanCamSelect && scanCamSelect.value ? scanCamSelect.value : null;
-    let stream;
-    try {
-      const videoConstraints = camId ? { deviceId: { exact: camId } } : { facingMode: 'environment' };
-      stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
-    } catch (e) {
-      // Eine bestimmte Linsen-deviceId kann inzwischen ungültig sein (z.B. Geräteliste hat sich
-      // geändert) — statt direkt aufzugeben, mit der einfachen "irgendeine Rückkamera"-Anfrage
-      // nochmal versuchen. Das ist der Sicherheitsnetz-Fallback für genau den gemeldeten Android-
-      // Bug ("keine Kamera mehr angezeigt"), falls die gewählte deviceId doch nicht mehr passt.
-      if (!camId) { if (gen === _scanGen && statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e?.message || ''); return; }
-      try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } }); }
-      catch (e2) { if (gen === _scanGen && statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e2?.message || ''); return; }
-    }
-    if (gen !== _scanGen) { stream.getTracks().forEach(t => t.stop()); return; } // von einem neueren Aufruf überholt
-    scanStream = stream;
-    try {
-      scanVideo.srcObject = scanStream;
-      await scanVideo.play().catch(() => {});
-      if (gen !== _scanGen) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; return; }
-      stopScan = scanQR(scanVideo, onDecoded);
-      _populateScanCamSelect();
-    } catch (e) {
-      if (gen === _scanGen && statusEl) statusEl.textContent = 'Kamera nicht verfügbar: ' + (e?.message || '');
-    }
-  }
-
-  // ---- Seite A: "QR-Code zeigen" (Angebot erstellen) ----
-  showBtn.onclick = async () => {
-    // Wer die Kopplung aus dem Stand (noch mit niemandem verbunden) startet, wird für die ganze
-    // Sitzung "die Zentrale" (s. _isHostNow() oben) — ein späteres "➕ Weiteres Handy koppeln" von
-    // einem bereits verbundenen Gerät (egal ob Host oder Speiche) soll daran nichts mehr ändern.
-    if (hub.peerCount() === 0) _iAmHost = true;
-    showStep_('show');
-    status.textContent = 'Code wird erstellt…';
-    showScanAnswerBtn.hidden = true;
-    let offerer;
-    try {
-      offerer = await createOfferer();
-      pendingPc = offerer.pc;
-      renderQR(offerer.qrText, qrCanvas);
-      status.textContent = 'Lass das andere Handy diesen Code scannen';
-      showScanAnswerBtn.hidden = false;
-    } catch (e) {
-      status.textContent = 'Fehler: ' + (e?.message || 'Verbindung konnte nicht vorbereitet werden');
-      return;
-    }
-    async function onAnswerScanned(text) {
-      try {
-        await offerer.applyAnswer(text);
-        showStep_('connected');
-        connectedStep.querySelector('#pairConnectedSub').textContent = 'Verbinde…';
-        const dc = await waitForOpen(offerer.dc);
-        const pc = pendingPc; pendingPc = null;
-        onPeerConnected(dc, pc);
-        connectedStep.querySelector('#pairConnectedSub').textContent = 'Verbunden — Ruf-Ortung läuft jetzt automatisch mit.';
-      } catch (err) {
-        scanStatus.textContent = 'Ungültiger Code oder Verbindung fehlgeschlagen — bitte erneut versuchen.';
-        startScan(onAnswerScanned, scanStatus);
-      }
-    }
-    showScanAnswerBtn.onclick = () => {
-      showStep_('scan');
-      scanStatus.textContent = 'Richte die Kamera auf den Antwort-Code…';
-      startScan(onAnswerScanned, scanStatus);
-    };
-  };
-
-  // ---- Seite B: "QR-Code scannen" (Angebot einlesen, Antwort zurückgeben) ----
-  async function onOfferScanned(text) {
-    let answerer;
-    try {
-      answerer = await createAnswerer(text);
-    } catch (e) {
-      scanStatus.textContent = 'Ungültiger Code — bitte erneut versuchen.';
-      startScan(onOfferScanned, scanStatus);
-      return;
-    }
-    pendingPc = answerer.pc;
-    showStep_('answer');
-    renderQR(answerer.qrText, answerQrCanvas);
-    answerStatus.textContent = 'Zeig dieses Handy jetzt dem Partner — Warte auf Verbindung…';
-    try {
-      const dc = await waitForOpen(answerer.dc);
-      const pc = pendingPc; pendingPc = null;
-      onPeerConnected(dc, pc);
-      showStep_('connected');
-      connectedStep.querySelector('#pairConnectedSub').textContent = 'Verbunden — Ruf-Ortung läuft jetzt automatisch mit.';
-    } catch (err) {
-      answerStatus.textContent = 'Verbindung fehlgeschlagen: ' + (err?.message || '');
-    }
-  }
-  scanBtn.onclick = () => {
-    showStep_('scan');
-    scanStatus.textContent = 'Richte die Kamera auf den Code des anderen Handys…';
-    startScan(onOfferScanned, scanStatus);
-  };
-
-  // ---- Gemeinsamer Session-Bericht ----
-  session.setDetectionsProvider(async startTs => {
-    try { return (await allDetections()).filter(d => d.ts >= startTs).map(d => ({ species: d.species, ts: d.ts })); }
-    catch { return []; }
-  });
-  const sessionReportBtn = document.getElementById('pairSessionReportBtn');
-  if (sessionReportBtn) sessionReportBtn.onclick = async () => {
-    sessionReportBtn.disabled = true;
-    const orig = sessionReportBtn.textContent;
-    sessionReportBtn.textContent = 'Frage Partner…';
-    try {
-      const startTs = session.getSessionStart();
-      let myDets = [];
-      try { myDets = (await allDetections()).filter(d => d.ts >= startTs); } catch {}
-      const peerResults = await session.requestAllPeerDetections(startTs);
-      showSessionReport(myDets, peerResults);
-    } finally {
-      sessionReportBtn.disabled = false;
-      sessionReportBtn.textContent = orig;
-    }
-  };
-
-  // ---- Audio-Feinabgleich (Klatsch-Kalibrierung, js/locate.js) ----
-  // Misst den systematischen Zeitversatz zwischen den Geräten (Uhrrest + Mikrofonlatenz-Differenz),
-  // solange die Handys noch nebeneinander liegen — macht die spätere gemeinsame Ruf-Ortung von
-  // "grob" zu "wenige Millisekunden". Geführter Ablauf: EIN Knopfdruck auf der Zentrale, die
-  // Partner-Handys öffnen automatisch ein Popup, schalten ihr Mikrofon selbst an, und es wird
-  // nur EINMAL gemeinsam geklatscht.
-  // Feinabgleich-Methode (Einstellungen): Ton (Standard) oder Klatschen — der Signalton war laut
-  // Nutzer-Feedback manchmal unzuverlässig (leiser Lautsprecher, Umgebungslärm), daher als
-  // Fallback wählbar statt fest zu ersetzen, da der Ton im Regelfall die saubereren Peaks liefert.
-  const calibModeToggle = document.getElementById('calibModeToggle');
-  function calibModeGet() { try { return localStorage.getItem('waldohr.calibMode') !== 'clap'; } catch { return true; } }
-  if (calibModeToggle) {
-    calibModeToggle.checked = calibModeGet();
-    locate.setCalibMode(calibModeToggle.checked ? 'tone' : 'clap');
-    calibModeToggle.onchange = () => {
-      try { localStorage.setItem('waldohr.calibMode', calibModeToggle.checked ? 'tone' : 'clap'); } catch {}
-      locate.setCalibMode(calibModeToggle.checked ? 'tone' : 'clap');
-    };
-  }
-  const calibBtn = document.getElementById('pairCalibBtn');
-  const calibStatusEl = document.getElementById('pairCalibStatus');
-  function setCalibStatus(s) {
-    if (!calibStatusEl) return;
-    calibStatusEl.hidden = false;
-    calibStatusEl.textContent = s.text;
-    calibStatusEl.style.color = s.phase === 'ok' ? 'var(--lime)' : s.phase === 'err' ? '#f87171' : 'var(--muted)';
-  }
-  // Mikrofon-Controller für locate.js: schaltet das Lauschen bei Bedarf selbst an.
-  locate.setMicController(async () => {
-    if (audio.running) return true;
-    tryFullscreen();
-    try {
-      await audio.start(getMicDeviceId());
-      geo.start(); detectionActive = true; setUI('mic');
-      if (recBtn) recBtn.classList.add('rec-on');
-      startDauerUeberwachung();
-    } catch (e) { console.warn('calib mic', e); return false; }
-    return audio.running;
-  });
-  if (calibBtn) calibBtn.onclick = async () => {
-    // Der Knopf ist für Speichen schon per CSS/JS ausgeblendet (refreshPeerChip) — diese Prüfung
-    // ist die zweite, verbindliche Absicherung, falls er trotzdem je ausgelöst wird.
-    if (!_isHostNow()) return;
-    calibBtn.disabled = true;
-    const orig = calibBtn.textContent;
-    calibBtn.textContent = 'Feinabgleich läuft…';
-    try { await locate.startCalibration(setCalibStatus); }
-    finally { calibBtn.disabled = false; calibBtn.textContent = orig; }
-  };
-
-  // ---- Foto/Video direkt an alle gekoppelten Handys (ganz ohne Internet, über den Datenkanal) ----
-  function onFileProgress({ direction, sent, total }) {
-    if (direction !== 'receive') return;
-    if (sent === 1) showInfoToast('📲 Empfange Datei…', 'Von einem Partner-Handy — bitte warten.', '📲');
-  }
-  async function onFileReceived({ blob, kind, name, mime, peerId }) {
-    const label = 'Von Partner ' + peerId + (name ? ': ' + name : '');
-    let attId = null;
-    try { attId = await addAttachment({ key: null, label, kind, blob, mime: mime || blob.type }); }
-    catch (e) { console.warn('addAttachment (partner file)', e); }
-    const list = document.getElementById('recList');
-    if (list) {
-      const url = URL.createObjectURL(blob);
-      _recListUrls.push(url); // sonst würde diese URL beim nächsten hydrateAttachments() nicht mit-revoked
-      list.prepend(attachmentRow({ blob, kind, label, mime: mime || blob.type, key: null, id: attId, ts: Date.now() }, url));
-    }
-    showInfoToast('📲 Von Partner ' + peerId + ' erhalten', (kind === 'video' ? 'Video' : 'Foto') + ' angekommen — in der Galerie.', '📲');
-    if (!galleryModal || !galleryModal.classList.contains('open')) galleryBadgeAdd(1);
-  }
-}
-initPairing();
 
 boot();

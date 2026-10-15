@@ -1,7 +1,8 @@
 import { getDauerUeberwachung, setDauerUeberwachung } from './alarm.js';
-import { allDetections, qualifyingDetections } from './db.js';
+import { allDetections, qualifyingDetections, todayNearbyDetections } from './db.js';
 import { routeTracker } from './route.js';
-import { showInfoToast } from './ui.js';
+import { showInfoToast, updateScheduleChip, icon, fmtShortDate } from './ui.js';
+import { esc, csvCell } from './util.js';
 
 const $ = id => document.getElementById(id);
 // Lokales Kalenderdatum statt UTC (toISOString) — sonst rutscht ein Fund kurz nach lokaler
@@ -12,12 +13,9 @@ function _localDateStr(d) {
 }
 const todayStr = () => _localDateStr(new Date());
 
-// Sitzungsname ist freier Nutzer-Text (Input-Feld) und wird unten via innerHTML gerendert ->
-// escapen, sonst HTML/Script-Injection über das Namensfeld möglich (gleiches Muster wie esc()
-// in app.js showFixResult für fremden Peer-Input).
-function _escHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
+// Alles, was hier per innerHTML gerendert wird und nicht hart im Code steht, geht durch esc()
+// aus util.js: Sitzungsnamen (freier Nutzer-Text aus dem Namensfeld) UND Artnamen (kommen vom
+// BirdNET-Server oder aus einer importierten — evtl. manipulierten — Sicherung).
 
 // localStorage.setItem kann bei vollem Speicher (QuotaExceededError) werfen — wurde bisher an
 // mehreren Stellen mit bloßem catch{} verschluckt, die Sitzung ging dann kommentarlos verloren.
@@ -40,8 +38,15 @@ function _capPoints(points) {
 }
 
 // ---- CSV / download helpers ----
+// csvCell() entschärft Formel-Präfixe (= + - @) gegen CSV-Injection in Excel — Artnamen können
+// aus fremder Quelle stammen. Reine Zahlen (z.B. negative Längengrade westlich von Greenwich)
+// sind aber keine Formel und dürfen NICHT mit ' verfälscht werden, sonst importieren eBird/
+// ornitho die Koordinate als Text.
+const _NUM_RE = /^-?\d+(\.\d+)?$/;
+const _cell = v => (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && _NUM_RE.test(v))
+  ? '"' + v + '"' : csvCell(v);
 function _csvBlob(rows) {
-  const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+  const csv = rows.map(r => r.map(_cell).join(',')).join('\n');
   return new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
 }
 function _dlBlob(blob, name) {
@@ -57,7 +62,7 @@ function _dlBlob(blob, name) {
 function _showStartPopup(label) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;pointer-events:none';
-  ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:22px 28px;text-align:center;max-width:240px;width:84%;box-shadow:0 20px 60px rgba(0,0,0,.6)"><div style="font-size:36px;margin-bottom:8px">🎙</div><div style="font-size:16px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif">${label}</div><div style="font-size:12px;color:var(--muted);margin-top:4px">Überwachung aktiv</div></div>`;
+  ov.innerHTML = `<div style="background:#0a2a1f;border:1px solid var(--stroke-strong);border-radius:24px;padding:22px 28px;text-align:center;max-width:240px;width:84%;box-shadow:0 20px 60px rgba(0,0,0,.6)"><div style="width:52px;height:52px;margin:0 auto 10px;border-radius:16px;display:grid;place-items:center;background:rgba(163,230,53,.14);color:var(--lime)">${icon('mic')}</div><div style="font-size:18px;font-weight:600;color:var(--ink);font-family:'Outfit',sans-serif">${esc(label)}</div><div style="font-size:13px;color:var(--muted);margin-top:4px">Lauschen läuft</div></div>`;
   document.body.appendChild(ov);
   setTimeout(() => ov.remove(), 3000);
 }
@@ -126,7 +131,7 @@ function _exportNabu(dets) {
 }
 
 // ---- Dauerüberwachung ----
-let _duInterval = null;
+let _duInterval = null, _duMicWasRunning = true; // s. _micRunning() unten
 const LS_TRIGGER = 'waldohr.trigger';
 function _getTrigger() { try { return JSON.parse(localStorage.getItem(LS_TRIGGER)) || { enabled: false, level: 20 }; } catch { return { enabled: false, level: 20 }; } }
 function _setTrigger(v) { try { localStorage.setItem(LS_TRIGGER, JSON.stringify(v)); } catch {} }
@@ -176,9 +181,11 @@ function _initDU() {
     if (countdown) countdown.hidden = true;
     if (banner) banner.hidden = true;
     if (bannerLabel) bannerLabel.textContent = 'Punkt-Zählung';
-    if (window.__waldohr) { window.__waldohr.stopDetection(); window.__waldohr.stopTriggerRec?.(); }
+    if (window.__waldohr) { window.__waldohr.stopDetection({ releaseMic: !_duMicWasRunning }); window.__waldohr.stopTriggerRec?.(); }
+    _duMicWasRunning = true;
     enabled.checked = false;
     setDauerUeberwachung({ enabled: false, durationMin: parseInt(presetsEl.querySelector('.du-preset.on')?.dataset.min ?? '30') });
+    updateScheduleChip();   // Zeitplan-Chip unter dem Orb sofort auf den neuen Stand
   }
 
   const save = () => {
@@ -188,6 +195,7 @@ function _initDU() {
 
   function _startDU() {
     if (_duInterval) return;
+    _duMicWasRunning = _micRunning();
     // ZUERST sofort sichtbares Feedback (Timer/Banner/Countdown), DANN erst die langsame
     // Mikrofon-Initialisierung — sonst wirkt der Klick sekundenlang wie ohne Reaktion.
     _showStartPopup('Dauerüberwachung');
@@ -233,7 +241,15 @@ function _initDU() {
 }
 
 // ---- Punkt-Zählung (5-min BirdLife-Standard) ----
-let _pkInterval = null, _pkStartTs = 0, _pkWasDetecting = false;
+let _pkInterval = null, _pkStartTs = 0, _pkWasDetecting = false, _pkMicWasRunning = true;
+
+// Mikrofon-Zustand VOR dem Start einer Zählung merken: stopDetection() allein hält das Mikro
+// offen (rote Aufnahme-Anzeige, Akku) — auch wenn der Nutzer es vor der Zählung gar nicht an
+// hatte. Beim Stop gibt { releaseMic: true } es dann wieder frei, aber NUR, wenn wir es selbst
+// geöffnet haben. Default true = im Zweifel nicht freigeben (fremdes Mikro nicht abwürgen).
+function _micRunning() {
+  try { return window.__waldohr?.isMicRunning ? !!window.__waldohr.isMicRunning() : true; } catch { return true; }
+}
 const PK_SECS = 5 * 60;
 
 function _initPunktZaehlung() {
@@ -249,11 +265,13 @@ function _initPunktZaehlung() {
   function _endPk() {
     clearInterval(_pkInterval);
     _pkInterval = null;
+    // Ruhezustand = Primär-Button (Verlauf); während der Zählung ein klar roter "Stoppen"-Zustand.
     startBtn.textContent = 'Zählung starten';
-    startBtn.classList.remove('primary');
+    startBtn.classList.add('primary'); startBtn.classList.remove('running');
     timerEl.textContent = '5:00';
     if (banner) banner.hidden = true;
-    if (!_pkWasDetecting && window.__waldohr) window.__waldohr.stopDetection();
+    if (!_pkWasDetecting && window.__waldohr) window.__waldohr.stopDetection({ releaseMic: !_pkMicWasRunning });
+    _pkMicWasRunning = true;
     if (window.__waldohr) window.__waldohr.switchTab('v-orni');
   }
 
@@ -262,10 +280,11 @@ function _initPunktZaehlung() {
 
     _pkStartTs = Date.now();
     _pkWasDetecting = window.__waldohr ? window.__waldohr.isDetecting() : false;
+    _pkMicWasRunning = _micRunning();
 
     _showStartPopup('Punkt-Zählung');
-    startBtn.textContent = 'Stoppen';
-    startBtn.classList.add('primary');
+    startBtn.textContent = 'Zählung stoppen';
+    startBtn.classList.remove('primary'); startBtn.classList.add('running');
     if (speciesEl) { speciesEl.hidden = true; speciesEl.innerHTML = ''; }
     if (banner) { banner.hidden = false; if (bannerTimer) bannerTimer.textContent = '5:00'; }
 
@@ -304,7 +323,7 @@ function _savePkSession(startTs, species) {
 }
 
 // ---- Transekt-Zählung (feste Route, freie Dauer) ----
-let _txInterval = null, _txStartTs = 0, _txWasDetecting = false;
+let _txInterval = null, _txStartTs = 0, _txWasDetecting = false, _txMicWasRunning = true;
 
 function _initTransekt() {
   const startBtn = $('txStart');
@@ -320,8 +339,9 @@ function _initTransekt() {
     clearInterval(_txInterval);
     _txInterval = null;
     startBtn.textContent = 'Transekt starten';
-    startBtn.classList.remove('primary');
-    if (!_txWasDetecting && window.__waldohr) window.__waldohr.stopDetection();
+    startBtn.classList.add('primary'); startBtn.classList.remove('running');
+    if (!_txWasDetecting && window.__waldohr) window.__waldohr.stopDetection({ releaseMic: !_txMicWasRunning });
+    _txMicWasRunning = true;
     if (window.__waldohr) window.__waldohr.switchTab('v-orni');
   }
 
@@ -340,16 +360,17 @@ function _initTransekt() {
     // Teilt sich den Tracker mit dem Route-Button (Karten-Tab) — läuft dort schon eine
     // Aufzeichnung, nicht einfach übernehmen/überschreiben, sondern klar sagen, wo zuerst stoppen.
     if (routeTracker._timer) {
-      showInfoToast('📍 Route läuft bereits', 'Erst im Karten-Tab beenden, dann kannst du eine Transekt-Zählung starten.', '📍');
+      showInfoToast('Route läuft bereits', 'Erst im Karten-Tab beenden, dann kannst du eine Transekt-Zählung starten.', 'route');
       return;
     }
 
     _txStartTs = Date.now();
     _txWasDetecting = window.__waldohr ? window.__waldohr.isDetecting() : false;
+    _txMicWasRunning = _micRunning();
 
     _showStartPopup('Transekt-Zählung');
-    startBtn.textContent = 'Stoppen';
-    startBtn.classList.add('primary');
+    startBtn.textContent = 'Transekt beenden';
+    startBtn.classList.remove('primary'); startBtn.classList.add('running');
     if (speciesEl) { speciesEl.hidden = true; speciesEl.innerHTML = ''; }
     timerEl.textContent = '0:00';
     if (distEl) distEl.textContent = '0 m zurückgelegt';
@@ -379,29 +400,36 @@ function _saveTxSession(startTs, endTs, species, distKm, points) {
   } catch { _warnStorageFail('Transekt-Sitzung'); return -1; }
 }
 
+// Zählung je Art über Map statt Plain-Object: d.key kann aus einer importierten Sicherung oder
+// vom BirdNET-Server stammen — '__proto__'/'constructor' als Schlüssel würde ein {} verbiegen.
+function _countBySpecies(dets) {
+  const byKey = new Map();
+  for (const d of dets) {
+    let e = byKey.get(d.key);
+    if (!e) { e = { name: d.species, count: 0 }; byKey.set(d.key, e); }
+    e.count++;
+  }
+  return [...byKey.values()].sort((a, b) => b.count - a.count);
+}
+
 async function _showTxResults(el, startTs, summary, points) {
   if (!el) return;
   const endTs = Date.now();
   const all = await allDetections();
   const inWindow = all.filter(d => d.ts >= startTs && d.ts <= endTs);
   const qual = qualifyingDetections(inWindow);
-  const byKey = {};
-  for (const d of qual) {
-    if (!byKey[d.key]) byKey[d.key] = { name: d.species, count: 0 };
-    byKey[d.key].count++;
-  }
-  const list = Object.values(byKey).sort((a, b) => b.count - a.count);
+  const list = _countBySpecies(qual);
   const distKm = summary?.distKm || 0;
   const sessionIdx = _saveTxSession(startTs, endTs, list, distKm, points);
   const fmtDist = km => km < 1 ? Math.round(km * 1000) + ' m' : km.toFixed(2) + ' km';
-  const nameInput = `<input id="txSessionName" type="text" placeholder="Sitzungsname (optional)" style="width:100%;box-sizing:border-box;background:var(--glass);border:1px solid var(--stroke);border-radius:12px;padding:10px 14px;color:var(--ink);font-size:13px;font-family:inherit;outline:none;margin-bottom:10px">`;
-  const distLine = `<div style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:10px">${fmtDist(distKm)} zurückgelegt</div>`;
+  const nameInput = `<input id="txSessionName" class="field" type="text" placeholder="Sitzungsname (optional)" aria-label="Sitzungsname">`;
+  const distLine = `<div class="res-dist">${fmtDist(distKm)} zurückgelegt</div>`;
   if (!list.length) {
-    el.innerHTML = nameInput + distLine + '<div style="color:var(--faint);font-size:13px;text-align:center;padding:12px 0">Keine Rufe auf der Strecke erkannt</div>';
+    el.innerHTML = nameInput + distLine + '<div class="res-empty">Keine Rufe auf der Strecke erkannt</div>';
   } else {
     el.innerHTML = nameInput + distLine
-      + '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Ergebnis</div>'
-      + list.map(s => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--stroke);font-size:14px"><span>${s.name}</span><span style="color:var(--lime);font-weight:700;font-size:15px">${s.count}×</span></div>`).join('');
+      + '<div class="res-h">Ergebnis</div>'
+      + list.map(s => `<div class="res-row"><span>${esc(s.name)}</span><b>${s.count}×</b></div>`).join('');
   }
   el.hidden = false;
   if (sessionIdx >= 0) {
@@ -422,20 +450,15 @@ async function _showPkResults(el, startTs) {
   const all = await allDetections();
   const inWindow = all.filter(d => d.ts >= startTs && d.ts <= endTs);
   const qual = qualifyingDetections(inWindow);
-  const byKey = {};
-  for (const d of qual) {
-    if (!byKey[d.key]) byKey[d.key] = { name: d.species, count: 0 };
-    byKey[d.key].count++;
-  }
-  const list = Object.values(byKey).sort((a, b) => b.count - a.count);
+  const list = _countBySpecies(qual);
   const sessionIdx = _savePkSession(startTs, list);
-  const nameInput = `<input id="pkSessionName" type="text" placeholder="Sitzungsname (optional)" style="width:100%;box-sizing:border-box;background:var(--glass);border:1px solid var(--stroke);border-radius:12px;padding:10px 14px;color:var(--ink);font-size:13px;font-family:inherit;outline:none;margin-bottom:10px">`;
+  const nameInput = `<input id="pkSessionName" class="field" type="text" placeholder="Sitzungsname (optional)" aria-label="Sitzungsname">`;
   if (!list.length) {
-    el.innerHTML = nameInput + '<div style="color:var(--faint);font-size:13px;text-align:center;padding:12px 0">Keine Rufe im Zeitfenster erkannt</div>';
+    el.innerHTML = nameInput + '<div class="res-empty">Keine Rufe im Zeitfenster erkannt</div>';
   } else {
     el.innerHTML = nameInput
-      + '<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Ergebnis</div>'
-      + list.map(s => `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--stroke);font-size:14px"><span>${s.name}</span><span style="color:var(--lime);font-weight:700;font-size:15px">${s.count}×</span></div>`).join('');
+      + '<div class="res-h">Ergebnis</div>'
+      + list.map(s => `<div class="res-row"><span>${esc(s.name)}</span><b>${s.count}×</b></div>`).join('');
   }
   el.hidden = false;
   if (sessionIdx >= 0) {
@@ -453,19 +476,25 @@ async function _showPkResults(el, startTs) {
 function _showPkEndPopup(count, subtitle) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:rgba(2,8,6,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)';
-  ov.innerHTML = `<div style="background:linear-gradient(160deg,#0c2a1a,#061a0f);border:1px solid var(--stroke);border-radius:24px;padding:28px 28px 22px;text-align:center;max-width:270px;width:88%">
-    <div style="font-size:44px;margin-bottom:6px">🎯</div>
-    <div style="font-size:26px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;margin-bottom:4px">${count} ${count === 1 ? 'Art' : 'Arten'}</div>
-    <div style="font-size:13px;color:var(--muted);margin-bottom:18px">${subtitle || 'in 5 Minuten erkannt'}</div>
-    <button id="_pkPopupBtn" style="width:100%;padding:13px;border-radius:14px;background:var(--lime);color:#04130d;font-weight:700;font-size:15px;border:none;cursor:pointer;font-family:'Outfit',sans-serif">Zu Protokollen →</button>
+  ov.innerHTML = `<div style="background:#0a2a1f;border:1px solid var(--stroke-strong);border-radius:24px;padding:26px 24px 20px;text-align:center;max-width:280px;width:88%">
+    <div style="width:56px;height:56px;margin:0 auto 10px;border-radius:16px;display:grid;place-items:center;background:rgba(163,230,53,.14);color:var(--lime)">${icon('check')}</div>
+    <div style="font-size:44px;font-weight:600;color:var(--ink);font-family:'Outfit',sans-serif;line-height:1.1">${count}</div>
+    <div style="font-size:15px;color:var(--ink);font-family:'Outfit',sans-serif;margin-bottom:2px">${count === 1 ? 'Art' : 'Arten'}</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:18px">${esc(subtitle || 'in 5 Minuten erkannt')}</div>
+    <button id="_pkPopupBtn" class="btn primary" style="width:100%">Zu den Protokollen</button>
   </div>`;
   document.body.appendChild(ov);
+  // Nur EINMAL weiterleiten: vorher feuerte der 6-s-Timer auch nach einem Tipp auf den Knopf noch
+  // und riss den Nutzer zurück zu "Protokolle", obwohl er längst woanders war.
+  let done = false, timer = null;
   const go = () => {
+    if (done) return;
+    done = true; clearTimeout(timer);
     ov.remove();
     document.querySelector('#orniToggle button[data-tab="protokolle"]')?.click();
   };
   ov.querySelector('#_pkPopupBtn').onclick = go;
-  setTimeout(go, 6000);
+  timer = setTimeout(go, 6000);
 }
 
 function _renderProtokolle() {
@@ -479,7 +508,7 @@ function _renderProtokolle() {
     ...txSessions.map((s, i) => ({ ...s, _type: 'tx', _idx: i })),
   ].sort((a, b) => b.ts - a.ts);
   if (!merged.length) {
-    list.innerHTML = '<div class="infoblock" style="margin-top:14px"><p style="color:var(--muted);font-size:13px;text-align:center;padding:8px 0">Noch keine Zählsitzungen gespeichert.<br>Starte eine Punkt- oder Transekt-Zählung im Überwachungs-Tab.</p></div>';
+    list.innerHTML = '<div class="empty-note">Noch keine Zählungen gespeichert.<br>Starte eine Punkt- oder Transekt-Zählung unter „Zählungen“.</div>';
     return;
   }
   const fmtDist = km => km < 1 ? Math.round(km * 1000) + ' m' : km.toFixed(2) + ' km';
@@ -489,34 +518,33 @@ function _renderProtokolle() {
     const d = new Date(s.ts);
     const dateStr = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const timeStr = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-    const label = _escHtml(s.name || ((isTx ? '🗺️ Transekt vom ' : '📍 Sitzung vom ') + dateStr));
+    const label = esc(s.name || ((isTx ? 'Transekt vom ' : 'Punkt-Zählung vom ') + dateStr));
+    const n = s.species ? s.species.length : 0;
 
     const card = document.createElement('div');
-    card.className = 'infoblock';
-    card.style.marginTop = i ? '10px' : '14px';
+    card.className = 'card prot-card';
 
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;cursor:pointer;-webkit-tap-highlight-color:transparent';
-    header.innerHTML = `<div style="flex:1;min-width:0">
-      <div style="font-weight:700;font-size:14px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:2px">${dateStr} · ${timeStr}${isTx ? ' · ' + fmtDist(s.distKm || 0) : ''}</div>
+    header.className = 'prot-head';
+    header.setAttribute('role', 'button'); header.tabIndex = 0; header.setAttribute('aria-expanded', 'false');
+    header.innerHTML = `<span class="tile">${icon(isTx ? 'route' : 'target')}</span>
+    <div>
+      <div class="prot-title">${label}</div>
+      <div class="prot-meta">${dateStr} · ${timeStr}${isTx ? ' · ' + fmtDist(s.distKm || 0) : ''}</div>
     </div>
-    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-      <div style="font-size:17px;font-weight:700;color:var(--lime)">${s.species ? s.species.length : 0} Arten</div>
-      <button class="prot-del-btn" title="Sitzung löschen" style="background:none;border:none;color:var(--rose,#ef4444);cursor:pointer;padding:4px 2px;display:flex;align-items:center;opacity:.75">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-      </button>
-    </div>`;
+    <div class="prot-count">${n} ${n === 1 ? 'Art' : 'Arten'}</div>
+    <button class="prot-del-btn" title="Sitzung löschen" aria-label="Sitzung löschen">${icon('trash')}</button>`;
 
     const body = document.createElement('div');
     body.hidden = true;
-    body.style.marginTop = '8px';
+    body.className = 'prot-body';
 
     header.addEventListener('click', async e => {
       if (e.target.closest('.prot-del-btn') || e.target.closest('.prot-gpx-btn')) return;
+      header.setAttribute('aria-expanded', String(body.hidden));
       if (body.hidden) {
         body.hidden = false;
-        body.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:4px 0">Lade…</div>';
+        body.innerHTML = '<div class="res-empty">Lade…</div>';
         try {
           const allDets = qualifyingDetections(await allDetections());
           const winStart = s.startTs || s.ts - PK_SECS * 1000;
@@ -524,21 +552,19 @@ function _renderProtokolle() {
           const inWindow = allDets.filter(det => det.ts >= winStart && det.ts <= winEnd);
           let html = '';
           if (isTx && s.points?.length) {
-            html += `<button class="prot-gpx-btn" style="width:100%;padding:9px;border-radius:10px;background:var(--glass);border:1px solid var(--stroke);color:var(--ink);font-size:12px;cursor:pointer;font-family:inherit;margin-bottom:8px">📍 GPX-Route exportieren</button>`;
+            html += `<button class="btn ghost small prot-gpx-btn">${icon('route')}GPX-Route exportieren</button>`;
           }
           if (!inWindow.length) {
-            html += '<div style="color:var(--faint);font-size:12px;padding:4px 0">Keine Erkennungen im Zeitfenster gefunden</div>';
+            html += '<div class="res-empty">Keine Erkennungen im Zeitfenster gefunden</div>';
           } else {
-            const bySpecies = {};
+            const bySpecies = new Map(); // Map statt {}: s. _countBySpecies (Prototype Pollution)
             for (const det of inWindow) {
-              if (!bySpecies[det.key]) bySpecies[det.key] = { name: det.species, times: [] };
-              bySpecies[det.key].times.push(new Date(det.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+              let e = bySpecies.get(det.key);
+              if (!e) { e = { name: det.species, times: [] }; bySpecies.set(det.key, e); }
+              e.times.push(new Date(det.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
             }
-            html += Object.values(bySpecies).map(sp =>
-              `<div style="border-top:1px solid var(--stroke);padding:6px 0">
-                <div style="font-weight:600;font-size:13px;color:var(--ink);margin-bottom:3px">${sp.name}</div>
-                ${sp.times.map(t => `<div style="font-size:11px;color:var(--muted);padding:1px 0">· ${t}</div>`).join('')}
-              </div>`
+            html += [...bySpecies.values()].map(sp =>
+              `<div class="prot-sp"><b>${esc(sp.name)}</b><span>${sp.times.map(esc).join(' · ')}</span></div>`
             ).join('');
           }
           body.innerHTML = html;
@@ -552,12 +578,13 @@ function _renderProtokolle() {
             const gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="WaldOhr" xmlns="http://www.topografix.com/GPX/1/1">\n  <trk><name>WaldOhr-Transekt ${date}</name><trkseg>\n${pts}\n  </trkseg></trk>\n</gpx>`;
             _dlBlob(new Blob([gpx], { type: 'application/gpx+xml' }), 'waldohr-transekt-' + todayStr() + '.gpx');
           });
-        } catch { body.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:4px 0">Fehler beim Laden</div>'; }
+        } catch { body.innerHTML = '<div class="res-empty">Fehler beim Laden</div>'; }
       } else {
         body.hidden = true;
       }
     });
 
+    header.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === header) { e.preventDefault(); header.click(); } });
     header.querySelector('.prot-del-btn').addEventListener('click', e => {
       e.stopPropagation();
       try {
@@ -587,20 +614,20 @@ async function _renderExportSection() {
 
   if (sessions.length) {
     const selEl = document.createElement('div'); selEl.id = '_sessSelector';
-    selEl.innerHTML = `<div class="infoblock" style="margin-bottom:14px">
-      <div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.8px">Sitzungen</div>
-      <label style="display:flex;align-items:center;gap:10px;padding:7px 0;font-size:13px;cursor:pointer;border-bottom:1px solid var(--stroke)">
-        <input type="checkbox" id="duExportAll" checked style="width:16px;height:16px;accent-color:var(--lime)">
-        <span style="color:var(--ink);font-weight:600">Alle Aufnahmen</span>
-        <span style="color:var(--lime);font-weight:700;margin-left:auto">${sessions.length} Sitzung${sessions.length !== 1 ? 'en' : ''}</span>
+    selEl.innerHTML = `<div class="card sess-box">
+      <div class="ch">Punkt-Zählungen <em>optional eingrenzen</em></div>
+      <label class="sess-row">
+        <input type="checkbox" id="duExportAll" checked>
+        <span><b style="color:var(--ink)">Alle Funde</b></span>
+        <b>${sessions.length} Sitzung${sessions.length !== 1 ? 'en' : ''}</b>
       </label>
       ${sessions.map((s, i) => {
         const d = new Date(s.ts);
-        const label = _escHtml(s.name || ('Sitzung ' + d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' }) + ' ' + d.toLocaleTimeString('de-DE', { hour:'2-digit', minute:'2-digit' })));
-        return `<label style="display:flex;align-items:center;gap:10px;padding:7px 0;font-size:12px;cursor:pointer;border-bottom:1px solid var(--stroke)">
-          <input type="checkbox" class="du-sess-chk" data-idx="${i}" style="width:16px;height:16px;accent-color:var(--lime)">
-          <span style="flex:1;color:var(--ink)">${label}</span>
-          <span style="color:var(--lime);font-weight:700">${s.species ? s.species.length : 0} Arten</span>
+        const label = esc(s.name || ('Punkt-Zählung ' + d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' }) + ' ' + d.toLocaleTimeString('de-DE', { hour:'2-digit', minute:'2-digit' })));
+        return `<label class="sess-row">
+          <input type="checkbox" class="du-sess-chk" data-idx="${i}" disabled>
+          <span>${label}</span>
+          <b>${s.species ? s.species.length : 0} Arten</b>
         </label>`;
       }).join('')}
     </div>`;
@@ -609,20 +636,53 @@ async function _renderExportSection() {
     else container.insertBefore(selEl, container.firstChild);
     document.getElementById('duExportAll')?.addEventListener('change', function() {
       container.querySelectorAll('.du-sess-chk').forEach(c => { c.disabled = this.checked; if (this.checked) c.checked = false; });
+      _updateSummary();
     });
+    container.querySelectorAll('.du-sess-chk').forEach(c => c.addEventListener('change', () => _updateSummary()));
+  }
+
+  // Bereich "Heute hier" (heutige Funde im Umkreis von 3 km um die eigene Position) oder "Alles" —
+  // der EINZIGE Export der App (der doppelte in der Statistik ist entfallen).
+  const scopeEl = $('orniScope');
+  const scope = () => scopeEl?.querySelector('button.on')?.dataset.scope || 'all';
+  if (scopeEl && !scopeEl._wired) {
+    scopeEl._wired = true;
+    scopeEl.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      scopeEl.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      _renderExportSection();
+    }));
   }
 
   function getSelectedDets() {
+    let base = allDets;
+    if (scope() === 'here') {
+      let pos = null; try { pos = window.__waldohr?.getPos?.() || null; } catch {}
+      base = todayNearbyDetections(allDets, pos);
+    }
     const allChk = document.getElementById('duExportAll');
-    if (!allChk || allChk.checked || !sessions.length) return allDets;
+    if (!allChk || allChk.checked || !sessions.length) return base;
     const checked = [...container.querySelectorAll('.du-sess-chk:checked')];
-    if (!checked.length) return allDets;
+    if (!checked.length) return base;
     const ranges = checked.map(c => {
       const s = sessions[parseInt(c.dataset.idx)];
       return { start: s.startTs, end: s.startTs + 5 * 60 * 1000 };
     });
-    return allDets.filter(d => ranges.some(r => d.ts >= r.start && d.ts <= r.end));
+    return base.filter(d => ranges.some(r => d.ts >= r.start && d.ts <= r.end));
   }
+
+  // Zusammenfassung über dem Export: Arten, Beobachtungen, Zeitraum (lesbares Datum, kein ISO).
+  function _updateSummary() {
+    const sum = $('orniExportSummary'); if (!sum) return;
+    const dets = getSelectedDets();
+    const species = new Set(dets.map(d => d.key)).size;
+    let lo = Infinity, hi = -Infinity; for (const d of dets) { if (d.ts < lo) lo = d.ts; if (d.ts > hi) hi = d.ts; }
+    const a = dets.length ? fmtShortDate(lo) : '–', b = dets.length ? fmtShortDate(hi) : '';
+    const range = !dets.length ? '–' : a === b ? a : a + ' – ' + b;
+    const kpi = (n, l, sm) => `<div class="kpi"><div class="n${sm ? ' sm' : ''}">${esc(n)}</div><div class="l">${l}</div></div>`;
+    sum.innerHTML = kpi(species, species === 1 ? 'Art' : 'Arten') + kpi(dets.length, 'Beobachtungen') + kpi(range, 'Zeitraum', true);
+    container.querySelectorAll('.export-btn').forEach(b => { b.disabled = !dets.length; });
+  }
+  _updateSummary();
 
   const wire = (id, fn) => { const el = $(id); if (el) el.onclick = () => fn(getSelectedDets()); };
   wire('orniEbirdBtn', _exportEbird);

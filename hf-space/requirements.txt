@@ -1,4 +1,8 @@
-birdnetlib>=0.18.0
-tensorflow-cpu>=2.13,<2.20
-librosa>=0.10.0
-resampy>=0.4.2
+# Versionen mit Obergrenze gepinnt: ein ungeprüftes Major-/Minor-Update (oder ein gekapertes
+# Release) soll nicht still beim nächsten Space-Rebuild mitkommen. ~= erlaubt nur Patch-Updates.
+# tensorflow-cpu bleibt bei 2.19.x (bisherige Obergrenze <2.20, damit getestet); librosa 1.x
+# braucht Python >= 3.12, das Docker-Image ist 3.11 -> 0.11.x.
+birdnetlib==0.18.1
+tensorflow-cpu~=2.19.1
+librosa~=0.11.0
+resampy==0.4.3

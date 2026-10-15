@@ -42,9 +42,11 @@ export const gemini = {
         }
       }
     };
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model()}:generateContent?key=${encodeURIComponent(key)}`;
+    // Key als Header (x-goog-api-key) statt ?key= in der URL: URLs landen in Proxy-/Server-Logs,
+    // im Browser-Verlauf der DevTools und in Fehlermeldungen/Crash-Reports — Header nicht.
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model())}:generateContent`;
     try {
-      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body) });
       if (!r.ok) { console.warn('gemini', r.status, await r.text().catch(() => '')); return null; }
       const data = await r.json();
       const txt = data && data.candidates && data.candidates[0] &&

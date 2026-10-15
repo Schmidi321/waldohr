@@ -122,12 +122,15 @@ async function _enumerateDevices() {
       const back = allCams.filter(d => !d.label.toLowerCase().match(/front|facetime|user|selfie/));
       const pool = back.length ? back : allCams.slice(0, 3);
       const chosen = _dedupeLenses(pool);
-      camSel.innerHTML = chosen.map(c => `<option value="${c.deviceId}">${c.name}</option>`).join('');
+      // Optionen per new Option() statt innerHTML-Template: deviceId/Label kommen vom Gerät bzw.
+      // Treiber und sind nicht vertrauenswürdig — v.a. Bluetooth-Geräte (Headset-Mikros) darf
+      // jeder in Funkreichweite beliebig benennen, inkl. HTML-Markup.
+      camSel.replaceChildren(...chosen.map(c => new Option(c.name, c.deviceId)));
       camSel.style.display = chosen.length > 1 ? '' : 'none';
     }
     const micSel = document.getElementById('camMicSelect');
     if (micSel && mics.length) {
-      micSel.innerHTML = mics.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Mikrofon ' + (i + 1)}</option>`).join('');
+      micSel.replaceChildren(...mics.map((d, i) => new Option(d.label || 'Mikrofon ' + (i + 1), d.deviceId)));
       micSel.style.display = mics.length > 1 ? '' : 'none';
     }
   } catch (e) { console.warn('enumerate', e); }
@@ -172,16 +175,28 @@ function _renderZoom(v) {
 // eine spürbare Unterbrechung der Kamera-Pipeline (Frame-Drop) — deshalb passiert das NIE
 // während einer laufenden Videoaufnahme (dort zoomt der Canvas-Kompositor rein digital) und
 // außerhalb von Aufnahmen nur gedrosselt.
+// applyConstraints() wird AWAITET, damit _hwZoom erst dann auf den neuen Wert springt, wenn die
+// Kamera ihn wirklich übernommen hat (bei Ablehnung bleibt _hwZoom stehen und die Vorschau zoomt
+// rein digital weiter). Auf echten Handys dauert ein Aufruf aber 100–500 ms und beim Ziehen/Pinchen
+// oder während einer Zoomfahrt sind oft mehrere gleichzeitig unterwegs: ohne Reihenfolge-Schutz
+// konnte ein ÄLTERER Aufruf nach einem neueren auflösen und _hwZoom auf einen veralteten Wert
+// zurücksetzen — die Vorschau war dann doppelt bzw. gar nicht gezoomt, und ein kurz vor dem
+// Aufnahmestart verspätet auflösender Aufruf überschrieb sogar den Reset auf Minimum (Aufnahme ohne
+// sichtbaren Zoom). Darum darf nur der jeweils LETZTE Aufruf committen, und nie während eine
+// Aufnahme startet oder läuft. _hwRequested merkt sich, wohin die Hardware gerade unterwegs ist.
+let _hwSyncSeq = 0, _hwRequested = 1;
 async function _syncHwZoom(v) {
-  if (!_zoomSupported || !_videoTrack || _isRecording()) return;
-  // applyConstraints() lehnt selten asynchron ab (Wert kurz außerhalb des Bereichs, Track busy/
-  // beendet) — das ist eine Promise-Rejection, kein synchroner Throw, darum hier bewusst AWARTEN
-  // und fangen. Ohne await liefe die Funktion einfach weiter und _hwZoom würde auf den angefragten
-  // Wert gesetzt, obwohl die Kamera ihn nie übernommen hat — das digitale Crop-Modell (Vorschau,
-  // Foto-Crop, Aufnahme-Canvas) würde dauerhaft vom tatsächlichen Hardware-Zoom abweichen.
+  if (!_zoomSupported || !_videoTrack || _isRecording() || _recordingStarting) return;
+  const seq = ++_hwSyncSeq, track = _videoTrack;
+  _hwRequested = v;
   try {
-    await _videoTrack.applyConstraints({ advanced: [{ zoom: v }] });
-  } catch (e) { console.warn('hw zoom', e); return; }
+    await track.applyConstraints({ advanced: [{ zoom: v }] });
+  } catch (e) {
+    console.warn('hw zoom', e);
+    if (seq === _hwSyncSeq) _hwRequested = _hwZoom;
+    return;
+  }
+  if (seq !== _hwSyncSeq || track !== _videoTrack || _isRecording() || _recordingStarting) return;
   _hwZoom = v;
   _renderZoom(_viewZoom); // Digital-Anteil neu berechnen (schrumpft nach dem Sync auf ~1)
 }
@@ -191,14 +206,17 @@ async function _syncHwZoom(v) {
 // CSS-Vorschau läuft framegenau sofort (_renderZoom), die Hardware zieht erst nach, wenn der
 // Finger kurz ruht (trailing 180 ms).
 let _hwSyncTimer = null;
+function _cancelHwSyncTimer() {
+  if (_hwSyncTimer) { clearTimeout(_hwSyncTimer); _hwSyncTimer = null; }
+}
 function _syncHwZoomThrottled(v) {
-  if (_hwSyncTimer) clearTimeout(_hwSyncTimer);
+  _cancelHwSyncTimer();
   _hwSyncTimer = setTimeout(() => { _hwSyncTimer = null; _syncHwZoom(_viewZoom); }, 180);
 }
 
 function _applyZoom(v, immediate) {
   _renderZoom(v);
-  if (immediate) _syncHwZoom(_viewZoom);
+  if (immediate) { _cancelHwSyncTimer(); _syncHwZoom(_viewZoom); }
   else _syncHwZoomThrottled(_viewZoom);
 }
 
@@ -504,6 +522,8 @@ async function _startStream(camId, micId) {
   // Frischer Stream startet ungezoomt — logisches Zoom-Modell darauf zurücksetzen.
   _hwZoom = _zoomMin || 1;
   _viewZoom = _hwZoom;
+  _hwRequested = _hwZoom;
+  _hwSyncSeq++; // noch ausstehende Syncs des ALTEN Tracks dürfen den neuen Stream nicht verstellen
   if (zoomWrap) zoomWrap.hidden = false;
   _setupMeter();
 }
@@ -736,9 +756,19 @@ async function _toggleVideo() {
     // Reihenfolge wichtig: erst die Hardware umstellen und den Inhaltswechsel abwarten, DANN das
     // Zoom-Modell (_hwZoom) und die CSS-Vorschau umrechnen — sonst zeigt die Vorschau für einen
     // Augenblick doppelt gezoomt (CSS-Faktor springt hoch, während der Track noch gezoomt liefert).
-    if (_zoomSupported && _videoTrack && _hwZoom !== _zoomMin) {
-      try { _videoTrack.applyConstraints({ advanced: [{ zoom: _zoomMin }] }); } catch {}
-      await new Promise(r => setTimeout(r, 350));
+    // Auch wenn _hwZoom schon auf Minimum steht, kann ein Slider-/Pinch-Sync noch unterwegs sein
+    // (_hwRequested) — die Hardware landet dann gleich auf DESSEN Wert, das Crop-Modell aber auf
+    // Minimum: Aufnahme doppelt gezoomt. Darum zählt auch der angefragte Wert, und alle noch
+    // ausstehenden Syncs werden per Sequenz-Zähler entwertet.
+    if (_zoomSupported && _videoTrack && (_hwZoom !== _zoomMin || _hwRequested !== _zoomMin)) {
+      _cancelHwSyncTimer();
+      _hwSyncSeq++;
+      _hwRequested = _zoomMin;
+      const applied = _videoTrack.applyConstraints({ advanced: [{ zoom: _zoomMin }] }).catch(() => {});
+      // Manche Geräte lösen das Promise erst spät oder nie auf — höchstens 600 ms warten, danach
+      // ein paar Frames Puffer, bis das Bild wirklich auf dem neuen Zoom ankommt.
+      await Promise.race([applied, new Promise(r => setTimeout(r, 600))]);
+      await new Promise(r => setTimeout(r, 150));
       _hwZoom = _zoomMin;
       _renderZoom(_viewZoom);
     }

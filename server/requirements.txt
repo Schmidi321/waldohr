@@ -1,5 +1,7 @@
 # Waldohr BirdNET-Backend
 # birdnetlib führt BirdNET v2.4 nativ aus (inkl. der STFT/RFFT-Ops, die im Browser scheitern).
 # Achtung: zieht TensorFlow (~1 GB). Python 3.11–3.12 empfohlen.
-birdnetlib>=0.18.0
-tensorflow>=2.13,<2.20
+# Mit Obergrenze gepinnt (~= = nur Patch-Updates), damit ein neues Release nicht ungeprüft
+# mitkommt. tensorflow 2.19.x hat Wheels für Python 3.10–3.12 (Windows/Linux/macOS).
+birdnetlib==0.18.1
+tensorflow~=2.19.1

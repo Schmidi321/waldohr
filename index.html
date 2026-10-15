@@ -2,6 +2,12 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8" />
+<!-- Content-Security-Policy: erlaubt nur die Quellen, die die App wirklich nutzt. Falls doch einmal
+     fremder Text als HTML durchrutscht, kann er so weder fremde Skripte nachladen noch Daten
+     (GPS-Verlauf, API-Keys) an beliebige Server schicken. Der BirdNET-Server ist auf *.hf.space und
+     localhost beschränkt; ein anderer Server muss hier ergänzt werden. 'wasm-unsafe-eval' und
+     cdn.jsdelivr.net nur für das (derzeit ungenutzte) On-Device-Modell. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://unpkg.com; font-src 'self'; img-src 'self' data: blob: https://upload.wikimedia.org https://thumb.wikimedia.org https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://unpkg.com; media-src 'self' blob: data: https://xeno-canto.org https://*.xeno-canto.org; connect-src 'self' blob: data: https://api.open-meteo.com https://api.sunrise-sunset.org https://nominatim.openstreetmap.org https://de.wikipedia.org https://commons.wikimedia.org https://xeno-canto.org https://generativelanguage.googleapis.com https://cdn.jsdelivr.net https://*.hf.space http://localhost:* http://127.0.0.1:*; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <meta name="theme-color" content="#04130d" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -10,124 +16,211 @@
 <link rel="manifest" href="manifest.webmanifest" />
 <link rel="apple-touch-icon" href="icons/icon-180.png" />
 <link rel="icon" href="icons/icon-192.png" type="image/png" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<!-- Schriften liegen selbst gehostet unter fonts/ (s. @font-face in styles.css): kein Google-Fonts-
+     Abruf mehr, der die IP-Adresse jedes Nutzers an Google übertragen würde (DSGVO). Die beiden
+     meistgenutzten Schnitte vorladen, damit der erste Bildschirm nicht mit Ersatzschrift aufblitzt. -->
+<link rel="preload" href="fonts/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="fonts/outfit-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+<!-- Icon-Sprite: EIN Satz Linien-Icons (24er Raster, Strich 1.8, currentColor) statt Emoji —
+     Emoji sehen auf jeder Plattform anders aus und wirken wie ein Prototyp. Verwendung überall
+     per <svg class="ic"><use href="#i-…"/></svg>; Strichstärke/Farbe kommen aus .ic (styles.css).
+     Gefüllte Formen setzen fill/stroke direkt am Pfad (schlägt die geerbten Werte). -->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-listen" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M7 12a5 5 0 0 1 5-5"/><circle cx="12" cy="12" r="1.6"/><path d="M21 12a9 9 0 0 1-9 9" opacity=".4"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.8"/><rect x="13" y="4" width="7" height="7" rx="1.8"/><rect x="4" y="13" width="7" height="7" rx="1.8"/><rect x="13" y="13" width="7" height="7" rx="1.8"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5z"/><path d="M5 20.5A2.5 2.5 0 0 1 7.5 18H19v3H7.5"/><path d="M9 7.5h6M9 11h4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-2.7-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19H7a5 5 0 1 1 1.06-9.89A6 6 0 0 1 19.5 12.5 3.5 3.5 0 0 1 17.5 19z"/></symbol>
+  <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.6 5.8 6.3.6-4.7 4.3 1.4 6.2L12 16.9l-5.6 3 1.4-6.2-4.7-4.3 6.3-.6z"/></symbol>
+  <symbol id="i-star-fill" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3l2.6 5.8 6.3.6-4.7 4.3 1.4 6.2L12 16.9l-5.6 3 1.4-6.2-4.7-4.3 6.3-.6z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-sunrise" viewBox="0 0 24 24"><path d="M3 18h18"/><path d="M7 18a5 5 0 0 1 10 0"/><path d="M12 3v5M9.5 5.5 12 3l2.5 2.5M4.9 11.1l1.4 1.4M19.1 11.1l-1.4 1.4"/><path d="M8 21h8" opacity=".5"/></symbol>
+  <symbol id="i-sunset" viewBox="0 0 24 24"><path d="M3 18h18"/><path d="M7 18a5 5 0 0 1 10 0"/><path d="M12 8V3M9.5 5.5 12 8l2.5-2.5M4.9 11.1l1.4 1.4M19.1 11.1l-1.4 1.4"/><path d="M8 21h8" opacity=".5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></symbol>
+  <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2.5h6"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+  <symbol id="i-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24"><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M7 18h8.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H17"/></symbol>
+  <symbol id="i-frame" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/><circle cx="12" cy="12" r="2.2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.6 4.5L20 16"/><path d="M20 20v-4h-4"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-partly" viewBox="0 0 24 24"><path d="M8 3.5v1.5M3.5 8H5M4.8 4.8l1 1M12 6.2A4 4 0 0 0 5.2 10"/><path d="M17.5 20H9a4 4 0 1 1 .85-7.9A5 5 0 0 1 19.4 14.6 2.8 2.8 0 0 1 17.5 20z"/></symbol>
+  <symbol id="i-rain" viewBox="0 0 24 24"><path d="M17.5 15H7a4.5 4.5 0 1 1 .95-8.9A5.5 5.5 0 0 1 19 9.5 3 3 0 0 1 17.5 15z"/><path d="M8 18l-1 3M12 18l-1 3M16 18l-1 3"/></symbol>
+  <symbol id="i-snow" viewBox="0 0 24 24"><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9"/><path d="M9.5 4.5 12 6l2.5-1.5M9.5 19.5 12 18l2.5 1.5"/></symbol>
+  <symbol id="i-storm" viewBox="0 0 24 24"><path d="M17.5 14H7a4.5 4.5 0 1 1 .95-8.9A5.5 5.5 0 0 1 19 8.5 3 3 0 0 1 17.5 14z"/><path d="M12.5 15.5 10 19.5h4l-2.5 3.5"/></symbol>
+  <symbol id="i-fog" viewBox="0 0 24 24"><path d="M4 9h16M3 13h18M5 17h14M8 21h8"/></symbol>
+  <symbol id="i-wind" viewBox="0 0 24 24"><path d="M3 8h11a3 3 0 1 0-3-3M3 12h16a3 3 0 1 1-3 3M3 16h7"/></symbol>
+  <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4.5M12 17h.01"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.4M12 17h.01"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M7 4.5l12.5 7.5L7 19.5z"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16v4M17 18h4"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></symbol>
+  <symbol id="i-paw" viewBox="0 0 24 24"><circle cx="6.5" cy="10" r="1.8"/><circle cx="10" cy="6" r="1.8"/><circle cx="14" cy="6" r="1.8"/><circle cx="17.5" cy="10" r="1.8"/><path d="M12 11.5c-3 0-5.2 3.2-5.2 5.4 0 1.5 1.3 2.3 2.7 1.9.9-.3 1.6-.6 2.5-.6s1.6.3 2.5.6c1.4.4 2.7-.4 2.7-1.9 0-2.2-2.2-5.4-5.2-5.4z"/></symbol>
+  <symbol id="i-disk" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h7V3M8 21v-7h8v7"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v13c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-13M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/></symbol>
+</svg>
+
 <div class="phone">
   <div class="screen-wrap">
 
-    <div class="rare-toast" id="rareToast"></div>
+    <div class="rare-toast" id="rareToast" role="status" aria-live="polite"></div>
 
     <!-- ============ STARTBILDSCHIRM ============ -->
     <div class="splash" id="splash">
-      <div class="splash-icon" style="background-image:url('icons/icon-512.png')"></div>
+      <div class="splash-icon" role="img" aria-label="WaldOhr-Logo"></div>
       <div class="splash-word">WaldOhr</div>
-      <div class="splash-tag">Dein Smartphone wird zum Fernglas fürs Ohr. Halte das Mikrofon in die Natur und erfahre sofort, welcher Vogel gerade singt — mit Steckbrief und Wissenswertem zu jeder Art. Die Kamera hilft mit Profi-Tipps zum perfekten Foto. Und zu zweit unterwegs? Koppelt eure Handys, chattet und ortet Rufe gemeinsam.</div>
-      <button class="splash-continue" id="splashContinue">Weiter</button>
+      <p class="splash-tag">Halte dein Smartphone in die Natur — WaldOhr erkennt, welcher Vogel gerade singt. Fotografiere ihn, finde ihn auf der Karte wieder und führe dein eigenes Feldbuch.</p>
+      <button class="splash-continue" id="splashContinue">Los geht's</button>
       <div class="splash-ver" id="splashVer"></div>
       <div class="splash-by">AppReich</div>
     </div>
 
-    <!-- ============ LISTEN ============ -->
-    <section class="view active" id="v-listen">
-      <div class="topbar">
-        <div class="brand">
-          <span class="logo lg" style="background-image:url('icons/icon-192.png');background-size:cover;background-position:center"></span>
-          <span class="wordmark">WaldOhr</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <button class="gear" id="pairStatusChip" aria-label="Partner-Kopplung" title="Partner-Kopplung" hidden style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 8l4 4-4 4M7 8l-4 4 4 4M14 4l-4 16"/></svg><span id="pairStatusBadge" class="role-badge" hidden></span></button>
-          <div class="chip loc-searching" id="serverStatusChip" title="Verbinde mit BirdNET-Server…" hidden style="padding:7px 8px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M17.5 19H7a5 5 0 1 1 1.06-9.89A6 6 0 0 1 19.5 12.5 3.5 3.5 0 0 1 17.5 19z"/></svg></div>
-          <button class="gear" id="chatQuickBtn" aria-label="Nachrichten an Partner" title="Nachrichten" hidden style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg><span id="chatBadge" class="gallery-badge" hidden>0</span></button>
-          <div class="chip loc-off" id="locChip" title="Standort aus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg><span id="locTxt">GPS</span></div>
-        </div>
+    <!-- ============ KOPFZEILE (für alle Tabs gleich) ============
+         EINE Kopfzeile statt einer Topbar pro Tab: GPS-/Server-Chip und Zahnrad existieren so nur
+         einmal (IDs eindeutig), der Titel wechselt beim Tab-Wechsel (data-title der View, ui.js). -->
+    <header class="apphead">
+      <div class="apphead-title">
+        <span class="apphead-logo" aria-hidden="true"></span>
+        <h1 id="viewTitle">WaldOhr</h1>
       </div>
+      <div class="apphead-status">
+        <button class="chip loc-searching" id="serverStatusChip" title="Verbinde mit BirdNET-Server…" hidden><svg class="ic"><use href="#i-cloud"/></svg><span id="serverChipTxt">Server</span></button>
+        <div class="chip loc-off" id="locChip" title="Standort aus"><svg class="ic"><use href="#i-pin"/></svg><span id="locTxt">GPS</span></div>
+        <button class="iconbtn" id="gearBtn" title="Einstellungen" aria-label="Einstellungen öffnen"><svg class="ic"><use href="#i-gear"/></svg></button>
+      </div>
+    </header>
 
-      <div class="status"><span class="eq"><i></i><i></i><i></i><i></i><i></i></span><span id="statusTxt">Tippe zum Lauschen</span></div>
+    <!-- ============ LAUSCHEN ============ -->
+    <section class="view active" id="v-listen" data-title="WaldOhr">
+      <div class="status" aria-live="polite"><span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span id="statusTxt"></span></div>
 
       <div class="orb-stage">
         <span class="ring"></span><span class="ring"></span><span class="ring"></span>
-        <div class="orb" id="orbBtn" role="button" tabindex="0" aria-label="Lauschmodus starten/stoppen">
+        <!-- Ein Tipp startet Mikrofon UND Erkennung, ein zweiter stoppt beides (app.js). Texte
+             in #orbBig/#orbSub setzt setUI() je nach Zustand — nichts davon ist statisch. -->
+        <div class="orb" id="orbBtn" role="button" tabindex="0" aria-pressed="false" aria-label="Lauschen starten">
           <div class="sweep"></div>
           <div class="orb-core">
-            <svg viewBox="0 0 24 24" fill="none" stroke="var(--emerald)" stroke-width="1.6" stroke-linecap="round"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M6 12a6 6 0 0 1 6-6"/><path d="M9 12a3 3 0 0 1 3-3"/><circle cx="12" cy="12" r="1.4" fill="var(--emerald)" stroke="none"/></svg>
-            <div class="big">Lauschmodus</div>
-            <div class="sub">aktiv</div>
-            <button class="rec-pill" id="recBtn" title="Aufnahme starten/stoppen" aria-label="Aufnahme starten/stoppen">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
-              <span class="rec-time" id="recTime">REC</span>
-            </button>
+            <svg class="orb-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M6 12a6 6 0 0 1 6-6"/><path d="M9 12a3 3 0 0 1 3-3"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>
+            <div class="big" id="orbBig">Antippen</div>
+            <div class="sub" id="orbSub">zum Lauschen</div>
           </div>
         </div>
       </div>
 
-      <div class="spectro"><canvas id="spec"></canvas></div>
-      <div class="level"><div class="level-fill" id="levelFill"></div></div>
+      <div class="listen-chips">
+        <!-- id bleibt timingBtn: app.js öffnet darüber das Sheet "Automatisch lauschen". -->
+        <button class="chip chip-btn" id="timingBtn" aria-label="Automatisch lauschen einstellen"><svg class="ic"><use href="#i-clock"/></svg><span id="scheduleTxt">Zeitplan: aus</span><svg class="ic ic-sm chev"><use href="#i-chev"/></svg></button>
+      </div>
+
+      <div class="spectro">
+        <canvas id="spec"></canvas>
+        <div class="spectro-hint" aria-hidden="true">Spektrogramm erscheint beim Lauschen</div>
+        <div class="level" aria-hidden="true"><div class="level-fill" id="levelFill"></div></div>
+      </div>
 
       <div id="pkBanner" class="pk-banner" hidden>
         <span class="pk-label">Punkt-Zählung</span>
         <span id="pkBannerTimer" class="pk-time">5:00</span>
-        <button id="pkBannerStop" class="pk-stop" aria-label="Abbrechen">✕</button>
+        <button id="pkBannerStop" class="pk-stop" aria-label="Zählung abbrechen"><svg class="ic ic-sm"><use href="#i-x"/></svg></button>
       </div>
 
-      <div class="livehead"><span>Jetzt zu hören</span><span class="livecount" id="liveCount" style="margin-left:6px">0</span><div style="margin-left:auto;display:flex;align-items:center;gap:4px"><button class="timing-btn" id="favQuickBtn" title="Beobachtungsliste" aria-label="Beobachtungsliste öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path d="M12 3l2.6 5.8 6.3.6-4.7 4.3 1.4 6.2L12 16.9l-5.6 3 1.4-6.2-4.7-4.3 6.3-.6L12 3z"/></svg></button><button class="timing-btn" id="gearBtn" title="Einstellungen" aria-label="Einstellungen öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-2.7-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3 1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8 1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg></button><button class="timing-btn" id="timingBtn" title="Timing, Alarm & Wetter" aria-label="Timing, Alarm & Wetter öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/><path d="M12 3v1M12 20v1M3 12h1M20 12h1"/></svg></button><button class="timing-btn" id="photoWeatherBtn" title="Foto-Wetter" aria-label="Foto-Wetter öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><circle cx="12" cy="10" r="4"/><path d="M12 2v1.5M12 18.5V20M4.22 4.22l1.06 1.06M17.72 17.72l1.06 1.06M2 10h1.5M20.5 10H22M4.22 15.78l1.06-1.06M17.72 3.28l1.06 1.06"/><path d="M7 20h10" stroke-linecap="round" opacity=".5"/><path d="M9 20c0-1.66 1.34-3 3-3s3 1.34 3 3" opacity=".45"/></svg></button><button class="gallery-btn" id="galleryBtn" title="Aufnahmen & Fotos" aria-label="Aufnahmen & Fotos öffnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none"/><path d="M21 15l-5-5L5 21"/></svg><span id="galleryBadge" class="gallery-badge" hidden>0</span></button></div></div>
+      <div class="livehead">
+        <h2>Jetzt zu hören</h2><span class="livecount" id="liveCount">0</span>
+        <button class="chip chip-btn" id="scanBtn" title="Richtung finden" aria-label="Richtung finden"><svg class="ic"><use href="#i-compass"/></svg>Richtung finden</button>
+      </div>
       <div class="livelist" id="liveList">
-        <div class="live-empty" id="liveEmpty">Mikrofon starten, dann REC drücken – erkannte Vögel erscheinen hier.</div>
+        <div class="live-empty" id="liveEmpty">Tippe auf den Kreis – erkannte Arten erscheinen hier.</div>
       </div>
     </section>
 
-    <!-- ============ MAP ============ -->
-    <section class="view" id="v-map">
-      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></svg></span>Fundkarte</div><div style="display:flex;align-items:center;gap:8px"><div class="chip" id="mapCount">0 Funde</div><button type="button" class="pair-mini-chip" title="Partner-Kopplung" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M17 8l4 4-4 4M7 8l-4 4 4 4M14 4l-4 16"/></svg><span class="role-badge" hidden></span></button><button class="route-toggle-btn" id="routeToggleBtn" title="Route aufzeichnen ein/aus" aria-label="Route aufzeichnen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path d="M3 17l4-8 4 4 4-6 4 4"/><circle cx="3" cy="17" r="1.5" fill="currentColor" stroke="none"/><circle cx="21" cy="13" r="1.5" fill="currentColor" stroke="none"/></svg></button></div></div>
+    <!-- ============ KARTE ============ -->
+    <section class="view" id="v-map" data-title="Karte">
+      <div class="toolrow">
+        <span class="chip" id="mapCount">0 Funde</span>
+        <button class="chip chip-btn" id="routeToggleBtn" title="Route aufzeichnen ein/aus"><svg class="ic"><use href="#i-route"/></svg><span id="routeTxt">Route aufzeichnen</span></button>
+      </div>
       <div class="map" id="map">
-        <div class="map-empty" id="mapEmpty" hidden>Noch keine verorteten Funde.<br>Mikro starten &amp; Standort erlauben.</div>
+        <div class="map-empty" id="mapEmpty" hidden>Noch keine verorteten Funde.<br>Lauschen starten und Standort erlauben.</div>
+        <div class="map-outside" id="mapOutside" hidden><span>Keine Funde in diesem Ausschnitt</span><button class="chip chip-btn" id="mapFitBtn"><svg class="ic"><use href="#i-frame"/></svg>Alle Funde zeigen</button></div>
       </div>
       <div class="maplegend">
-        <span><i style="background:var(--emerald)"></i>häufig</span>
-        <span><i style="background:var(--amber)"></i>selten</span>
-        <span><i style="background:var(--rose)"></i>Säugetier</span>
-        <span><i style="background:var(--lime)"></i>beobachtet</span>
+        <span><i class="dot dot-common"></i>häufig</span>
+        <span><i class="dot dot-rare"></i>selten</span>
+        <span><i class="dot dot-mammal"></i>Säugetier</span>
+        <span><i class="dot dot-fav"></i>Suchliste</span>
+        <span><i class="dot dot-you"></i>du</span>
       </div>
     </section>
 
-    <!-- ============ COLLECTION ============ -->
-    <section class="view" id="v-coll">
-      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M5 3h14v18l-7-4-7 4z"/></svg></span>Meine Sammlung</div><button type="button" class="pair-mini-chip" title="Partner-Kopplung" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M17 8l4 4-4 4M7 8l-4 4 4 4M14 4l-4 16"/></svg><span class="role-badge" hidden></span></button></div>
-      <div class="stats" id="collStats"></div>
-
-      <div class="segmented" id="collToggle">
-        <button class="on" data-mode="here">Heute hier</button>
-        <button data-mode="global">Global nach Ort</button>
+    <!-- ============ FUNDE (Sammlung + Statistik) ============ -->
+    <section class="view" id="v-coll" data-title="Funde">
+      <div class="segmented" id="fundeSeg" role="tablist">
+        <button class="on" data-seg="arten" role="tab" aria-selected="true">Arten</button>
+        <button data-seg="orte" role="tab" aria-selected="false">Orte</button>
+        <button data-seg="stat" role="tab" aria-selected="false">Statistik</button>
+      </div>
+      <div class="scope-row">
+        <!-- Bereich gilt für alle drei Ansichten (ui.js: collMode = statMode). -->
+        <div class="pilltoggle" id="collToggle" role="group" aria-label="Bereich">
+          <button class="on" data-mode="here">Heute hier</button>
+          <button data-mode="global">Alle</button>
+        </div>
+        <button class="chip chip-btn" id="favQuickBtn" title="Suchliste" aria-label="Suchliste öffnen"><svg class="ic"><use href="#i-star"/></svg>Suchliste</button>
       </div>
 
-      <div id="collHere">
-        <div class="sectitle">Heute an deinem Standort<button class="resetbtn" id="hereResetBtn" title="Heutige Funde hier löschen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg></button></div>
-        <div class="grid" id="hereGrid"></div>
+      <div id="fundeArten">
+        <div class="stats" id="collStats"></div>
+        <div id="collHere">
+          <div class="sectitle">
+            <span>Heute an deinem Standort</span>
+            <!-- Löschen bewusst hinter einem Überlaufmenü statt als Papierkorb direkt neben der Überschrift. -->
+            <details class="menu" id="hereMenu">
+              <summary class="iconbtn iconbtn-sm" aria-label="Weitere Aktionen"><svg class="ic"><use href="#i-dots"/></svg></summary>
+              <div class="menu-pop">
+                <button class="menu-item danger" id="hereResetBtn"><svg class="ic"><use href="#i-trash"/></svg>Heutige Funde hier löschen</button>
+              </div>
+            </details>
+          </div>
+          <div class="grid" id="hereGrid"></div>
+        </div>
+        <div id="collGlobal" hidden>
+          <div class="sectitle"><span>Alle Arten · zuletzt gehört zuerst</span></div>
+          <div class="grid" id="collGrid"></div>
+        </div>
       </div>
 
-      <div id="collGlobal" hidden>
-        <div class="sectitle">Zuletzt entdeckt</div>
-        <div class="grid" id="collGrid"></div>
-        <div class="sectitle" style="margin-top:18px">Nach Fundort</div>
+      <div id="fundeOrte" hidden>
         <div class="loclist" id="locList"></div>
       </div>
-    </section>
 
-    <!-- ============ STATS ============ -->
-    <section class="view" id="v-stat">
-      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 19v-6M13 19V9M18 19v-9"/></svg></span>Statistik</div><div style="display:flex;align-items:center;gap:8px"><div class="chip">Juni 2026</div><button type="button" class="pair-mini-chip" title="Partner-Kopplung" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M17 8l4 4-4 4M7 8l-4 4 4 4M14 4l-4 16"/></svg><span class="role-badge" hidden></span></button></div></div>
-      <div class="segmented" id="statToggle">
-        <button class="on" data-mode="here">Heute hier</button>
-        <button data-mode="global">Global</button>
-        <button data-mode="export">🔬 Export</button>
-      </div>
-      <div id="statContent">
+      <div id="fundeStat" hidden>
+        <p class="period" id="statPeriod"></p>
         <div class="kpis" id="kpis"></div>
         <div class="card">
-          <div class="ch">Häufigste Arten <em>nach Anzahl Rufe</em></div>
+          <div class="ch">Häufigste Arten <em>nach Erkennungen</em></div>
           <div class="hb" id="topSpecies"></div>
         </div>
         <div class="card">
@@ -135,404 +228,281 @@
           <div class="vb" id="weekBars"></div>
         </div>
         <div class="card">
-          <div class="ch">Aktivität über den Tag <em>Spitze: Morgenchor</em></div>
-          <svg id="dayChart" viewBox="0 0 320 120" style="width:100%;height:118px;display:block">
-            <defs><linearGradient id="dg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a3e635" stop-opacity=".45"/><stop offset="1" stop-color="#a3e635" stop-opacity="0"/></linearGradient></defs>
+          <div class="ch">Aktivität über den Tag <em id="dayPeakLbl">noch keine Daten</em></div>
+          <svg id="dayChart" class="daychart" viewBox="0 0 320 120" aria-hidden="true">
+            <defs><linearGradient id="dg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a3e635" stop-opacity=".32"/><stop offset="1" stop-color="#a3e635" stop-opacity="0"/></linearGradient></defs>
             <path id="dayArea" fill="url(#dg)"></path>
             <path id="dayLine" fill="none" stroke="#a3e635" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
-            <circle id="dayPeak" r="4" fill="#fbbf24" stroke="#04130d" stroke-width="1.5"></circle>
+            <circle id="dayPeak" r="4" fill="#a3e635" stroke="#04130d" stroke-width="2"></circle>
           </svg>
-          <div class="axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24 Uhr</span></div>
+          <div class="axis"><span>0</span><span>6</span><span>12</span><span>18</span><span>24 Uhr</span></div>
         </div>
-      </div>
-      <div id="statExport" hidden>
-        <div class="segmented" id="exportScope" style="margin-bottom:10px">
-          <button class="on" data-scope="here">Heute hier</button>
-          <button data-scope="global">Global (alles)</button>
-        </div>
-        <div class="kpis" id="exportSummary"></div>
-        <div class="export-btns">
-          <button class="export-btn" id="ebirdBtn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-            <div><strong>eBird CSV</strong><span>Checklisten-Format für eBird.org</span></div>
-          </button>
-          <button class="export-btn" id="ornithoBtn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-            <div><strong>Ornitho CSV</strong><span>Beobachtungs-Format für Ornitho.de</span></div>
-          </button>
-        </div>
-        <p class="export-note">Exportiert alle qualifizierenden Funde (≥70 % Konfidenz) — inkl. Koordinaten, Uhrzeit und Wetterdaten, sofern vorhanden.</p>
       </div>
     </section>
 
-    <!-- ============ ORNITHOLOGIE ============ -->
-    <section class="view" id="v-orni">
-      <div class="topbar"><div class="brand" style="font-size:17px"><span class="logo" style="width:30px;height:30px"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="15" r="4"/><circle cx="18" cy="15" r="4"/><path d="M10 15h4M6 9v2M18 9v2M9 9h6"/></svg></span>Ornithologie</div><button type="button" class="pair-mini-chip" title="Partner-Kopplung" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M17 8l4 4-4 4M7 8l-4 4 4 4M14 4l-4 16"/></svg><span class="role-badge" hidden></span></button></div>
-      <div class="segmented" id="orniToggle">
-        <button class="on" data-tab="monitoring">Überwachung</button>
-        <button data-tab="protokolle">Protokolle</button>
-        <button data-tab="export">Export</button>
+    <!-- ============ FOTO ============ -->
+    <section class="view" id="v-foto" data-title="Foto">
+      <!-- id photoFab bleibt: app.js öffnet darüber die eigene Kamera. -->
+      <button class="camhero" id="photoFab">
+        <span class="camhero-ico"><svg class="ic"><use href="#i-camera"/></svg></span>
+        <span class="camhero-txt"><strong>Kamera öffnen</strong><span>Foto · Video · Zeitraffer</span></span>
+        <svg class="ic chev"><use href="#i-chev"/></svg>
+      </button>
+
+      <div class="segmented" id="fotoSeg" role="tablist">
+        <button class="on" data-seg="galerie" role="tab" aria-selected="true">Galerie</button>
+        <button data-seg="licht" role="tab" aria-selected="false">Licht</button>
+        <button data-seg="wecker" role="tab" aria-selected="false">Wecker</button>
+        <button data-seg="tipps" role="tab" aria-selected="false">Tipps</button>
       </div>
 
-      <!-- Überwachung -->
+      <div id="fotoGalerie">
+        <div class="sectitle">
+          <span>Tonaufnahmen &amp; Fotos</span>
+          <button class="chip chip-btn" id="clipBtn" title="Tonclip aufnehmen"><svg class="ic"><use href="#i-mic"/></svg>Tonclip</button>
+        </div>
+        <div class="reclist" id="recList"></div>
+        <div class="empty-note rec-empty">Noch keine Aufnahmen. Fotos aus der Kamera, Tonclips und automatisch gespeicherte Rufe landen hier.</div>
+      </div>
+
+      <div id="fotoLicht" hidden>
+        <div class="sectitle">
+          <span>Licht &amp; Wetter</span>
+          <button class="iconbtn iconbtn-sm" id="photoWeatherBtn" title="Aktualisieren" aria-label="Licht und Wetter aktualisieren"><svg class="ic"><use href="#i-refresh"/></svg></button>
+        </div>
+        <p class="pw-location" id="pwLocation"></p>
+        <div id="photoWeatherContent" class="pw-list"></div>
+      </div>
+
+      <div id="fotoWecker" hidden>
+        <div class="card">
+          <div class="card-h">
+            <span class="tile tile-amber"><svg class="ic"><use href="#i-sunrise"/></svg></span>
+            <div><h3>Fotografen-Wecker</h3><p>Weckt dich rechtzeitig fürs Sonnenaufgangs-Shooting.</p></div>
+          </div>
+          <button class="fw-sunrise" id="fwSunriseCard" aria-expanded="false" aria-controls="fwDetailPopup">
+            <span class="fw-sr-lbl">Sonnenaufgang heute</span>
+            <span class="fw-sr-time" id="fwSunriseTime">–:–</span>
+            <span class="fw-sr-more">Lichtphasen <svg class="ic ic-sm chev"><use href="#i-chev"/></svg></span>
+          </button>
+          <div id="fwDetailPopup" hidden class="fw-detail-popup">
+            <div class="fw-phase"><i class="ph-dot ph-astro"></i><div class="fw-phase-label">Astronomische Dämmerung</div><div id="fwPhaseAstro" class="fw-phase-time">–:––</div></div>
+            <div class="fw-phase"><i class="ph-dot ph-naut"></i><div class="fw-phase-label">Nautische Dämmerung</div><div id="fwPhaseNaut" class="fw-phase-time">–:––</div></div>
+            <div class="fw-phase"><i class="ph-dot ph-blue"></i><div class="fw-phase-label">Blaue Stunde</div><div id="fwPhaseCivil" class="fw-phase-time">–:––</div></div>
+            <div class="fw-phase"><i class="ph-dot ph-sun"></i><div class="fw-phase-label">Sonnenaufgang</div><div id="fwPhaseSunrise" class="fw-phase-time">–:––</div></div>
+            <div class="fw-phase"><i class="ph-dot ph-gold"></i><div class="fw-phase-label">Goldene Stunde</div><div id="fwPhaseGolden" class="fw-phase-time">–:––</div></div>
+          </div>
+          <div class="rows">
+            <label class="switch-row"><span>Wecker aktiv</span><span class="switch"><input type="checkbox" id="fwEnabled" /><span class="switch-track"></span></span></label>
+            <label class="field-row"><span>Weckzeit</span><input type="time" id="fwTime" value="05:30" class="field field-time" /></label>
+            <label class="switch-row"><span>Nur Vibration <small>kein Ton</small></span><span class="switch"><input type="checkbox" id="fwVibrateOnly" /><span class="switch-track"></span></span></label>
+          </div>
+          <p class="hint">Funktioniert nur, solange WaldOhr geöffnet bleibt (Display an lassen).</p>
+        </div>
+      </div>
+
+      <div id="fotoTipps" hidden>
+        <div class="ethics-banner">Kein Foto ist wichtiger als ein gestresstes Tier.</div>
+        <div class="tiplist">
+          <div class="tiprow"><b>Goldene Stunde nutzen</b><span>Früh morgens und kurz vor Sonnenuntergang gibt warmes, weiches Licht die besten Fotos — gleichzeitig ist dann auch die Vogelaktivität am höchsten.</span></div>
+          <div class="tiprow"><b>Sonne im Rücken</b><span>Mit der Sonne hinter dir fotografieren, nicht gegen das Licht — sonst wird das Tier zur Silhouette.</span></div>
+          <div class="tiprow"><b>Langsam und ruhig bewegen</b><span>Hektische Bewegungen verscheuchen Vögel sofort. Lieber in kleinen Schritten annähern, nicht frontal, und zwischendurch stehen bleiben.</span></div>
+          <div class="tiprow"><b>Warten statt hinterherlaufen</b><span>An einer Sitzwarte, Futterstelle oder einem Wasserloch in Deckung warten bringt meist bessere Bilder als aktives Verfolgen.</span></div>
+          <div class="tiprow"><b>Kamera vorher einstellen</b><span>Belichtung, Fokusmodus und Verschlusszeit schon vor der Annäherung einstellen — am Tier selbst herumzufummeln kostet den Moment.</span></div>
+          <div class="tiprow"><b>Gedeckte Kleidung</b><span>Unauffällige, gedeckte Farben statt grell — am besten aus dem Auto oder einem Tarnversteck fotografieren.</span></div>
+          <div class="tiprow"><b>Schnelle Verschlusszeit</b><span>Für Vögel in Bewegung mindestens 1/1000 s, sonst verwischen Flügel und Kopf.</span></div>
+          <div class="tiprow"><b>Fokus aufs Auge</b><span>Das Auge sollte immer scharf sein — es entscheidet, ob ein Tierfoto lebendig wirkt.</span></div>
+          <div class="tiprow"><b>Abstand halten</b><span>Brutplätze und Nester nie stören oder zu nah herangehen — Tierwohl geht vor dem perfekten Bild.</span></div>
+          <div class="tiprow"><b>Auf den Hintergrund achten</b><span>Ein ruhiger, einfarbiger Hintergrund lässt das Tier viel stärker hervortreten als ein unruhiges Geäst.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ FELDBUCH (bisher Ornithologie) ============ -->
+    <section class="view" id="v-orni" data-title="Feldbuch">
+      <!-- data-tab-Keys bleiben (ornithologie.js); nur die sichtbaren Namen sind neu. -->
+      <div class="segmented" id="orniToggle" role="tablist">
+        <button class="on" data-tab="monitoring" role="tab" aria-selected="true">Zählungen</button>
+        <button data-tab="protokolle" role="tab" aria-selected="false">Protokolle</button>
+        <button data-tab="export" role="tab" aria-selected="false">Export</button>
+      </div>
+
       <div id="orniMonitoring">
-        <div class="infoblock" style="margin-top:14px">
-          <h3><span style="font-size:15px">📍</span> Punkt-Zählung</h3>
-          <p style="margin-bottom:12px">5-Minuten-Punkt-Zählung nach BirdLife-Standard — alle erkannten Rufe werden automatisch erfasst.</p>
-          <div id="pkTimer" style="font-size:52px;font-weight:700;font-family:'Outfit',sans-serif;color:var(--lime);text-align:center;letter-spacing:3px;margin:18px 0">5:00</div>
-          <button class="btn ghost" id="pkStart" style="width:100%">Zählung starten</button>
-          <div id="pkSpecies" style="margin-top:14px" hidden></div>
+        <div class="card count-card">
+          <div class="card-h">
+            <span class="tile"><svg class="ic"><use href="#i-target"/></svg></span>
+            <div><h3>Punkt-Zählung</h3><p>5 Minuten nach BirdLife-Standard — alle erkannten Rufe werden automatisch erfasst.</p></div>
+          </div>
+          <div id="pkTimer" class="bigtimer">5:00</div>
+          <button class="btn primary" id="pkStart">Zählung starten</button>
+          <div id="pkSpecies" class="count-result" hidden></div>
         </div>
-        <div class="infoblock" style="margin-top:14px">
-          <h3><span style="font-size:15px">🗺️</span> Transekt-Zählung</h3>
-          <p style="margin-bottom:12px">Läuft eine Strecke ab — GPS zeichnet die Route auf, das Mikrofon lauscht durchgehend. Du beendest manuell am Ziel.</p>
-          <div id="txTimer" style="font-size:44px;font-weight:700;font-family:'Outfit',sans-serif;color:var(--lime);text-align:center;letter-spacing:3px;margin:10px 0 2px">0:00</div>
-          <div id="txDist" style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:14px">0 m zurückgelegt</div>
-          <button class="btn ghost" id="txStart" style="width:100%">Transekt starten</button>
-          <div id="txSpecies" style="margin-top:14px" hidden></div>
-        </div>
-        <div class="infoblock" style="margin-top:14px">
-          <h3><span style="font-size:15px">🤝</span> Partner koppeln <span style="font-size:11px;color:var(--faint);font-weight:400">(Beta)</span></h3>
-          <p style="margin-bottom:12px">Verbinde ein zweites Handy per QR-Code, um später gemeinsam Rufe zu orten. Kein Server nötig — die Geräte verbinden sich direkt.</p>
-          <button class="btn ghost" id="pairOpenBtn" style="width:100%">Kopplung starten</button>
+        <div class="card count-card">
+          <div class="card-h">
+            <span class="tile"><svg class="ic"><use href="#i-route"/></svg></span>
+            <div><h3>Transekt-Zählung</h3><p>Du läufst eine Strecke ab, GPS zeichnet die Route auf, das Mikrofon lauscht durchgehend. Am Ziel beendest du selbst.</p></div>
+          </div>
+          <div id="txTimer" class="bigtimer">0:00</div>
+          <div id="txDist" class="bigtimer-sub">0 m zurückgelegt</div>
+          <button class="btn primary" id="txStart">Transekt starten</button>
+          <div id="txSpecies" class="count-result" hidden></div>
         </div>
       </div>
 
-      <!-- Protokolle -->
       <div id="orniProtokolle" hidden>
         <div id="orniProtList"></div>
       </div>
 
-      <!-- Export -->
       <div id="orniExport" hidden>
-        <div class="export-btns" style="margin-top:4px">
+        <div class="scope-row">
+          <div class="pilltoggle" id="orniScope" role="group" aria-label="Bereich">
+            <button class="on" data-scope="here">Heute hier</button>
+            <button data-scope="all">Alles</button>
+          </div>
+        </div>
+        <div class="kpis kpis-3" id="orniExportSummary"></div>
+        <div class="export-btns">
           <button class="export-btn" id="orniEbirdBtn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+            <svg class="ic"><use href="#i-file"/></svg>
             <div><strong>eBird CSV</strong><span>Checklisten-Format für Cornell Lab eBird</span></div>
           </button>
           <button class="export-btn" id="orniOrnithoBtn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-            <div><strong>Ornitho.de CSV</strong><span>Beobachtungs-Format für Ornitho.de / DDA</span></div>
+            <svg class="ic"><use href="#i-file"/></svg>
+            <div><strong>ornitho.de CSV</strong><span>Beobachtungs-Format für ornitho.de / DDA</span></div>
           </button>
           <button class="export-btn" id="orniBirdnetBtn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            <svg class="ic"><use href="#i-list"/></svg>
             <div><strong>BirdNET Notebook CSV</strong><span>Einzelfunde mit Konfidenz für BirdNET-Analyzer</span></div>
           </button>
           <button class="export-btn" id="orniNabuBtn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+            <svg class="ic"><use href="#i-db"/></svg>
             <div><strong>NABU / Naturgucker JSON</strong><span>Strukturierter Export für NABU-Portale</span></div>
           </button>
         </div>
-        <p class="export-note" style="margin-top:12px">Alle Funde ≥ 70 % Konfidenz · inkl. GPS-Koordinaten &amp; Zeitstempel</p>
+        <p class="export-note">Enthält alle Funde ab der eingestellten Erkennungssicherheit — mit Koordinaten und Uhrzeit.</p>
       </div>
     </section>
 
-    <!-- Fotografen-Funktion: Direktbeleg-Foto zu einem Fund, öffnet die Gerätekamera -->
-    <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" />
+    <!-- Fotografen-Funktion: Direktbeleg-Foto zu einem Fund, öffnet die Gerätekamera (Fallback) -->
+    <input type="file" id="photoInput" class="hidden-input" accept="image/*" capture="environment" />
 
-    <!-- ============ FOTO-WETTER ============ -->
-    <div class="modal" id="photoWeatherModal">
-      <div class="scrim" id="photoWeatherScrim"></div>
-      <div class="sheet">
-        <div class="grab"></div>
-        <h2 style="font-size:18px;margin-bottom:4px">🌤️ Licht & Wetter</h2>
-        <p id="pwLocation" style="font-size:12px;color:var(--muted);margin-bottom:16px"></p>
-        <div id="photoWeatherContent" style="display:flex;flex-direction:column;gap:6px"></div>
-      </div>
-    </div>
-
-    <!-- ============ GALLERY ============ -->
-    <div class="modal" id="galleryModal">
-      <div class="scrim" id="galleryScrim"></div>
-      <div class="sheet">
-        <div class="grab"></div>
-        <div class="rechead" style="padding:0 0 14px">
-          <span>Aufnahmen & Fotos</span>
-          <div class="rec-actions">
-            <button class="rec-action-btn" id="clipBtn" title="Tonclip aufnehmen" aria-label="Tonclip aufnehmen">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>
-            </button>
-            <button class="rec-action-btn" id="photoFab" title="Foto aufnehmen" aria-label="Foto aufnehmen">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
-            </button>
-            <button class="rec-action-btn" id="galleryClose" title="Schließen" aria-label="Schließen">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          </div>
-        </div>
-        <div class="reclist" id="recList"></div>
-      </div>
-    </div>
-
-    <!-- ============ TIMING ============ -->
+    <!-- ============ AUTOMATISCH LAUSCHEN ============ -->
     <div class="modal" id="timingModal">
       <div class="scrim" id="timingScrim"></div>
-      <div class="sheet">
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="timingTitle">
         <div class="grab"></div>
-        <h2 style="font-size:20px;margin-bottom:16px">Timing, Alarm &amp; Wetter</h2>
+        <div class="sheet-head">
+          <h2 id="timingTitle">Automatisch lauschen</h2>
+          <button class="iconbtn" id="timingClose" aria-label="Schließen"><svg class="ic"><use href="#i-x"/></svg></button>
+        </div>
+        <p class="sheet-sub">WaldOhr startet das Lauschen von selbst — die App muss dafür geöffnet bleiben.</p>
 
-        <div class="infoblock">
-          <h3><span style="font-size:15px">🌅</span> Morgenchor</h3>
-          <svg viewBox="0 0 320 100" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:320px;display:block;margin:0 auto 12px">
-            <defs>
-              <radialGradient id="mcSunGlow" cx="100%" cy="100%" r="65%"><stop offset="0%" stop-color="#fbbf24" stop-opacity=".5"/><stop offset="55%" stop-color="#f97316" stop-opacity=".2"/><stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/></radialGradient>
-              <radialGradient id="mcMoonGlow" cx="4%" cy="4%" r="28%"><stop offset="0%" stop-color="#7ba8ff" stop-opacity=".2"/><stop offset="100%" stop-color="#7ba8ff" stop-opacity="0"/></radialGradient>
-              <clipPath id="mcHorizon"><rect x="0" y="0" width="320" height="80"/></clipPath>
-            </defs>
-            <rect width="320" height="100" fill="#050a1a" rx="10"/>
-            <ellipse cx="320" cy="100" rx="180" ry="160" fill="url(#mcSunGlow)"/>
-            <ellipse cx="0" cy="0" rx="110" ry="110" fill="url(#mcMoonGlow)"/>
-            <circle cx="30" cy="10" r="1.1" fill="#fff" opacity=".7"/>
-            <circle cx="65" cy="6" r=".8" fill="#fff" opacity=".6"/>
-            <circle cx="96" cy="14" r="1.2" fill="#fff" opacity=".7"/>
-            <circle cx="130" cy="8" r=".7" fill="#fff" opacity=".5"/>
-            <circle cx="158" cy="18" r=".9" fill="#fff" opacity=".55"/>
-            <circle cx="20" cy="30" r=".6" fill="#fff" opacity=".45"/>
-            <circle cx="70" cy="26" r=".9" fill="#fff" opacity=".55"/>
-            <circle cx="112" cy="28" r=".7" fill="#fff" opacity=".5"/>
-            <circle cx="38" cy="22" r="12" fill="#d0e0ff" opacity=".9"/>
-            <circle cx="44" cy="18.5" r="10.5" fill="#050a1a"/>
-            <line x1="10" y1="80" x2="310" y2="80" stroke="#f97316" stroke-width="1" opacity=".4"/>
-            <path d="M270 80 A22 22 0 0 1 314 80" fill="#fbbf24" opacity=".9" clip-path="url(#mcHorizon)"/>
-            <line x1="292" y1="54" x2="292" y2="46" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" opacity=".65"/>
-            <line x1="307" y1="62" x2="314" y2="56" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round" opacity=".55"/>
-            <line x1="275" y1="63" x2="268" y2="57" stroke="#fbbf24" stroke-width="1.8" stroke-linecap="round" opacity=".5"/>
-            <line x1="20" y1="100" x2="20" y2="52" stroke="#1a2c1a" stroke-width="4" stroke-linecap="round"/>
-            <line x1="12" y1="56" x2="28" y2="56" stroke="#1a2c1a" stroke-width="2.5" stroke-linecap="round"/>
-            <line x1="308" y1="100" x2="308" y2="54" stroke="#1a2c1a" stroke-width="4" stroke-linecap="round"/>
-            <line x1="300" y1="58" x2="316" y2="58" stroke="#1a2c1a" stroke-width="2.5" stroke-linecap="round"/>
-            <path d="M20 56 Q164 66 308 58" stroke="#2d4a2d" stroke-width="1.4" fill="none"/>
-            <path d="M20 59 Q164 70 308 62" stroke="#2d4a2d" stroke-width="1.4" fill="none"/>
-            <!-- Bird 1: x=60, FRONTAL, kleine wachsame Augen -->
-            <ellipse cx="60" cy="52.5" rx="9.5" ry="5.5" fill="#2a4a2a"/>
-            <circle cx="60" cy="46" r="5.5" fill="#2a4a2a"/>
-            <circle cx="57" cy="45" r="1.6" fill="#fff" opacity=".92"/><circle cx="57.3" cy="45" r=".8" fill="#111"/>
-            <circle cx="63" cy="45" r="1.6" fill="#fff" opacity=".92"/><circle cx="62.7" cy="45" r=".8" fill="#111"/>
-            <path d="M60 49.5 L57.5 53 L62.5 53 Z" fill="#f59e0b"/>
-            <!-- Bird 3: x=162, FRONTAL, große Eulen-Augen -->
-            <ellipse cx="162" cy="57" rx="9" ry="5" fill="#2d4a2d"/>
-            <circle cx="162" cy="51" r="5.5" fill="#2d4a2d"/>
-            <circle cx="158.5" cy="50" r="2.6" fill="#fff" opacity=".95"/><circle cx="158.9" cy="50.3" r="1.2" fill="#111"/>
-            <circle cx="165.5" cy="50" r="2.6" fill="#fff" opacity=".95"/><circle cx="165.1" cy="50.3" r="1.2" fill="#111"/>
-            <path d="M162 54.5 L159.5 58 L164.5 58 Z" fill="#f59e0b"/>
-            <!-- Bird 4: x=222, FRONTAL, mittelgroße Augen -->
-            <ellipse cx="222" cy="55.5" rx="9.5" ry="5.5" fill="#2a4a2a"/>
-            <circle cx="222" cy="49" r="5.5" fill="#2a4a2a"/>
-            <circle cx="219" cy="48" r="2.1" fill="#fff" opacity=".92"/><circle cx="219.4" cy="48" r="1.0" fill="#111"/>
-            <circle cx="225" cy="48" r="2.1" fill="#fff" opacity=".92"/><circle cx="224.6" cy="48" r="1.0" fill="#111"/>
-            <path d="M222 52.5 L219.5 56 L224.5 56 Z" fill="#f59e0b"/>
-            <text x="230" y="41" fill="#a3e635" font-size="8" opacity=".65">♪</text>
-            <!-- Bird 5: x=85, wire 2, FRONTAL, riesige Kugelaugen -->
-            <ellipse cx="85" cy="59" rx="8" ry="4.5" fill="#2e4835"/>
-            <circle cx="85" cy="53.5" r="4.5" fill="#2e4835"/>
-            <circle cx="82" cy="52.3" r="3.0" fill="#fff" opacity=".97"/><circle cx="82.4" cy="52.6" r="1.4" fill="#111"/>
-            <circle cx="88" cy="52.3" r="3.0" fill="#fff" opacity=".97"/><circle cx="87.6" cy="52.6" r="1.4" fill="#111"/>
-            <path d="M85 57 L82.5 60.5 L87.5 60.5 Z" fill="#f59e0b"/>
-          </svg>
-          <p style="margin-bottom:12px">Startet das Lauschen automatisch kurz vor Sonnenaufgang — wenn die Vögel am lautesten singen. Benötigt GPS und eine offene App.</p>
-          <label class="switch-row">
-            <span>Morgenchor aktivieren</span>
-            <span class="switch"><input type="checkbox" id="mcEnabled" /><span class="switch-track"></span></span>
-          </label>
-          <div class="sliderlabel" style="margin-top:14px"><span>Minuten vor Sonnenaufgang</span><span id="mcOffsetVal">15 Min</span></div>
-          <input type="range" id="mcOffset" min="0" max="60" step="5" value="15" oninput="document.getElementById('mcOffsetVal').textContent=this.value+' Min'" />
+        <div class="card">
+          <div class="card-h">
+            <span class="tile tile-amber"><svg class="ic"><use href="#i-sunrise"/></svg></span>
+            <div><h3>Morgenchor</h3><p>Kurz vor Sonnenaufgang, wenn die Vögel am lautesten singen. Braucht GPS.</p></div>
+            <span class="switch"><input type="checkbox" id="mcEnabled" aria-label="Morgenchor aktivieren" /><span class="switch-track"></span></span>
+          </div>
+          <div class="sliderlabel"><span>Minuten vor Sonnenaufgang</span><span id="mcOffsetVal">15 Min</span></div>
+          <input type="range" id="mcOffset" min="0" max="60" step="5" value="15" aria-label="Minuten vor Sonnenaufgang" />
+          <p class="hint" id="mcStartInfo"></p>
         </div>
 
-        <div class="infoblock">
-          <h3><span style="font-size:15px">🦉</span> Nacht-Modus</h3>
-          <svg viewBox="0 0 220 90" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:280px;display:block;margin:0 auto 12px">
-            <defs>
-              <linearGradient id="nmSkyG" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#030610"/><stop offset="100%" stop-color="#0a1428"/></linearGradient>
-              <radialGradient id="nmMoonGlow" cx="72%" cy="28%" r="30%"><stop offset="0%" stop-color="#c8d8ff" stop-opacity=".22"/><stop offset="100%" stop-color="#c8d8ff" stop-opacity="0"/></radialGradient>
-            </defs>
-            <rect width="220" height="90" fill="url(#nmSkyG)" rx="10"/>
-            <ellipse cx="158" cy="22" rx="42" ry="42" fill="url(#nmMoonGlow)"/>
-            <circle cx="18" cy="14" r="1.1" fill="#fff" opacity=".7"/>
-            <circle cx="42" cy="8" r=".8" fill="#fff" opacity=".6"/>
-            <circle cx="68" cy="19" r="1.3" fill="#fff" opacity=".75"/>
-            <circle cx="98" cy="9" r="1" fill="#fff" opacity=".6"/>
-            <circle cx="118" cy="28" r=".7" fill="#fff" opacity=".55"/>
-            <circle cx="28" cy="38" r=".6" fill="#fff" opacity=".45"/>
-            <circle cx="135" cy="16" r="1.1" fill="#fff" opacity=".65"/>
-            <circle cx="158" cy="24" r="16" fill="#e2edff" opacity=".9"/>
-            <circle cx="153" cy="20" r="3.5" fill="#c0d0ef" opacity=".35"/>
-            <circle cx="162" cy="29" r="4.2" fill="#c0d0ef" opacity=".28"/>
-            <circle cx="156" cy="28" r="2.5" fill="#c0d0ef" opacity=".2"/>
-            <line x1="12" y1="72" x2="208" y2="72" stroke="#2dd4bf" stroke-width="1" opacity=".25"/>
-            <path d="M50 90 L50 52" stroke="#152e1a" stroke-width="4" stroke-linecap="round"/>
-            <path d="M50 62 Q38 55 28 57" stroke="#152e1a" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-            <path d="M50 52 Q42 45 36 46" stroke="#152e1a" stroke-width="2" fill="none" stroke-linecap="round"/>
-            <path d="M50 75 Q80 68 105 72" stroke="#1a3a22" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-            <ellipse cx="92" cy="65" rx="11" ry="12" fill="#253d1e"/>
-            <circle cx="92" cy="54" r="9.5" fill="#253d1e"/>
-            <path d="M86.5 46.5 L84 40 L89 46" fill="#1a2e14"/>
-            <path d="M97.5 46.5 L100 40 L95 46" fill="#1a2e14"/>
-            <ellipse cx="92" cy="55" rx="8" ry="7.5" fill="#344f2a" opacity=".6"/>
-            <circle cx="88" cy="53.5" r="4.5" fill="#f59e0b"/>
-            <circle cx="96" cy="53.5" r="4.5" fill="#f59e0b"/>
-            <circle cx="88" cy="53.5" r="2.8" fill="#1a0800"/>
-            <circle cx="96" cy="53.5" r="2.8" fill="#1a0800"/>
-            <circle cx="89" cy="52" r=".9" fill="#fff"/>
-            <circle cx="97" cy="52" r=".9" fill="#fff"/>
-            <path d="M90 57 L92 60 L94 57" fill="#d4a520"/>
-            <path d="M82 67 Q84 74 92 77 Q100 74 102 67" stroke="#344f2a" stroke-width="1.5" fill="none"/>
-          </svg>
-          <p style="margin-bottom:12px">Startet &amp; beendet das Lauschen zu festen Zeiten — für Nachteulen oder Fledermäuse.</p>
-          <label class="switch-row">
-            <span>Nacht-Modus aktivieren</span>
-            <span class="switch"><input type="checkbox" id="nmEnabled" /><span class="switch-track"></span></span>
-          </label>
-          <div style="display:flex;gap:18px;margin-top:14px;flex-wrap:wrap">
-            <div>
-              <div style="font-size:12px;color:var(--muted);margin-bottom:5px">Startzeit</div>
-              <input type="time" id="nmTime" value="22:00" class="time-input" />
-            </div>
-            <div>
-              <div style="font-size:12px;color:var(--muted);margin-bottom:5px">Endzeit</div>
-              <div style="display:flex;align-items:center;gap:8px">
-                <input type="time" id="nmEndTime" value="23:30" class="time-input" />
-                <label class="switch" style="width:36px;height:22px;flex:0 0 auto" title="Endzeit aktivieren">
-                  <input type="checkbox" id="nmEndEnabled" />
-                  <span class="switch-track"></span>
-                </label>
-              </div>
+        <div class="card">
+          <div class="card-h">
+            <span class="tile tile-blue"><svg class="ic"><use href="#i-moon"/></svg></span>
+            <div><h3>Nacht-Modus</h3><p>Startet (und beendet) das Lauschen zu festen Zeiten — für Eulen und Nachtzieher.</p></div>
+            <span class="switch"><input type="checkbox" id="nmEnabled" aria-label="Nacht-Modus aktivieren" /><span class="switch-track"></span></span>
+          </div>
+          <div class="rows">
+            <label class="field-row"><span>Startzeit</span><input type="time" id="nmTime" value="22:00" class="field field-time" /></label>
+            <div class="field-row">
+              <label class="switch-inline"><span class="switch"><input type="checkbox" id="nmEndEnabled" /><span class="switch-track"></span></span><span>Endzeit</span></label>
+              <input type="time" id="nmEndTime" value="23:30" class="field field-time" aria-label="Endzeit" />
             </div>
           </div>
         </div>
 
-        <div class="infoblock">
-          <h3><span style="font-size:15px">📷</span> Fotografen-Wecker</h3>
-          <p style="margin-bottom:12px">Weckt dich zur richtigen Zeit fürs Sonnenaufgang-Shooting — tippe die Sonne für Dämmerungszeiten.</p>
-          <div class="fw-sunrise" id="fwSunriseCard" style="cursor:pointer" title="Tippe für Fotografen-Lichtphasen">
-            <svg viewBox="0 0 220 90" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:280px;display:block;margin:0 auto">
-              <defs>
-                <linearGradient id="fwSkyG" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fbbf24" stop-opacity=".14"/><stop offset="100%" stop-color="#04130d" stop-opacity="0"/></linearGradient>
-                <radialGradient id="fwGlow" cx="50%" cy="100%" r="65%"><stop offset="0%" stop-color="#fbbf24" stop-opacity=".35"/><stop offset="100%" stop-color="#fbbf24" stop-opacity="0"/></radialGradient>
-                <clipPath id="fwHorizon"><rect x="0" y="0" width="220" height="68"/></clipPath>
-              </defs>
-              <rect width="220" height="90" fill="url(#fwSkyG)" rx="10"/>
-              <ellipse cx="110" cy="68" rx="90" ry="55" fill="url(#fwGlow)"/>
-              <line x1="18" y1="68" x2="202" y2="68" stroke="#a3e635" stroke-width="1" opacity=".45"/>
-              <circle cx="110" cy="68" r="24" fill="#fbbf24" opacity=".88" clip-path="url(#fwHorizon)"/>
-              <line x1="110" y1="38" x2="110" y2="30" stroke="#fbbf24" stroke-width="2.5" stroke-linecap="round" opacity=".7"/>
-              <line x1="80" y1="48" x2="74" y2="42" stroke="#fbbf24" stroke-width="2.5" stroke-linecap="round" opacity=".65"/>
-              <line x1="140" y1="48" x2="146" y2="42" stroke="#fbbf24" stroke-width="2.5" stroke-linecap="round" opacity=".65"/>
-              <line x1="62" y1="67" x2="54" y2="67" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" opacity=".5"/>
-              <line x1="158" y1="67" x2="166" y2="67" stroke="#fbbf24" stroke-width="2" stroke-linecap="round" opacity=".5"/>
-              <path d="M52 55 Q54 53 56 55" stroke="#fbbf2470" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-              <path d="M68 48 Q70 46 72 48" stroke="#fbbf2470" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-              <path d="M155 50 Q157 48 159 50" stroke="#fbbf2470" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-            </svg>
-            <div style="text-align:center;margin-top:8px">
-              <div id="fwSunriseTime" style="font-size:28px;font-weight:700;color:#fbbf24;font-family:'Outfit',sans-serif;letter-spacing:.5px">– : –</div>
-              <div style="font-size:11px;color:var(--muted);margin-top:2px">Sonnenaufgang heute · tippe für Details ▾</div>
+        <div class="card">
+          <div class="card-h">
+            <span class="tile"><svg class="ic"><use href="#i-timer"/></svg></span>
+            <div><h3>Dauerüberwachung</h3><p>Lauscht ab jetzt für eine feste Zeit — für unbeaufsichtigte Langzeit-Aufnahmen.</p></div>
+            <span class="switch"><input type="checkbox" id="orniDuEnabled" aria-label="Dauerüberwachung starten" /><span class="switch-track"></span></span>
+          </div>
+          <div class="setlabel">Dauer</div>
+          <div class="du-presets" id="orniDuPresets">
+            <button class="du-preset" data-min="15">15 Min</button>
+            <button class="du-preset on" data-min="30">30 Min</button>
+            <button class="du-preset" data-min="60">1 Std</button>
+            <button class="du-preset" data-min="120">2 Std</button>
+            <button class="du-preset" data-min="240">4 Std</button>
+            <button class="du-preset" data-min="480">8 Std</button>
+          </div>
+          <div id="duCountdown" class="du-countdown" hidden>
+            <div id="duTimer" class="bigtimer">30:00</div>
+            <button class="btn ghost" id="duStop">Stoppen</button>
+          </div>
+          <div class="rows rows-sep">
+            <label class="switch-row"><span>Trigger-Aufnahme <small>startet bei Geräusch</small></span><span class="switch"><input type="checkbox" id="duTriggerEnabled"/><span class="switch-track"></span></span></label>
+            <div id="duTriggerConfig" hidden>
+              <div class="sliderlabel"><span>Empfindlichkeit</span><span id="duTriggerVal">Mittel</span></div>
+              <input type="range" id="duTriggerLevel" min="5" max="50" value="20" step="5" aria-label="Trigger-Empfindlichkeit" />
+              <div class="range-ends"><span>hoch</span><span>niedrig</span></div>
             </div>
           </div>
-          <div id="fwDetailPopup" hidden class="fw-detail-popup">
-            <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Fotografen-Licht heute</div>
-            <div class="fw-phase"><span style="font-size:14px">🌌</span><div class="fw-phase-label">Astron. Dämmerung</div><div id="fwPhaseAstro" class="fw-phase-time">–:––</div></div>
-            <div class="fw-phase"><span style="font-size:14px">🌊</span><div class="fw-phase-label">Nautische Dämmerung</div><div id="fwPhaseNaut" class="fw-phase-time">–:––</div></div>
-            <div class="fw-phase"><span style="font-size:14px">💙</span><div class="fw-phase-label">Blaue Stunde</div><div id="fwPhaseCivil" class="fw-phase-time">–:––</div></div>
-            <div class="fw-phase"><span style="font-size:14px">🌅</span><div class="fw-phase-label">Sonnenaufgang</div><div id="fwPhaseSunrise" class="fw-phase-time" style="color:var(--amber)">–:––</div></div>
-            <div class="fw-phase"><span style="font-size:14px">⭐</span><div class="fw-phase-label">Goldene Stunde</div><div id="fwPhaseGolden" class="fw-phase-time" style="color:var(--amber)">–:––</div></div>
-          </div>
-          <label class="switch-row" style="margin-top:14px">
-            <span>Fotografen-Wecker aktivieren</span>
-            <span class="switch"><input type="checkbox" id="fwEnabled" /><span class="switch-track"></span></span>
-          </label>
-          <div style="margin-top:14px">
-            <div style="font-size:12px;color:var(--muted);margin-bottom:5px">Weckzeit</div>
-            <input type="time" id="fwTime" value="05:30" class="time-input" />
-          </div>
-          <label class="switch-row" style="margin-top:12px">
-            <span style="font-size:13px;color:var(--muted)">Nur Vibration (kein Ton)</span>
-            <span class="switch"><input type="checkbox" id="fwVibrateOnly" /><span class="switch-track"></span></span>
-          </label>
-        </div>
-
-        <div class="infoblock" style="margin-top:14px">
-          <h3><span style="font-size:15px">⏱</span> Dauerüberwachung</h3>
-          <p style="margin-bottom:12px">Startet das Lauschen für eine einstellbare Zeit — ideal für unbeaufsichtigte Langzeit-Aufnahmen.</p>
-          <label class="switch-row">
-            <span>Zeitlimit aktivieren</span>
-            <span class="switch"><input type="checkbox" id="orniDuEnabled" /><span class="switch-track"></span></span>
-          </label>
-          <div style="margin-top:14px">
-            <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Dauer</div>
-            <div class="du-presets" id="orniDuPresets">
-              <button class="du-preset" data-min="15">15 Min</button>
-              <button class="du-preset on" data-min="30">30 Min</button>
-              <button class="du-preset" data-min="60">1 Std</button>
-              <button class="du-preset" data-min="120">2 Std</button>
-              <button class="du-preset" data-min="240">4 Std</button>
-              <button class="du-preset" data-min="480">8 Std</button>
-            </div>
-          </div>
-          <div id="duCountdown" hidden style="margin-top:12px;text-align:center">
-            <div id="duTimer" style="font-size:42px;font-weight:700;color:var(--lime);font-family:'Outfit',sans-serif;letter-spacing:2px;margin-bottom:8px">30:00</div>
-            <button class="btn ghost" id="duStop" style="width:100%">Stoppen</button>
-          </div>
-          <div style="margin-top:14px;border-top:1px solid var(--stroke);padding-top:12px">
-            <label class="switch-row">
-              <span>Trigger-Aufnahme <em style="font-size:11px;color:var(--muted);font-style:normal">startet bei Geräusch</em></span>
-              <span class="switch"><input type="checkbox" id="duTriggerEnabled"/><span class="switch-track"></span></span>
-            </label>
-            <div id="duTriggerConfig" hidden style="margin-top:10px">
-              <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Empfindlichkeit: <span id="duTriggerVal">Mittel</span></div>
-              <input type="range" id="duTriggerLevel" min="5" max="50" value="20" step="5" style="width:100%;accent-color:var(--lime)">
-              <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin-top:2px"><span>hoch</span><span>niedrig</span></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="actions">
-          <button class="btn ghost" id="timingClose" style="flex:1">Schließen</button>
         </div>
       </div>
     </div>
 
-    <!-- ============ NAV ============ -->
-    <nav class="nav">
-      <button class="on" data-v="listen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M7 12a5 5 0 0 1 5-5"/><circle cx="12" cy="12" r="1.6"/></svg>Lauschen</button>
-      <button data-v="map"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M9 20l-5-2V4l5 2 6-2 5 2v14l-5-2-6 2z"/><path d="M9 6v14M15 4v14"/></svg>Karte</button>
-      <button data-v="coll"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 3h14v18l-7-4-7 4z"/></svg>Sammlung</button>
-      <button data-v="stat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 19v-6M13 19V9M18 19v-9"/></svg>Statistik</button>
-      <button data-v="orni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="15" r="4"/><circle cx="18" cy="15" r="4"/><path d="M10 15h4M6 9v2M18 9v2M9 9h6"/></svg>Ornithologie</button>
+    <!-- ============ NAVIGATION ============ -->
+    <nav class="nav" aria-label="Hauptnavigation">
+      <button class="on" data-v="listen" aria-current="page"><span class="nav-ico"><svg class="ic"><use href="#i-listen"/></svg></span><span class="nav-lbl">Lauschen</span></button>
+      <button data-v="map"><span class="nav-ico"><svg class="ic"><use href="#i-map"/></svg></span><span class="nav-lbl">Karte</span></button>
+      <button data-v="coll"><span class="nav-ico"><svg class="ic"><use href="#i-grid"/></svg></span><span class="nav-lbl">Funde</span></button>
+      <button data-v="foto"><span class="nav-ico"><svg class="ic"><use href="#i-camera"/></svg><span id="galleryBadge" class="nav-badge" hidden>0</span></span><span class="nav-lbl">Foto</span></button>
+      <button data-v="orni"><span class="nav-ico"><svg class="ic"><use href="#i-book"/></svg></span><span class="nav-lbl">Feldbuch</span></button>
     </nav>
 
-    <!-- ============ MODAL ============ -->
+    <!-- ============ ARTEN-SHEET ============ -->
     <div class="modal" id="sheet">
       <div class="scrim" id="sheetScrim"></div>
-      <div class="sheet">
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="mName">
         <div class="grab"></div>
         <div class="hero">
           <div class="avatar" id="mAvatar"></div>
-          <div>
+          <div class="hero-txt">
             <h2 id="mName">Amsel</h2>
             <div class="lt" id="mSci">Turdus merula</div>
-            <div class="confbar"><i></i></div>
-            <div style="font-size:11px;color:var(--muted)">Erkennungssicherheit</div>
+            <div class="confrow" id="mConfRow" hidden>
+              <div class="confbar"><i id="mConfFill"></i></div><span class="conf-val" id="mConfVal">–</span>
+            </div>
           </div>
         </div>
         <div class="photo-credit" id="mPhotoCredit" hidden></div>
+        <div class="sheet-actions">
+          <button class="sa" id="mFavBtn" aria-pressed="false"><svg class="ic"><use href="#i-star"/></svg><span>Suchliste</span></button>
+          <button class="sa" id="mScanBtn"><svg class="ic"><use href="#i-compass"/></svg><span>Richtung</span></button>
+          <button class="sa" id="mPhotoBtn"><svg class="ic"><use href="#i-camera"/></svg><span>Foto</span></button>
+          <a class="sa" id="mWikiLink" href="https://de.wikipedia.org/" target="_blank" rel="noopener noreferrer"><svg class="ic"><use href="#i-ext"/></svg><span>Wikipedia</span></a>
+        </div>
         <div class="infoblock">
-          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Was bedeutet der Ruf?<span class="aibadge" id="mAi" hidden>✨ Gemini</span></h3>
+          <h3><svg class="ic"><use href="#i-listen"/></svg>Was bedeutet der Ruf?<span class="aibadge" id="mAi" hidden>Gemini</span></h3>
           <p id="mMeaning"></p>
         </div>
         <div class="infoblock">
-          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z"/></svg>Steckbrief</h3>
+          <h3><svg class="ic"><use href="#i-info"/></svg>Steckbrief</h3>
           <p id="mSteckbrief"></p>
         </div>
         <div class="infoblock" id="mPhotoTipBlock" hidden>
-          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto-Tipp für diese Art<span class="aibadge" style="margin-left:6px">✨ Gemini</span></h3>
+          <h3><svg class="ic"><use href="#i-camera"/></svg>Foto-Tipp für diese Art<span class="aibadge">Gemini</span></h3>
           <p id="mPhotoTip"></p>
         </div>
         <div class="infoblock" id="mLastBlock" hidden>
-          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>Letzter Fund</h3>
+          <h3><svg class="ic"><use href="#i-clock"/></svg>Letzter Fund</h3>
           <p id="mLastInfo"></p>
         </div>
         <div class="infoblock" id="mDirBlock" hidden>
-          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M16 8l-5 3-2 5 5-3z"/></svg>Richtung zum letzten Fund</h3>
+          <h3><svg class="ic"><use href="#i-compass"/></svg>Richtung zum letzten Fund</h3>
           <div class="compass-row">
             <div class="compass-dial"><svg id="mCompassArrow" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l4 16-4-2.5L8 18z"/></svg></div>
             <div class="compass-info">
@@ -543,448 +513,269 @@
           </div>
         </div>
         <div class="actions">
-          <button class="btn primary" id="mPlayBtn"><svg id="mPlayIcon" viewBox="0 0 24 24" fill="#04130d" stroke="none"><path d="M6 4l14 8-14 8z"/></svg><span id="mPlayLabel">Ruf anhören</span></button>
-          <button class="btn ghost" id="sheetClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Mehr erfahren</button>
+          <button class="btn primary" id="mPlayBtn"><svg id="mPlayIcon" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M6 4l14 8-14 8z"/></svg><span id="mPlayLabel">Ruf anhören</span></button>
+          <button class="btn ghost" id="sheetClose">Schließen</button>
         </div>
       </div>
     </div>
 
-    <!-- ============ SETTINGS ============ -->
+    <!-- ============ EINSTELLUNGEN ============ -->
+    <!-- Speichert jede Änderung sofort (change/blur) — es gibt keinen Speichern-Knopf mehr, der beim
+         Schließen über den Hintergrund still verworfen hätte. Nur die Server-URL braucht "Übernehmen",
+         weil die App für einen neuen Erkenner neu laden muss. -->
     <div class="modal" id="settingsModal">
       <div class="scrim" id="settingsScrim"></div>
-      <div class="sheet">
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
         <div class="grab"></div>
-        <h2 style="font-size:20px;margin-bottom:4px">Einstellungen</h2>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">📖</span> Hilfe &amp; Anleitung</h3>
-          <p style="margin-bottom:12px">Alle Funktionen Schritt für Schritt erklärt — Lauschen, Karte, Sammlung, Statistik, Ornithologie, Kamera und die gemeinsame Richtungserkennung zu zweit oder zu dritt.</p>
-          <button class="btn ghost" id="helpOpenBtn" style="width:100%">📖 Hilfe öffnen</button>
+        <div class="sheet-head">
+          <h2 id="settingsTitle">Einstellungen</h2>
+          <button class="iconbtn" id="helpOpenBtn" title="Hilfe" aria-label="Hilfe öffnen"><svg class="ic"><use href="#i-help"/></svg></button>
+          <button class="iconbtn" id="settingsClose" aria-label="Schließen"><svg class="ic"><use href="#i-x"/></svg></button>
         </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">🎙️</span> Mikrofon</h3>
-          <p style="margin-bottom:12px">Falls ein externes Mikrofon (z. B. per USB-C/Bluetooth, Richtmikrofon) angeschlossen ist, hier auswählen — sonst nutzt WaldOhr automatisch das eingebaute.</p>
-          <select id="micDeviceSelect" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:14px;font-family:inherit">
-            <option value="">Automatisch (Standard)</option>
-          </select>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">✨</span> Gemini-Anreicherung</h3>
-          <p style="margin-bottom:12px">Eigener Google-Gemini-API-Key. Wird nur lokal auf diesem Gerät gespeichert (nicht hochgeladen) und erklärt im Detail-Sheet die Ruf-Bedeutung &amp; den Steckbrief je Art.</p>
-          <input id="geminiKey" type="password" autocomplete="off" placeholder="API-Key einfügen…" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
-          <div style="font-size:11px;color:var(--faint);margin-top:8px">Key holen: aistudio.google.com/app/apikey</div>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">🔊</span> Echte Vogelrufe (Xeno-canto)</h3>
-          <p style="margin-bottom:12px">Eigener kostenloser Xeno-canto-API-Key, macht „Ruf anhören" im Detail-Sheet funktionsfähig (echte Aufnahme statt nichts). Nur lokal gespeichert.</p>
-          <input id="xcKey" type="password" autocomplete="off" placeholder="API-Key einfügen…" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
-          <div style="font-size:11px;color:var(--faint);margin-top:8px">Key holen (kostenlos): xeno-canto.org/account</div>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">🐦</span> Echte Erkennung (BirdNET-Server)</h3>
-          <p style="margin-bottom:12px">URL deines BirdNET-Backends (z. B. HuggingFace-Space). Leer = Demo-Modus. Nach dem Speichern lädt die App neu.</p>
-          <input id="serverUrl" type="url" autocomplete="off" inputmode="url" placeholder="https://…hf.space" style="width:100%;padding:12px 14px;border-radius:12px;background:#04130d;border:1px solid var(--stroke);color:var(--ink);font-size:15px" />
-          <div style="font-size:11px;color:var(--faint);margin-top:8px">Status: <span id="serverStat">nicht gesetzt</span></div>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">🎚️</span> Empfindlichkeit</h3>
-          <p style="margin-bottom:14px">Ab welcher Erkennungssicherheit ein Fund in Sammlung/Statistik/Karte auftaucht, und ab wann automatisch eine Aufnahme gespeichert wird.</p>
-          <div class="sliderlabel"><span>In Sammlung aufnehmen ab</span><span id="qualifyVal">70%</span></div>
-          <input type="range" id="qualifySlider" min="50" max="95" step="5" value="70" />
-          <div class="sliderlabel" style="margin-top:16px"><span>Auto-Aufnahme speichern ab</span><span id="autoRecVal">85%</span></div>
-          <input type="range" id="autoRecSlider" min="50" max="98" step="1" value="85" />
-          <div style="font-size:12px;color:var(--muted);margin-top:16px;margin-bottom:8px">Auto-Aufnahme-Länge</div>
-          <div class="du-presets" id="autoRecDurPresets">
-            <button class="du-preset on" data-dur="3">3 Sek</button>
-            <button class="du-preset" data-dur="5">5 Sek</button>
-            <button class="du-preset" data-dur="10">10 Sek</button>
-            <button class="du-preset" data-dur="60">60 Sek</button>
+        <p class="sheet-sub">Änderungen werden sofort gespeichert.</p>
+
+        <section class="setgroup">
+          <h3 class="setgroup-h">Erkennung</h3>
+          <div class="setlist">
+            <div class="setrow setrow-col">
+              <div class="sliderlabel"><span>In Funde aufnehmen ab</span><span id="qualifyVal">70%</span></div>
+              <input type="range" id="qualifySlider" min="50" max="95" step="5" value="70" aria-label="In Funde aufnehmen ab" />
+              <div class="sliderlabel"><span>Ruf automatisch speichern ab</span><span id="autoRecVal">85%</span></div>
+              <input type="range" id="autoRecSlider" min="50" max="98" step="1" value="85" aria-label="Ruf automatisch speichern ab" />
+              <div class="setlabel">Länge der automatischen Aufnahme</div>
+              <div class="du-presets" id="autoRecDurPresets">
+                <button class="du-preset on" data-dur="3">3 Sek</button>
+                <button class="du-preset" data-dur="5">5 Sek</button>
+                <button class="du-preset" data-dur="10">10 Sek</button>
+                <button class="du-preset" data-dur="60">60 Sek</button>
+              </div>
+              <p class="hint">Unter der ersten Schwelle erscheinen Arten nur live, nicht in Funde, Karte und Statistik. Automatisch gespeichert wird höchstens ein Ruf pro Art und Tag.</p>
+            </div>
+            <div class="setrow setrow-col">
+              <label class="setrow-txt" for="micDeviceSelect"><b>Mikrofon</b><small>Externes Mikrofon (USB-C, Bluetooth, Richtmikrofon) — sonst das eingebaute.</small></label>
+              <select id="micDeviceSelect" class="field">
+                <option value="">Automatisch (Standard)</option>
+              </select>
+            </div>
+            <label class="setrow switch-row"><span class="setrow-txt"><b>Display an lassen</b><small>Bildschirm geht beim Lauschen nicht aus</small></span><span class="switch"><input type="checkbox" id="wakeLockToggle" /><span class="switch-track"></span></span></label>
           </div>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">🎯</span> Feinabgleich-Methode</h3>
-          <p style="margin-bottom:12px">Der Kalibrier-Ton ist meist zuverlässiger (lauter, gleichmäßiger Sweep) — bei sehr leisem Lautsprecher oder Störgeräuschen kann ein gemeinsames Klatschen besser funktionieren.</p>
-          <label class="switch-row">
-            <span>Automatischer Kalibrier-Ton (statt Klatschen)</span>
-            <span class="switch"><input type="checkbox" id="calibModeToggle" checked /><span class="switch-track"></span></span>
-          </label>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">📱</span> Display an lassen</h3>
-          <p style="margin-bottom:12px">Verhindert, dass der Bildschirm während des Lauschens automatisch ausgeht.</p>
-          <label class="switch-row">
-            <span>Display anbleiben</span>
-            <span class="switch"><input type="checkbox" id="wakeLockToggle" /><span class="switch-track"></span></span>
-          </label>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">📷</span> Kamera-Klick</h3>
-          <p style="margin-bottom:12px">Ton, der beim Auslösen im Foto-Modus gespielt wird.</p>
-          <label class="switch-row">
-            <span>Auslöseton</span>
-            <span class="switch"><input type="checkbox" id="shutterSoundToggle" /><span class="switch-track"></span></span>
-          </label>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">✋</span> Kamera-Bedienung</h3>
-          <p style="margin-bottom:12px">Spiegelt Auslöser &amp; Objektiv-Auswahl in der Kamera für Linkshänder.</p>
-          <label class="switch-row">
-            <span>Linkshänder-Modus</span>
-            <span class="switch"><input type="checkbox" id="leftHandToggle" /><span class="switch-track"></span></span>
-          </label>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">📸</span> Tipps für Fotografen</h3>
-          <p style="margin-bottom:12px">Allgemeine Tipps, um Vögel und Wildtiere besser vor die Linse zu bekommen.</p>
-          <button class="btn ghost" id="tipsOpenBtn" style="width:100%">Tipps anzeigen</button>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">💾</span> Sicherung</h3>
-          <p style="margin-bottom:12px">WaldOhr speichert alles nur auf diesem Gerät. Sichere deine Funde, Fotos, Audio- &amp; Videoaufnahmen regelmäßig als Datei (z. B. in einen Cloud-Ordner) — bei Handywechsel oder App-Löschung ist sonst alles weg.</p>
-          <button class="btn ghost" id="backupExportBtn" style="width:100%;margin-bottom:8px">📤 Backup erstellen</button>
-          <button class="btn ghost" id="backupImportBtn" style="width:100%">📥 Backup wiederherstellen</button>
-          <input type="file" id="backupImportFile" accept="application/json,.json" style="display:none" />
-          <div id="backupStatus" style="font-size:12px;color:var(--muted);margin-top:10px;text-align:center" hidden></div>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">🗑️</span> Datenbank zurücksetzen</h3>
-          <p style="margin-bottom:12px">Löscht ALLE gespeicherten Funde unwiderruflich — Demo-Daten, eigene Aufnahmen, Karte, Sammlung, Statistik. Fragt vorher nach Bestätigung.</p>
-          <button class="btn ghost" id="dbResetBtn" style="width:100%;color:var(--rose);border-color:#fb718555">Alle Funde löschen</button>
-        </div>
-        <div class="infoblock">
-          <h3><span style="font-size:15px">ℹ️</span> Über &amp; Danksagungen</h3>
-          <p style="margin-bottom:6px">Die Vogel-/Tierstimmenerkennung basiert auf <strong>BirdNET</strong>, entwickelt vom K. Lisa Yang Center for Conservation Bioacoustics am Cornell Lab of Ornithology, in Zusammenarbeit mit der TU Chemnitz.</p>
-          <p style="font-size:12px;color:var(--muted)">Modell lizenziert unter CC BY-NC-SA 4.0 · <a href="https://birdnet.cornell.edu" target="_blank" rel="noopener" style="color:var(--lime)">birdnet.cornell.edu</a></p>
-        </div>
-        <div class="actions">
-          <button class="btn primary" id="settingsSave"><svg viewBox="0 0 24 24" fill="none" stroke="#04130d" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>Speichern</button>
-          <button class="btn ghost" id="settingsClose">Schließen</button>
-        </div>
+        </section>
+
+        <section class="setgroup">
+          <h3 class="setgroup-h">Kamera</h3>
+          <div class="setlist">
+            <label class="setrow switch-row"><span class="setrow-txt"><b>Auslöseton</b><small>Klick beim Fotografieren</small></span><span class="switch"><input type="checkbox" id="shutterSoundToggle" /><span class="switch-track"></span></span></label>
+            <label class="setrow switch-row"><span class="setrow-txt"><b>Linkshänder</b><small>Auslöser und Zoom gespiegelt</small></span><span class="switch"><input type="checkbox" id="leftHandToggle" /><span class="switch-track"></span></span></label>
+          </div>
+        </section>
+
+        <section class="setgroup">
+          <h3 class="setgroup-h">Daten</h3>
+          <div class="setlist">
+            <button class="setrow setrow-btn" id="backupExportBtn"><svg class="ic"><use href="#i-download"/></svg><span class="setrow-txt"><b>Backup erstellen</b><small>Funde, Fotos und Aufnahmen als Datei sichern</small></span></button>
+            <button class="setrow setrow-btn" id="backupImportBtn"><svg class="ic"><use href="#i-upload"/></svg><span class="setrow-txt"><b>Backup wiederherstellen</b><small>Wird zu den vorhandenen Daten hinzugefügt</small></span></button>
+            <input type="file" id="backupImportFile" class="hidden-input" accept="application/json,.json" />
+            <div id="backupStatus" class="setrow-status" hidden></div>
+            <button class="setrow setrow-btn danger" id="dbResetBtn"><svg class="ic"><use href="#i-trash"/></svg><span class="setrow-txt"><b>Alle Funde löschen</b><small>Unwiderruflich — fragt vorher nach</small></span></button>
+          </div>
+          <p class="hint">WaldOhr speichert alles nur auf diesem Gerät. Sichere regelmäßig, z. B. in einen Cloud-Ordner — bei Handywechsel oder App-Löschung ist sonst alles weg.</p>
+        </section>
+
+        <details class="setgroup setgroup-adv">
+          <summary class="setgroup-h">Dienste &amp; Schlüssel <span>Erweitert</span><svg class="ic ic-sm chev"><use href="#i-chev"/></svg></summary>
+          <div class="setlist">
+            <div class="setrow setrow-col">
+              <label class="setrow-txt" for="serverUrl"><b>BirdNET-Server</b><small>Adresse deines Erkennungs-Servers (z. B. HuggingFace-Space). Leer = Demo-Modus.</small></label>
+              <input id="serverUrl" class="field" type="url" autocomplete="off" inputmode="url" placeholder="https://…hf.space" />
+              <div class="field-actions">
+                <span class="setrow-status-inline">Status: <span id="serverStat">nicht gesetzt</span></span>
+                <button class="btn ghost small" id="serverApply">Übernehmen – App lädt neu</button>
+              </div>
+            </div>
+            <div class="setrow setrow-col">
+              <label class="setrow-txt" for="geminiKey"><b>Gemini-API-Key</b><small>Erklärt Ruf-Bedeutung und Steckbrief. Bleibt nur auf diesem Gerät. Key: aistudio.google.com/app/apikey</small></label>
+              <input id="geminiKey" class="field" type="password" autocomplete="off" placeholder="API-Key einfügen…" />
+            </div>
+            <div class="setrow setrow-col">
+              <label class="setrow-txt" for="xcKey"><b>Xeno-canto-API-Key</b><small>Für „Ruf anhören“ (echte Aufnahmen). Kostenlos: xeno-canto.org/account</small></label>
+              <input id="xcKey" class="field" type="password" autocomplete="off" placeholder="API-Key einfügen…" />
+            </div>
+          </div>
+        </details>
+
+        <section class="setgroup">
+          <h3 class="setgroup-h">Über &amp; Hilfe</h3>
+          <div class="setlist">
+            <button class="setrow setrow-btn" id="helpOpenBtn2"><svg class="ic"><use href="#i-help"/></svg><span class="setrow-txt"><b>Hilfe &amp; Anleitung</b><small>Alle Funktionen Schritt für Schritt</small></span></button>
+            <div class="setrow setrow-col about">
+              <p>Die Vogel- und Tierstimmenerkennung basiert auf <b>BirdNET</b>, entwickelt vom K. Lisa Yang Center for Conservation Bioacoustics am Cornell Lab of Ornithology mit der TU Chemnitz. Modell lizenziert unter CC BY-NC-SA 4.0 · <a href="https://birdnet.cornell.edu" target="_blank" rel="noopener">birdnet.cornell.edu</a></p>
+              <p>Artfotos stammen von Wikipedia / Wikimedia Commons. In Listen und Karten bleiben die Vorschaubilder bewusst ohne Bildunterschrift (bei 40–60 px nicht lesbar); Fotograf und Lizenz stehen verlinkt im Arten-Steckbrief — die bei Miniaturansichten übliche Form der Namensnennung nach CC BY / CC BY-SA.</p>
+              <p>Schriften: Outfit und Inter (SIL Open Font License), lokal mitgeliefert. Version <span id="aboutVer"></span></p>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
 
     <!-- ============ HILFE / ANLEITUNG ============ -->
     <div class="modal" id="helpModal">
       <div class="scrim" id="helpScrim"></div>
-      <div class="sheet">
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
         <div class="grab"></div>
-        <h2 style="font-size:20px;margin-bottom:2px">📖 Hilfe &amp; Anleitung</h2>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Tippe einen Abschnitt an, um ihn aufzuklappen.</p>
+        <div class="sheet-head">
+          <h2 id="helpTitle">Hilfe &amp; Anleitung</h2>
+          <button class="iconbtn" id="helpClose" aria-label="Schließen"><svg class="ic"><use href="#i-x"/></svg></button>
+        </div>
+        <p class="sheet-sub">Tippe einen Abschnitt an, um ihn aufzuklappen.</p>
         <div class="help-list">
 
           <details class="help-sec">
-            <summary><span class="hs-ico">🚀</span>Schnellstart<svg class="hs-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></summary>
+            <summary><span class="hs-ico"><svg class="ic"><use href="#i-sparkle"/></svg></span>Schnellstart<svg class="ic ic-sm hs-chev"><use href="#i-chev"/></svg></summary>
             <div class="help-body">
-              <p>WaldOhr ist dein <b>Fernglas fürs Ohr</b>: Halte das Mikrofon in die Natur und die App erkennt, welcher Vogel gerade singt.</p>
-              <figure class="help-fig">
-                <img src="docs/help/lauschen-hero.png" alt="Lauschen-Hauptbildschirm mit Mikrofon-Kreis und Live-Liste" style="width:100%;border-radius:14px;display:block">
-                <figcaption>Der Lauschen-Bildschirm: Mikrofon-Kreis (Start/Stopp), „Jetzt zu hören"-Liste und die Schnellzugriff-Icons (Beobachtungsliste, Einstellungen, Timing, Foto-Wetter, Galerie).</figcaption>
-              </figure>
+              <p>WaldOhr ist dein <b>Fernglas fürs Ohr</b>: Halte das Smartphone in die Natur und die App erkennt, welcher Vogel gerade singt.</p>
               <ol class="help-steps">
-                <li>Auf dem <span class="hl">Lauschen</span>-Bildschirm auf den großen Kreis tippen — das Mikrofon startet.</li>
-                <li><b>REC</b> drücken: erkannte Vögel erscheinen live unter „Jetzt zu hören".</li>
-                <li>Einen Treffer antippen öffnet den Steckbrief mit Foto, Ruf-Erklärung und Kompass zum letzten Fundort.</li>
-                <li>Standort erlauben — dann landen Funde auf der <span class="hl">Karte</span> und in der <span class="hl">Sammlung</span>.</li>
+                <li>Im Tab <span class="hl">Lauschen</span> auf den großen Kreis tippen — Mikrofon und Erkennung starten zusammen. Nochmal tippen stoppt beides.</li>
+                <li>Erkannte Arten erscheinen live unter „Jetzt zu hören“.</li>
+                <li>Eine Art antippen öffnet ihren Steckbrief mit Foto, Ruf-Erklärung und Richtung zum letzten Fundort.</li>
+                <li>Standort erlauben — dann landen Funde auf der <span class="hl">Karte</span> und unter <span class="hl">Funde</span>.</li>
               </ol>
-              <div class="help-note">Fürs Erkennen brauchst du eine aktive Internet-Verbindung zum BirdNET-Server (in den Einstellungen hinterlegt). Ohne Server läuft nur der Demo-Modus.</div>
+              <div class="help-note">Für echte Erkennung braucht WaldOhr eine Internet-Verbindung zum BirdNET-Server (Einstellungen → Dienste &amp; Schlüssel). Ohne Server läuft der <b>Demo-Modus</b>: Die Kopfzeile zeigt dann „Demo“, Treffer sind zufällig, als „Demo“ markiert und werden nicht gespeichert.</div>
             </div>
           </details>
 
           <details class="help-sec">
-            <summary><span class="hs-ico">🎧</span>Lauschen &amp; Erkennung<svg class="hs-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></summary>
+            <summary><span class="hs-ico"><svg class="ic"><use href="#i-listen"/></svg></span>Lauschen &amp; Erkennung<svg class="ic ic-sm hs-chev"><use href="#i-chev"/></svg></summary>
             <div class="help-body">
-              <p><b>Großer Kreis:</b> startet/stoppt das Mikrofon. <b>REC:</b> schaltet die Erkennung ein. Die Wellen-Anzeige zeigt den aktuellen Mikrofonpegel.</p>
-              <p><b>Jetzt zu hören:</b> alle Arten der letzten Sekunden. Eine Art antippen → Detail-Steckbrief.</p>
-              <p>Die drei kleinen Symbole rechts über der Liste öffnen: <span class="hl">Timing/Alarm</span> (Morgenchor-Wecker, Wetter), <span class="hl">Foto-Wetter</span> (Licht &amp; goldene Stunde) und die <span class="hl">Galerie</span> (deine Aufnahmen &amp; Fotos).</p>
-              <p>Nur Funde ab <b>70 % Sicherheit</b> zählen für Karte, Sammlung und Statistik. Ab <b>85 %</b> wird der Ruf automatisch als kurze Tonaufnahme gespeichert — einmal pro Art und Tag.</p>
-              <div class="help-note">Die kleinen Vogelfotos in Listen &amp; Karten stammen von Wikipedia/Wikimedia Commons und sind bewusst ohne Bildunterschrift — bei 40–60 px wäre lesbarer Text ohnehin nicht möglich. Der vollständige Bildnachweis (Fotograf + Lizenz, antippbar zur Quelle) erscheint im <b>Detail-Steckbrief</b>, sobald man das Bild antippt. Das entspricht den Attributionsregeln von CC BY/CC BY-SA, die eine Namensnennung „in angemessener Weise" verlangen — bei Miniaturansichten in Listen ist eine verlinkte Nennung in der Detailansicht üblich und ausreichend.</div>
+              <p><b>Der Kreis</b> zeigt, ob gelauscht wird, und wie lange schon. Darunter siehst du das Spektrogramm; die dünne Leiste an seiner Unterkante ist der Mikrofonpegel.</p>
+              <p><b>Jetzt zu hören:</b> alle Arten der letzten Sekunden mit Erkennungssicherheit in Prozent. „Neu“ steht nur beim allerersten Fund einer Art. Jede Zeile hat drei Knöpfe: <span class="hl">Richtung finden</span>, <span class="hl">Foto</span> und <span class="hl">Ruf aufnehmen</span> (die Aufnahme wird mit dem Artnamen beschriftet).</p>
+              <p>Nur Funde ab <b>70 % Sicherheit</b> zählen für Karte, Funde und Statistik; ab <b>85 %</b> speichert WaldOhr den Ruf automatisch als kurze Tonaufnahme — einmal pro Art und Tag. Beide Schwellen stellst du unter Einstellungen → Erkennung ein.</p>
             </div>
           </details>
 
           <details class="help-sec">
-            <summary><span class="hs-ico">⭐</span>Beobachtungsliste &amp; seltene Arten<svg class="hs-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></summary>
+            <summary><span class="hs-ico"><svg class="ic"><use href="#i-compass"/></svg></span>Richtung finden<svg class="ic ic-sm hs-chev"><use href="#i-chev"/></svg></summary>
             <div class="help-body">
-              <p>Über das <b>Stern-Symbol</b> oben markierst du Wunsch-Arten. Wird eine davon erkannt, vibriert das Handy und ein Hinweis erscheint — ideal, um auf eine bestimmte Art zu warten.</p>
-              <p>Seltene Arten lösen automatisch den gleichen Alarm aus, auch ohne Markierung. Über die Suche findest du alle ~6500 BirdNET-Arten.</p>
+              <p>Mit <b>„Richtung finden“</b> (über der Liste oder direkt bei einer erkannten Art) findest du grob, aus welcher Richtung ein Ruf kommt — mit nur einem Handy.</p>
+              <p>So geht's: Handy <b>flach vor die Brust</b> halten, die Oberkante zeigt nach vorn. Dann <b>langsam einmal im Kreis drehen</b> (ca. 20 Sekunden), am besten während der Vogel singt. Dein Körper schirmt Geräusche von hinten ab — in Richtung des Rufs ist es dadurch am lautesten.</p>
+              <p>Mit <b>„Richtung übernehmen“</b> zeigt ein Pfeil dorthin. In Pfeilrichtung gehen und erneut scannen, wenn du näher dran bist.</p>
+              <p class="help-note">Ehrlich gesagt: Das Ergebnis ist eine <b>grobe Richtung (±30–45°)</b>. Singen mehrere Vögel gleichzeitig, gewinnt der lauteste. Weitere Runden machen das Ergebnis genauer.</p>
             </div>
           </details>
 
           <details class="help-sec">
-            <summary><span class="hs-ico">🗺️</span>Karte, Sammlung &amp; Statistik<svg class="hs-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></summary>
+            <summary><span class="hs-ico"><svg class="ic"><use href="#i-clock"/></svg></span>Automatisch lauschen<svg class="ic ic-sm hs-chev"><use href="#i-chev"/></svg></summary>
             <div class="help-body">
-              <p><b>Karte:</b> zeigt deine Funde als farbige Punkte (grün = häufig, orange = selten, rot = Säugetier, lime = beobachtet). Dein Standort pulsiert cyan. Punkt antippen → Steckbrief.</p>
-              <p><b>Sammlung:</b> umschaltbar zwischen „Heute hier" (Funde in ~3 km um dich) und „Global nach Ort". Ein ▶-Abzeichen auf einer Karte spielt die gespeicherte Aufnahme.</p>
-              <p><b>Statistik:</b> häufigste Arten, letzte 14 Tage, Tagesaktivität — ebenfalls als „Heute hier" oder „Global", plus Export (eBird, Ornitho.de, NABU u. a.).</p>
+              <p>Der Knopf <b>„Zeitplan“</b> unter dem Kreis öffnet die Automatik:</p>
+              <p><b>Morgenchor</b> startet kurz vor Sonnenaufgang, <b>Nacht-Modus</b> zu festen Zeiten (optional mit Endzeit), <b>Dauerüberwachung</b> lauscht ab sofort für eine feste Dauer — auf Wunsch mit Trigger-Aufnahme bei Geräuschen.</p>
+              <div class="help-note">Die Automatik funktioniert nur, solange WaldOhr geöffnet ist. Tipp: Einstellungen → „Display an lassen“.</div>
             </div>
           </details>
 
           <details class="help-sec">
-            <summary><span class="hs-ico">🔭</span>Ornithologie<svg class="hs-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></summary>
+            <summary><span class="hs-ico"><svg class="ic"><use href="#i-grid"/></svg></span>Funde, Statistik &amp; Suchliste<svg class="ic ic-sm hs-chev"><use href="#i-chev"/></svg></summary>
             <div class="help-body">
-              <p><b>Punkt-Zählung:</b> 5-Minuten-Zählung nach BirdLife-Standard — alle Rufe werden automatisch erfasst.</p>
-              <p><b>Transekt-Zählung:</b> läuft eine Strecke ab, GPS zeichnet die Route auf, das Mikrofon lauscht durchgehend.</p>
-              <p><b>Partner koppeln:</b> Einstieg in die gemeinsame Ortung zu zweit oder zu dritt (eigener Abschnitt weiter unten).</p>
+              <p><b>Funde</b> zeigt deine Arten, Fundorte und die Statistik. Oben wählst du den Bereich: <b>Heute hier</b> (heutige Funde im Umkreis von ~3 km) oder <b>Alle</b>. Ein Abspiel-Symbol auf einer Artkarte spielt deine eigene Aufnahme.</p>
+              <p><b>Suchliste:</b> Markiere Wunsch-Arten mit dem Stern (in Funde oder im Steckbrief). Wird eine davon erkannt, vibriert das Handy und ein Hinweis erscheint. Seltene Arten lösen den Alarm automatisch aus. Die Suche kennt alle ~6500 BirdNET-Arten.</p>
             </div>
           </details>
 
           <details class="help-sec">
-            <summary><span class="hs-ico">📷</span>Kamera &amp; Zoom<svg class="hs-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></summary>
+            <summary><span class="hs-ico"><svg class="ic"><use href="#i-map"/></svg></span>Karte<svg class="ic ic-sm hs-chev"><use href="#i-chev"/></svg></summary>
             <div class="help-body">
-              <p>Modi: <b>Foto</b>, <b>Video</b>, <b>Zeitraffer</b> und <b>Dual</b> (zwei Kameras gleichzeitig). Zoomen: mit dem Schieberegler <b>oder mit zwei Fingern</b> direkt auf dem Bild (Pinch) — auch auf Geräten ohne Hardware-Zoom. Fotos, Serienbilder und Zeitraffer speichern immer genau den <b>sichtbaren Ausschnitt</b>.</p>
-              <p><b>Auto-Zoom</b> (im Video-Modus): fährt langsam rein oder raus — ideal, um ein scheues Tier ruhig heranzuholen, ohne am Handy zu wackeln. Die Aufnahme bleibt dabei flüssig.</p>
-              <figure class="help-fig">
-                <img src="docs/help/camera-zoom.png" alt="Kamera-Ansicht mit Auto-Zoom-Panel" style="width:100%;border-radius:14px;display:block">
-                <figcaption>Video-Modus mit geöffnetem Auto-Zoom-Panel: Richtung (Rein/Raus), Tempo und eine Steuerung, die entweder nach fester Zeit oder manuell per Stop endet.</figcaption>
-              </figure>
-              <div class="help-note">Tipp: Bei starkem Digital-Zoom lieber näher heran statt ganz aufziehen — die Schärfe bleibt so besser. Für Ethik &amp; Bildqualität siehe „Tipps für Fotografen" in den Einstellungen.</div>
+              <p>Funde erscheinen als farbige Punkte (grün = häufig, gelb = selten, rot = Säugetier, blau = Suchliste). Dein Standort ist die cyanfarbene Figur. Punkt antippen → Name, nochmal antippen → Steckbrief.</p>
+              <p>Rechts oben: <b>Position setzen</b> (Stecknadel) — danach auf die Karte tippen, um deinen genauen Standpunkt festzulegen; präziser als GPS im Wald, hebt sich auf, sobald du dich bewegst. Darunter <b>Alle Funde zeigen</b>.</p>
+              <p><b>Route aufzeichnen</b> speichert deinen GPS-Track; am Ende kannst du ihn als GPX exportieren.</p>
             </div>
           </details>
 
           <details class="help-sec">
-            <summary><span class="hs-ico">🤝</span>Partner koppeln &amp; Chat<svg class="hs-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></summary>
+            <summary><span class="hs-ico"><svg class="ic"><use href="#i-camera"/></svg></span>Foto, Galerie &amp; Licht<svg class="ic ic-sm hs-chev"><use href="#i-chev"/></svg></summary>
             <div class="help-body">
-              <p>Zwei oder drei Handys verbinden sich direkt per QR-Code — kein Server, nur kurz Internet oder gleiches WLAN zum Aufbau.</p>
-              <ol class="help-steps">
-                <li>Ornithologie → <span class="hl">Kopplung starten</span>. Ein Handy zeigt den QR-Code, das andere scannt ihn, dann den Antwort-Code zurück.</li>
-                <li>Für ein drittes Gerät auf „➕ Weiteres Handy koppeln" tippen — die Zentrale verbindet alle.</li>
-                <li>Oben erscheint ein <span class="hl">💬-Symbol</span>: darüber öffnet sich der Chat als eigenes Fenster (schreiben oder Sprachnachricht per Halten).</li>
-              </ol>
+              <p><b>Kamera öffnen:</b> Unten über dem Auslöser wählst du <b>Foto</b>, <b>Video</b> oder <b>Zeitraffer</b>. Zoomen mit dem Regler oder mit zwei Fingern (auch ohne Hardware-Zoom); gespeichert wird genau der sichtbare Ausschnitt. <b>Auto-Zoom</b> (Video) fährt langsam rein oder raus — ohne am Handy zu wackeln.</p>
               <figure class="help-fig">
-                <img src="docs/help/pairing-connected.png" alt="Verbunden-Ansicht mit Zentrale und nummerierten Partnern" style="width:100%;border-radius:14px;display:block">
-                <figcaption>Nach dem Koppeln: die Zentrale (⭐) und ihre Partner-Handys (nummeriert) stehen in der Liste. Dasselbe Abzeichen — ★ für die Zentrale, eine Zahl für die eigene Partner-Nummer — sitzt auch klein auf dem Kopplungs-Icon oben in der App.</figcaption>
+                <img src="docs/help/camera-zoom.png" alt="Kamera im Video-Modus mit geöffnetem Auto-Zoom-Panel" loading="lazy">
+                <figcaption>Video-Modus mit Auto-Zoom: Richtung, Tempo und Steuerung (nach Zeit oder per Stop).</figcaption>
               </figure>
-              <figure class="help-fig">
-                <img src="docs/help/chat-window.png" alt="Chat-Fenster mit Text- und Sprachnachricht" style="width:100%;border-radius:14px;display:block">
-                <figcaption>Das Nachrichten-Fenster: Text tippen oder das Mikrofon-Symbol halten für eine Sprachnachricht.</figcaption>
-              </figure>
-              <div class="help-note">Bricht die Verbindung ab, meldet sich die App mit Vibration <b>und</b> einem Ton — praktisch, wenn der Blick gerade durch den Kamerasucher geht statt aufs Handy-Display.</div>
+              <p><b>Galerie:</b> alle Tonaufnahmen und Fotos — abspielen, zuschneiden, herunterladen, teilen (auch als Video aus Foto + Ruf). <b>Licht:</b> goldene und blaue Stunde, Wetter, Mond. <b>Wecker:</b> Fotografen-Wecker zum Sonnenaufgang. <b>Tipps:</b> Ethik &amp; Bildqualität.</p>
+              <div class="help-note">Bei starkem Digital-Zoom lieber näher heran statt ganz aufziehen — die Schärfe bleibt so besser.</div>
             </div>
           </details>
 
           <details class="help-sec">
-            <summary><span class="hs-ico">🎯</span>Richtungserkennung — so geht's am besten<svg class="hs-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></summary>
+            <summary><span class="hs-ico"><svg class="ic"><use href="#i-book"/></svg></span>Feldbuch<svg class="ic ic-sm hs-chev"><use href="#i-chev"/></svg></summary>
             <div class="help-body">
-              <p>Mehrere gekoppelte Handys können gemeinsam bestimmen, <b>aus welcher Richtung</b> ein Ruf kam — indem sie messen, bei welchem Gerät der Schall <span class="hl">Sekundenbruchteile früher</span> ankam.</p>
-
-              <p style="color:var(--lime);font-weight:600;margin-top:4px">Schritt 1 — Feinabgleich (einmalig)</p>
-              <figure class="help-fig">
-                <svg viewBox="0 0 300 120" xmlns="http://www.w3.org/2000/svg">
-                  <rect x="70" y="42" width="34" height="60" rx="6" fill="none" stroke="#a3e635" stroke-width="2.5"/>
-                  <rect x="196" y="42" width="34" height="60" rx="6" fill="none" stroke="#67e8f9" stroke-width="2.5"/>
-                  <text x="87" y="118" fill="#a3e635" font-size="11" text-anchor="middle" font-family="Inter,sans-serif">Handy A</text>
-                  <text x="213" y="118" fill="#67e8f9" font-size="11" text-anchor="middle" font-family="Inter,sans-serif">Handy B</text>
-                  <text x="150" y="30" fill="#ecfdf5" font-size="22" text-anchor="middle">👏</text>
-                  <path d="M120 60 Q150 44 180 60" fill="none" stroke="#ecfdf5" stroke-width="1.5" opacity=".5" stroke-dasharray="3 3"/>
-                  <path d="M120 78 Q150 94 180 78" fill="none" stroke="#ecfdf5" stroke-width="1.5" opacity=".5" stroke-dasharray="3 3"/>
-                </svg>
-                <figcaption>Handys direkt <b>nebeneinander</b> legen. Die App spielt einen kurzen <b>Kalibrier-Ton</b> ab, den alle gleichzeitig hören — daraus lernt sie den Geräte-Zeitversatz und rechnet ihn später heraus.</figcaption>
-              </figure>
-              <p>Nur auf der <b>Zentrale</b> (das Handy, mit dem sich die anderen gekoppelt haben) auf <span class="hl">🎯 Feinabgleich starten</span> tippen. Auf den anderen Handys geht automatisch ein Popup auf und das Lauschen schaltet sich selbst ein — die App zählt runter und spielt dann <b>einen Kalibrier-Ton</b> ab, den alle Geräte aufnehmen. Ohne diesen Schritt ist besonders die 3-Handy-Ortung meist zu ungenau.</p>
-              <div class="help-note">📍 <b>Position genauer machen:</b> Auf der <span class="hl">Karte</span> gibt es oben rechts einen 📍-Knopf — antippen, dann auf die Karte tippen, um deinen genauen Standpunkt zu setzen. Das ist präziser als GPS und verbessert die Peilung spürbar (hebt sich automatisch auf, sobald du dich bewegst). Die App mittelt außerdem im Stand mehrere GPS-Messungen für einen ruhigeren Punkt.</div>
-              <div class="help-note">🎯 Ein erfolgreicher 3-Handy-Fund erscheint auch als <b>Marker auf der Fundkarte</b> — mit einem Kreis für die Unsicherheit.</div>
-
-              <p style="color:var(--lime);font-weight:600;margin-top:6px">Schritt 2 — auseinandergehen</p>
-              <figure class="help-fig">
-                <svg viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg">
-                  <!-- Vogel -->
-                  <text x="150" y="26" font-size="20" text-anchor="middle">🐦</text>
-                  <!-- Schallwellen -->
-                  <path d="M120 30 A40 40 0 0 1 180 30" fill="none" stroke="#a3e635" stroke-width="1.4" opacity=".55"/>
-                  <path d="M108 34 A58 58 0 0 1 192 34" fill="none" stroke="#a3e635" stroke-width="1.4" opacity=".35"/>
-                  <!-- zwei Handys -->
-                  <circle cx="70" cy="120" r="9" fill="#a3e635"/>
-                  <circle cx="230" cy="120" r="9" fill="#67e8f9"/>
-                  <text x="70" y="145" fill="#a3e635" font-size="10.5" text-anchor="middle" font-family="Inter,sans-serif">Du</text>
-                  <text x="230" y="145" fill="#67e8f9" font-size="10.5" text-anchor="middle" font-family="Inter,sans-serif">Partner</text>
-                  <line x1="70" y1="120" x2="230" y2="120" stroke="#5a6b60" stroke-width="1.4" stroke-dasharray="4 4"/>
-                  <text x="150" y="115" fill="#8a9a8f" font-size="10" text-anchor="middle" font-family="Inter,sans-serif">30–50 m</text>
-                  <line x1="150" y1="34" x2="76" y2="112" stroke="#a3e635" stroke-width="1.2" opacity=".5"/>
-                  <line x1="150" y1="34" x2="224" y2="112" stroke="#67e8f9" stroke-width="1.2" opacity=".5"/>
-                </svg>
-                <figcaption>Danach <b>30–50 m auseinandergehen</b> und beide weiter lauschen. Je größer der Abstand, desto genauer die Richtung.</figcaption>
-              </figure>
-
-              <p style="color:var(--lime);font-weight:600;margin-top:6px">Zu zweit: zwei mögliche Richtungen</p>
-              <figure class="help-fig">
-                <svg viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg">
-                  <line x1="60" y1="110" x2="240" y2="110" stroke="#5a6b60" stroke-width="1.4"/>
-                  <circle cx="60" cy="110" r="8" fill="#a3e635"/>
-                  <circle cx="240" cy="110" r="8" fill="#67e8f9"/>
-                  <!-- zwei gespiegelte Keulen -->
-                  <path d="M150 110 L96 20 L150 32 Z" fill="#a3e635" opacity=".22"/>
-                  <path d="M150 110 L204 20 L150 32 Z" fill="#a3e635" opacity=".22"/>
-                  <path d="M150 110 L96 20" stroke="#a3e635" stroke-width="1.5" opacity=".8"/>
-                  <path d="M150 110 L204 20" stroke="#a3e635" stroke-width="1.5" opacity=".8"/>
-                  <text x="96" y="15" font-size="15" text-anchor="middle">🐦</text>
-                  <text x="204" y="15" font-size="15" text-anchor="middle">🐦</text>
-                  <text x="150" y="132" fill="#8a9a8f" font-size="10" text-anchor="middle" font-family="Inter,sans-serif">? oder ?</text>
-                </svg>
-                <figcaption>Mit <b>zwei</b> Handys bleiben physikalisch zwei gespiegelte Richtungen möglich. Die App zeigt beide ehrlich als „Möglichkeit 1/2 von 2" und sagt, wer näher dran war.</figcaption>
-              </figure>
-
-              <p style="color:var(--lime);font-weight:600;margin-top:6px">Zu dritt: eindeutig</p>
-              <figure class="help-fig">
-                <svg viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg">
-                  <!-- Dreieck aus 3 Handys -->
-                  <polygon points="70,120 230,120 150,60" fill="none" stroke="#5a6b60" stroke-width="1.2" stroke-dasharray="4 4"/>
-                  <circle cx="70" cy="120" r="8" fill="#a3e635"/>
-                  <circle cx="230" cy="120" r="8" fill="#67e8f9"/>
-                  <circle cx="150" cy="60" r="8" fill="#fbbf24"/>
-                  <!-- Zielvogel eindeutig -->
-                  <line x1="70" y1="120" x2="150" y2="30" stroke="#a3e635" stroke-width="1.2" opacity=".55"/>
-                  <line x1="230" y1="120" x2="150" y2="30" stroke="#67e8f9" stroke-width="1.2" opacity=".55"/>
-                  <line x1="150" y1="60" x2="150" y2="30" stroke="#fbbf24" stroke-width="1.2" opacity=".55"/>
-                  <text x="150" y="24" font-size="17" text-anchor="middle">🐦</text>
-                  <circle cx="150" cy="30" r="13" fill="none" stroke="#a3e635" stroke-width="1.6"/>
-                </svg>
-                <figcaption>Mit <b>drei</b> Handys schneiden sich die Messungen in <b>einem Punkt</b> — die App zeigt eine eindeutige Richtung samt ungefährer Entfernung.</figcaption>
-              </figure>
-
-              <p style="color:var(--lime);font-weight:600;margin-top:10px">Wie ihr euch am besten aufstellt</p>
-              <p>Die Aufstellung entscheidet oft mehr über die Genauigkeit als alles andere. Zwei Faustregeln:</p>
-              <figure class="help-fig">
-                <svg viewBox="0 0 300 100" xmlns="http://www.w3.org/2000/svg">
-                  <text x="75" y="18" font-size="12" font-weight="700" fill="#a3e635" text-anchor="middle" font-family="Outfit,sans-serif">✅ gut</text>
-                  <line x1="30" y1="70" x2="120" y2="70" stroke="#5a6b60" stroke-width="1.4"/>
-                  <circle cx="30" cy="70" r="7" fill="#a3e635"/><circle cx="120" cy="70" r="7" fill="#67e8f9"/>
-                  <text x="75" y="35" font-size="16" text-anchor="middle">🐦</text>
-                  <line x1="75" y1="42" x2="75" y2="70" stroke="#a3e635" stroke-width="1.3" stroke-dasharray="3 3" opacity=".7"/>
-                  <text x="75" y="90" font-size="9" fill="#8a9a8f" text-anchor="middle" font-family="Inter,sans-serif">quer zur Linie</text>
-                  <text x="225" y="18" font-size="12" font-weight="700" fill="#fb7185" text-anchor="middle" font-family="Outfit,sans-serif">❌ schlecht</text>
-                  <line x1="180" y1="70" x2="270" y2="70" stroke="#5a6b60" stroke-width="1.4"/>
-                  <circle cx="180" cy="70" r="7" fill="#a3e635"/><circle cx="270" cy="70" r="7" fill="#67e8f9"/>
-                  <text x="290" y="74" font-size="16" text-anchor="middle">🐦</text>
-                  <line x1="180" y1="70" x2="282" y2="70" stroke="#fb7185" stroke-width="1.3" stroke-dasharray="3 3" opacity=".7"/>
-                  <text x="225" y="90" font-size="9" fill="#8a9a8f" text-anchor="middle" font-family="Inter,sans-serif">in der Verlängerung</text>
-                </svg>
-                <figcaption>Steht die Quelle quer zur Linie zwischen euch, reagiert der Zeitunterschied empfindlich auf jede Winkeländerung — die Peilung wird scharf. Liegt sie stattdessen genau in der Verlängerung eurer Linie, bleibt der Zeitunterschied über einen großen Winkelbereich fast gleich — die Peilung wird unscharf und beide Spiegel-Zonen rutschen zusammen.</figcaption>
-              </figure>
-              <figure class="help-fig">
-                <svg viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg">
-                  <text x="75" y="18" font-size="12" font-weight="700" fill="#a3e635" text-anchor="middle" font-family="Outfit,sans-serif">✅ gut</text>
-                  <polygon points="35,110 115,110 75,50" fill="none" stroke="#5a6b60" stroke-width="1.2" stroke-dasharray="4 4"/>
-                  <circle cx="35" cy="110" r="6" fill="#a3e635"/><circle cx="115" cy="110" r="6" fill="#67e8f9"/><circle cx="75" cy="50" r="6" fill="#fbbf24"/>
-                  <text x="75" y="132" font-size="9" fill="#8a9a8f" text-anchor="middle" font-family="Inter,sans-serif">weites Dreieck</text>
-                  <text x="225" y="18" font-size="12" font-weight="700" fill="#fb7185" text-anchor="middle" font-family="Outfit,sans-serif">❌ schlecht</text>
-                  <line x1="175" y1="90" x2="275" y2="90" stroke="#5a6b60" stroke-width="1.2" stroke-dasharray="4 4"/>
-                  <circle cx="175" cy="90" r="6" fill="#a3e635"/><circle cx="225" cy="88" r="6" fill="#67e8f9"/><circle cx="275" cy="90" r="6" fill="#fbbf24"/>
-                  <text x="225" y="132" font-size="9" fill="#8a9a8f" text-anchor="middle" font-family="Inter,sans-serif">alle in einer Reihe</text>
-                </svg>
-                <figcaption>Zu dritt: stellt euch als <b>möglichst weites Dreieck</b> auf (z. B. eine Person etwas zurück oder seitlich versetzt), nicht alle drei entlang einer Linie — sonst liefert das dritte Handy kaum zusätzliche Information und der Fix bleibt genauso unscharf wie mit zwei Handys.</figcaption>
-              </figure>
-
-              <p style="color:var(--lime);font-weight:600;margin-top:6px">Schritt 3 — AR-Peilung</p>
-              <p>Im Ortungs-Fenster auf <span class="hl">📷 AR-Peilung</span> tippen: das Kamerabild öffnet sich, oben ein Kompassband. Schwenke das Handy, bis die <b>grüne Zone</b> mittig steht — dort sitzt der Vogel.</p>
-              <figure class="help-fig">
-                <img src="docs/help/ar-view.png" alt="AR-Peilung mit Kompassband und Richtungszone" style="width:100%;border-radius:14px;display:block">
-                <figcaption>Die AR-Peilung bei drei Handys: eine Zone mit Art, Entfernungsspanne und Kompassband. Verpasst du das Ortungs-Popup, holt der Button „Letzte Ortung in AR zeigen" im Kopplungs-Fenster es bis zu 10 Minuten lang zurück.</figcaption>
-              </figure>
-              <div class="help-note warn">Ehrlich bleiben: Die <b>Richtung</b> ist zuverlässig, die <b>Entfernung</b> nur ungefähr — darum zeigt die App Spannen wie „~45–120 m". Steht ihr weiter auseinander, wird auch die Entfernung besser.</div>
-              <div class="help-note">Faustregel: <b>Feinabgleich (Kalibrier-Ton) → auseinandergehen → gemeinsam lauschen → hinschwenken.</b> Mit drittem Handy wird's eindeutig.</div>
+              <p><b>Punkt-Zählung:</b> 5-Minuten-Zählung nach BirdLife-Standard. <b>Transekt-Zählung:</b> eine Strecke ablaufen, GPS zeichnet die Route auf. Beide laufen auch im Tab Lauschen weiter (Banner über der Liste).</p>
+              <p><b>Protokolle</b> listet alle Zählungen (mit GPX-Export für Transekte). <b>Export</b> ist die zentrale Stelle für eBird, ornitho.de, BirdNET Notebook und NABU — für „Heute hier“ oder „Alles“, auf Wunsch nur ausgewählte Sitzungen.</p>
             </div>
           </details>
 
           <details class="help-sec">
-            <summary><span class="hs-ico">💾</span>Daten &amp; Sicherung<svg class="hs-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></summary>
+            <summary><span class="hs-ico"><svg class="ic"><use href="#i-disk"/></svg></span>Daten &amp; Sicherung<svg class="ic ic-sm hs-chev"><use href="#i-chev"/></svg></summary>
             <div class="help-body">
-              <p>Alles bleibt <b>nur auf diesem Gerät</b> — kein Konto, keine Cloud. Foto-/Videoaufnahmen sind an die aktuelle Sitzung gebunden.</p>
-              <p>Sichere deine Funde regelmäßig über <span class="hl">Einstellungen → Sicherung → Backup erstellen</span>, besonders vor einem Handywechsel oder App-Update.</p>
+              <p>Alles bleibt <b>nur auf diesem Gerät</b> — kein Konto, keine Cloud.</p>
+              <p>Sichere deine Funde regelmäßig über <span class="hl">Einstellungen → Daten → Backup erstellen</span>, besonders vor einem Handywechsel oder App-Update.</p>
             </div>
           </details>
 
         </div>
-        <div class="actions"><button class="btn ghost" id="helpClose">Schließen</button></div>
       </div>
     </div>
 
-    <!-- ============ FOTO-TIPPS ============ -->
-    <div class="modal" id="tipsModal">
-      <div class="scrim" id="tipsScrim"></div>
-      <div class="sheet">
-        <div class="grab"></div>
-        <h2 style="font-size:20px;margin-bottom:4px">📸 Tipps für Fotografen</h2>
-        <div class="ethics-banner">Kein Foto ist wichtiger als ein gestresstes Tier.</div>
-        <div class="tiplist">
-          <div class="tiprow"><b>Goldene Stunde nutzen</b><span>Früh morgens und kurz vor Sonnenuntergang gibt warmes, weiches Licht die besten Fotos — gleichzeitig ist dann auch die Vogelaktivität am höchsten.</span></div>
-          <div class="tiprow"><b>Sonne im Rücken</b><span>Mit der Sonne hinter dir fotografieren, nicht gegen das Licht — sonst wird das Tier zur Silhouette.</span></div>
-          <div class="tiprow"><b>Langsam und ruhig bewegen</b><span>Hektische Bewegungen verscheuchen Vögel sofort. Lieber in kleinen Schritten annähern, nicht frontal nähern, und zwischendurch stehen bleiben.</span></div>
-          <div class="tiprow"><b>Warten statt hinterherlaufen</b><span>An einer Sitzwarte, Futterstelle oder einem Wasserloch in Deckung warten bringt meist bessere Bilder als aktives Verfolgen.</span></div>
-          <div class="tiprow"><b>Kamera vorher einstellen</b><span>Belichtung, Fokusmodus und Verschlusszeit schon vor der Annäherung einstellen — am Tier selbst herumzufummeln kostet den Moment.</span></div>
-          <div class="tiprow"><b>Gedeckte Kleidung</b><span>Unauffällige, gedeckte Farben statt grell — am besten aus dem Auto oder einem Tarnversteck fotografieren.</span></div>
-          <div class="tiprow"><b>Schnelle Verschlusszeit</b><span>Für Vögel in Bewegung mindestens 1/1000 s, sonst verwischen Flügel und Kopf.</span></div>
-          <div class="tiprow"><b>Fokus aufs Auge</b><span>Das Auge sollte immer scharf sein — es entscheidet, ob ein Tierfoto lebendig wirkt.</span></div>
-          <div class="tiprow"><b>Abstand halten</b><span>Brutplätze und Nester nie stören oder zu nah herangehen — Tierwohl geht vor dem perfekten Bild.</span></div>
-          <div class="tiprow"><b>Auf den Hintergrund achten</b><span>Ein ruhiger, einfarbiger Hintergrund lässt das Tier viel stärker hervortreten als ein unruhiges Geäst.</span></div>
-        </div>
-        <div class="actions"><button class="btn ghost" id="tipsClose">Schließen</button></div>
-      </div>
-    </div>
-
-    <!-- ============ BEOBACHTUNGSLISTE ============ -->
+    <!-- ============ SUCHLISTE ============ -->
     <div class="modal" id="favModal">
       <div class="scrim" id="favScrim"></div>
-      <div class="sheet">
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="favTitle">
         <div class="grab"></div>
-        <h2 style="font-size:20px;margin-bottom:4px">Beobachtungsliste</h2>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Markierte Arten lösen wie seltene Funde sofort einen Alarm aus, sobald sie live erkannt werden.</p>
-        <input id="favSearch" type="search" autocomplete="off" placeholder="Art suchen, z. B. Wanderfalke oder Falco peregrinus…" class="favsearch" />
+        <div class="sheet-head">
+          <h2 id="favTitle">Suchliste</h2>
+          <button class="iconbtn" id="favClose" aria-label="Schließen"><svg class="ic"><use href="#i-x"/></svg></button>
+        </div>
+        <p class="sheet-sub">Markierte Arten lösen wie seltene Funde sofort einen Alarm aus, sobald sie live erkannt werden.</p>
+        <input id="favSearch" type="search" autocomplete="off" placeholder="Art suchen, z. B. Wanderfalke" class="field favsearch" aria-label="Art suchen" />
         <div class="favlist" id="favList"></div>
-        <div class="actions"><button class="btn ghost" id="favClose">Schließen</button></div>
       </div>
     </div>
 
-    <!-- ============ FOTO+AUDIO MIXER ============ -->
+    <!-- ============ TEILEN (Foto / Foto + Ton) ============ -->
     <div id="mixerModal" class="mixer-modal" hidden>
       <div id="mixerScrim" class="mixer-scrim"></div>
-      <div class="mixer-sheet">
+      <div class="mixer-sheet" role="dialog" aria-modal="true" aria-labelledby="mixerTitle">
         <div class="grab"></div>
-        <h3 class="mixer-title">📤 Teilen</h3>
+        <h3 class="mixer-title" id="mixerTitle">Teilen</h3>
         <button id="mixerDirectShare" class="export-btn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+          <svg class="ic"><use href="#i-share"/></svg>
           <div><strong>Foto-Karte teilen</strong><span>Fertige Share-Karte (1080 × 1080 JPG)</span></div>
         </button>
-        <div class="mixer-or">— oder —</div>
-        <p class="mixer-combo-label">🎵 Foto + Tonaufnahme → Video</p>
+        <div class="mixer-or">oder</div>
+        <p class="mixer-combo-label">Foto + Tonaufnahme als Video</p>
         <div id="mixerAudioList" class="mixer-audio-list"></div>
-        <button id="mixerRenderBtn" class="mixer-render-btn" disabled>🎬 Video rendern &amp; teilen</button>
+        <button id="mixerRenderBtn" class="mixer-render-btn" disabled>Video erstellen &amp; teilen</button>
         <div id="mixerProgress" class="mixer-progress" hidden>
           <div class="mixer-prog-track"><div id="mixerProgFill" class="mixer-prog-fill"></div></div>
-          <div id="mixerProgLabel" class="mixer-prog-label">Rendering…</div>
+          <div id="mixerProgLabel" class="mixer-prog-label">Wird erstellt…</div>
         </div>
       </div>
     </div>
 
-    <!-- ============ CUSTOM CAMERA ============ -->
+    <!-- ============ KAMERA ============ -->
     <div id="cameraModal" class="cam-modal">
       <div class="cam-video-wrap">
         <video id="camVideo" autoplay playsinline muted webkit-playsinline></video>
         <video id="camVideo2" class="cam-pip" autoplay playsinline muted webkit-playsinline hidden></video>
-        <canvas id="camCanvas" style="display:none"></canvas>
+        <canvas id="camCanvas" class="hidden-input"></canvas>
         <div class="cam-top">
-          <button class="cam-ctrl-btn" id="camClose" aria-label="Schließen">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="20" height="20"><path d="M18 6 6 18M6 6l12 12"/></svg>
-          </button>
-          <div class="cam-mode-toggle">
-            <button id="camModePhoto" class="cam-mode-btn on">📷 Foto</button>
-            <button id="camModeVideo" class="cam-mode-btn">🎬 Video</button>
-            <button id="camModeLapse" class="cam-mode-btn">⏱ Zeitraffer</button>
-          </div>
-          <div style="display:flex;gap:8px">
-            <button class="cam-ctrl-btn" id="camCrosshairToggle" aria-label="Fadenkreuz ein/aus" title="Fadenkreuz ein/aus">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" width="20" height="20"><circle cx="12" cy="12" r="7"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
-            </button>
-            <button class="cam-ctrl-btn" id="camFlip" aria-label="Kamera wechseln" title="Kamera wechseln">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M1 4v6h6M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
-            </button>
-            <button class="cam-ctrl-btn" id="camGalleryBtn" aria-label="Aufnahmen & Fotos" title="Aufnahmen & Fotos — zum Öffnen tippen" style="position:relative">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none"/><path d="M21 15l-5-5L5 21"/></svg>
-            </button>
+          <button class="cam-ctrl-btn" id="camClose" aria-label="Kamera schließen"><svg class="ic"><use href="#i-x"/></svg></button>
+          <div class="cam-top-right">
+            <button class="cam-ctrl-btn" id="camCrosshairToggle" aria-label="Fadenkreuz ein/aus" title="Fadenkreuz ein/aus"><svg class="ic"><use href="#i-target"/></svg></button>
+            <button class="cam-ctrl-btn" id="camFlip" aria-label="Kamera wechseln" title="Kamera wechseln"><svg class="ic"><use href="#i-refresh"/></svg></button>
+            <button class="cam-ctrl-btn" id="camGalleryBtn" aria-label="Zur Galerie" title="Zur Galerie"><svg class="ic"><use href="#i-grid"/></svg></button>
           </div>
         </div>
         <div id="camCrosshair" class="cam-crosshair" hidden></div>
         <canvas id="camMeter" class="cam-meter" width="200" height="36"></canvas>
         <div id="camRecIndicator" class="cam-rec-pill" hidden>⏺ REC</div>
         <div class="cam-zoom-wrap" id="camZoomWrap" hidden>
-          <input type="range" id="camZoom" class="cam-zoom-slider" min="1" max="5" step="0.1" value="1"/>
+          <input type="range" id="camZoom" class="cam-zoom-slider" min="1" max="5" step="0.1" value="1" aria-label="Zoom"/>
           <button class="cam-az-toggle-btn" id="camAzToggle" hidden title="Auto-Zoom" aria-label="Auto-Zoom">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path d="M15 10l4.553-2.069A1 1 0 0 1 21 8.82v6.361a1 1 0 0 1-1.447.894L15 14"/><rect x="2" y="7" width="13" height="10" rx="2"/><path d="M8 7V5M12 7V5M8 17v2M12 17v2" stroke-width="1.5" opacity=".6"/></svg>
           </button>
@@ -994,21 +785,21 @@
             <span class="cam-az-label">Auto-Zoom</span>
             <div class="cam-az-btns">
               <button class="cam-az-btn on" id="camAzOff">Aus</button>
-              <button class="cam-az-btn" id="camAzIn">↑ Rein</button>
-              <button class="cam-az-btn" id="camAzOut">↓ Raus</button>
+              <button class="cam-az-btn" id="camAzIn">Rein</button>
+              <button class="cam-az-btn" id="camAzOut">Raus</button>
             </div>
           </div>
-          <div class="cam-az-row" style="margin-top:5px">
+          <div class="cam-az-row">
             <span class="cam-az-label">Tempo</span>
             <div class="cam-az-btns">
               <button class="cam-az-btn" id="camAzFast">Schnell</button>
               <button class="cam-az-btn on" id="camAzSlow">Langsam</button>
             </div>
           </div>
-          <div class="cam-az-row" style="margin-top:5px">
+          <div class="cam-az-row">
             <span class="cam-az-label">Steuerung</span>
             <div class="cam-az-btns">
-              <button class="cam-az-btn" id="camAzDelay" title="3 Sek Verzögerung dann starten">
+              <button class="cam-az-btn" id="camAzDelay" title="3 Sek Verzögerung, dann starten">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> 3s
               </button>
               <button class="cam-az-btn" id="camAzStop" title="Zoom sanft stoppen">
@@ -1033,109 +824,34 @@
           <span>Zeitraffer wird erstellt…</span>
         </div>
         <div class="cam-bottom">
-          <select id="camCamSelect" class="cam-device-select" title="Kamera"></select>
-          <select id="camMicSelect" class="cam-device-select" title="Mikrofon"></select>
-          <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
-            <div id="camPhotoExtras" style="display:flex;gap:10px">
-              <button id="camBurst" class="cam-ctrl-btn" title="Serienaufnahme (2 Sek)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><rect x="2" y="6" width="6" height="12" rx="1"/><rect x="9" y="6" width="6" height="12" rx="1"/><rect x="16" y="6" width="6" height="12" rx="1"/></svg>
-              </button>
-              <button id="camInterval" class="cam-ctrl-btn" title="Intervall (alle 3 Sek)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><line x1="5" y1="19" x2="5" y2="21"/><line x1="9" y1="20" x2="9" y2="22"/><line x1="13" y1="20" x2="13" y2="22"/></svg>
-              </button>
+          <!-- Modus-Umschalter unten über dem Auslöser (Daumenbereich), reiner Text: oben neben den
+               Knöpfen wurde "Zeitraffer" abgeschnitten. IDs unverändert (camera.js schaltet .on). -->
+          <div class="cam-mode-toggle" role="group" aria-label="Aufnahmemodus">
+            <button id="camModePhoto" class="cam-mode-btn on">Foto</button>
+            <button id="camModeVideo" class="cam-mode-btn">Video</button>
+            <button id="camModeLapse" class="cam-mode-btn">Zeitraffer</button>
+          </div>
+          <div class="cam-bottom-row">
+            <select id="camCamSelect" class="cam-device-select" title="Kamera" aria-label="Kamera"></select>
+            <select id="camMicSelect" class="cam-device-select" title="Mikrofon" aria-label="Mikrofon"></select>
+            <div class="cam-shutter-col">
+              <div id="camPhotoExtras" class="cam-extras">
+                <button id="camBurst" class="cam-ctrl-btn" title="Serienaufnahme (2 Sek)" aria-label="Serienaufnahme">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><rect x="2" y="6" width="6" height="12" rx="1"/><rect x="9" y="6" width="6" height="12" rx="1"/><rect x="16" y="6" width="6" height="12" rx="1"/></svg>
+                </button>
+                <button id="camInterval" class="cam-ctrl-btn" title="Intervall (alle 3 Sek)" aria-label="Intervallaufnahme">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><line x1="5" y1="19" x2="5" y2="21"/><line x1="9" y1="20" x2="9" y2="22"/><line x1="13" y1="20" x2="13" y2="22"/></svg>
+                </button>
+              </div>
+              <button id="camCapture" class="cam-shutter" aria-label="Auslösen"></button>
             </div>
-            <button id="camCapture" class="cam-shutter" aria-label="Auslösen"></button>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- ============ PARTNER KOPPELN (WebRTC + QR) ============ -->
-    <div class="modal" id="pairModal">
-      <div class="scrim" id="pairScrim"></div>
-      <div class="sheet">
-        <div class="grab"></div>
-        <h2 style="font-size:18px;margin-bottom:4px">🤝 Partner koppeln</h2>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:16px">Verbindet zwei Handys direkt miteinander per QR-Code — kein Server. Beide Geräte brauchen kurz Internet oder dasselbe WLAN zum Verbindungsaufbau.</p>
-
-        <div id="pairChoice">
-          <button class="btn ghost" id="pairShowBtn" style="width:100%;margin-bottom:10px">📱 QR-Code zeigen — ich werde die Zentrale ★</button>
-          <button class="btn ghost" id="pairScanBtn" style="width:100%">📷 QR-Code scannen</button>
-          <div style="font-size:11px;color:var(--faint);text-align:center;margin-top:10px">⭐ Wer zuerst "QR-Code zeigen" tippt, wird für diese Kopplung die Zentrale (Host) — z. B. nur die Zentrale kann später den Feinabgleich starten.</div>
-        </div>
-
-        <div id="pairShowStep" hidden>
-          <div id="pairStatus" style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:12px">Code wird erstellt…</div>
-          <canvas id="pairQrCanvas" style="display:block;margin:0 auto 14px;border-radius:12px"></canvas>
-          <p style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:14px">Lass das andere Handy diesen Code scannen.</p>
-          <button class="btn ghost" id="pairShowScanAnswerBtn" style="width:100%" hidden>📷 Antwort-Code scannen</button>
-        </div>
-
-        <div id="pairScanStep" hidden>
-          <div style="position:relative;border-radius:16px;overflow:hidden;background:#000;margin-bottom:12px">
-            <video id="pairScanVideo" autoplay playsinline muted style="width:100%;display:block;max-height:280px;object-fit:cover"></video>
-            <select id="pairScanCamSelect" class="cam-device-select" title="Kamera" hidden style="position:absolute;bottom:8px;right:8px;max-width:130px"></select>
-          </div>
-          <div id="pairScanStatus" style="font-size:13px;color:var(--muted);text-align:center">Richte die Kamera auf den QR-Code…</div>
-        </div>
-
-        <div id="pairAnswerStep" hidden>
-          <div style="font-size:13px;color:var(--muted);text-align:center;margin-bottom:12px">Zeig dieses Handy jetzt zurück — Partner scannt die Antwort:</div>
-          <canvas id="pairAnswerQrCanvas" style="display:block;margin:0 auto 14px;border-radius:12px"></canvas>
-          <div id="pairAnswerStatus" style="font-size:13px;color:var(--muted);text-align:center">Warte auf Verbindung…</div>
-        </div>
-
-        <div id="pairConnectedStep" hidden>
-          <div style="text-align:center;padding:10px 0 14px">
-            <div style="font-size:36px;margin-bottom:4px">✅</div>
-            <div style="font-size:15px;font-weight:700;color:var(--lime)">Verbunden!</div>
-            <div id="pairConnectedSub" style="font-size:11px;color:var(--muted);margin-top:4px">Bereit für weitere Funktionen.</div>
-          </div>
-          <div id="pairPeerList" class="pair-peer-list"></div>
-          <button type="button" class="btn ghost" id="pairAddDeviceBtn" style="width:100%;margin-bottom:6px">➕ Weiteres Handy koppeln</button>
-          <div id="pairAddDeviceHint" style="font-size:11px;color:var(--faint);text-align:center;margin-bottom:10px">Nur die Zentrale kann weitere Handys einladen — sonst würde ein zweiter "Knotenpunkt" entstehen und beide Seiten fälschlich als Zentrale erscheinen. Bitte die Zentrale bitten, das neue Handy einzuladen.</div>
-          <button type="button" class="btn ghost" id="pairCalibBtn" style="width:100%;margin-bottom:6px">🎯 Feinabgleich starten (für alle Handys)</button>
-          <div id="pairCalibHint" style="font-size:11px;color:var(--faint);text-align:center;margin-bottom:6px">Alle Handys nebeneinander legen, Lautstärke aufdrehen — startet das Lauschen automatisch und spielt einen kurzen Kalibrier-Ton ab.</div>
-          <div id="pairCalibStatus" style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:14px" hidden></div>
-          <button type="button" class="btn ghost" id="pairArBtn" style="width:100%;margin-bottom:10px" hidden>📷 Letzte Ortung in AR zeigen</button>
-          <button type="button" class="btn ghost" id="pairOpenChatBtn" style="width:100%;margin-bottom:10px">💬 Nachrichten öffnen</button>
-          <button type="button" class="btn ghost" id="pairSessionReportBtn" style="width:100%">📋 Gemeinsamen Bericht erstellen</button>
-        </div>
-
-        <div class="actions">
-          <button class="btn ghost" id="pairCloseBtn">Schließen</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ============ PARTNER-MESSENGER (eigenes Popup, Schnellzugriff über Topbar-Icon) ============ -->
-    <div class="modal" id="chatModal">
-      <div class="scrim" id="chatScrim"></div>
-      <div class="sheet">
-        <div class="grab"></div>
-        <div class="rechead" style="padding:0 0 12px">
-          <span>💬 Nachrichten</span>
-          <div class="rec-actions">
-            <button class="rec-action-btn" id="chatCloseBtn" title="Schließen" aria-label="Schließen">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          </div>
-        </div>
-        <div id="pairChatList" class="pair-chat-list"></div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button id="pairVoiceBtn" class="pair-voice-btn" aria-label="Sprachnachricht — halten zum Aufnehmen" title="Halten zum Aufnehmen">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="17" height="17"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3"/></svg>
-          </button>
-          <input type="text" id="pairChatInput" placeholder="Nachricht…" maxlength="300" class="pair-chat-input">
-          <button id="pairChatSend" class="pair-chat-send" aria-label="Senden">➤</button>
-        </div>
-        <div id="pairVoiceStatus" class="pair-voice-status" hidden>🔴 Aufnahme… <span id="pairVoiceTimer">0:00</span> — loslassen zum Senden</div>
       </div>
     </div>
 
   </div>
 </div>
-<script src="js/vendor/jsQR.js"></script>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

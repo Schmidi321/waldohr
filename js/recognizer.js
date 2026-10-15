@@ -5,6 +5,7 @@
 // createRecognizer() schaltet automatisch auf BirdNET, sobald das Modell unter
 // models/birdnet/ liegt (sonst Mock). Erzwingen via localStorage 'waldohr.birdnet' = '1'|'0'.
 import { SPECIES, ensureSpecies } from './species.js';
+import { roundCoord } from './util.js';
 
 const WEIGHTS = [
   ['buchfink', 5], ['kohlmeise', 4], ['amsel', 4], ['rotkehlchen', 3],
@@ -16,8 +17,12 @@ function rms(samples) {
   return Math.sqrt(s / samples.length);
 }
 
+// Liefert ZUFÄLLIGE Treffer — darf nie unbemerkt "echte" Funde erzeugen. Darum trägt jedes
+// Ergebnis source:'mock' (app.js übernimmt r.source in den gespeicherten Fund) und die Instanz
+// ein fallbackReason ('no-server' | 'invalid-url' | 'unreachable' | 'model-error'), damit die
+// App dem Nutzer sagen kann, WARUM gerade nur Demo-Treffer kommen.
 export class MockRecognizer {
-  constructor() { this.ready = false; this.id = 'mock'; }
+  constructor(fallbackReason = 'no-server') { this.ready = false; this.id = 'mock'; this.fallbackReason = fallbackReason; }
   async load() { this.ready = true; return true; }
 
   async classify(samples) {
@@ -34,13 +39,25 @@ export class MockRecognizer {
 
 // CDN-Quellen. WICHTIG: tfjs-tflite ist ein UMD+WASM-Paket und lässt sich NICHT als ESM
 // (esm.sh) importieren -> per klassischem <script> laden (globals window.tf / window.tflite).
-const TF_URL      = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4/dist/tf.min.js';
-const TFLITE_URL  = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite/dist/tf-tflite.min.js';
-const TFLITE_WASM = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite/dist/';
+// Exakt gepinnte Versionen + Subresource Integrity: ein Fremd-Script läuft mit vollen Rechten
+// auf unserem Origin (IndexedDB mit allen Funden + GPS, Gemini-Key im localStorage). Ohne Pin
+// (vorher '@4' bzw. gar keine Version) hätte jedes neue npm-Release — oder ein kompromittiertes —
+// ungeprüft hier mitgelesen. Die Hashes gelten NUR für genau diese Dateien: wer die Version
+// hebt, muss sie neu berechnen (Datei laden, `openssl dgst -sha384 -binary f | openssl base64 -A`).
+// tflite-WASM-Pfad zeigt auf dasselbe gepinnte Verzeichnis (die .wasm/Worker-Dateien lädt die
+// Bibliothek selbst nach, dort greift kein SRI — aber wenigstens keine wandernde Version).
+const TF_URL      = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js';
+const TF_SRI      = 'sha384-vE8hbVJ4lezako5rlvE7bY0BVzWlFhZncPlckrqNwcUQpVtgbENTgZ8TBbnPjZre';
+const TFLITE_URL  = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/tf-tflite.min.js';
+const TFLITE_SRI  = 'sha384-h02HIWIG1XW/ShQiKXkmao4waOnYFSvdAf6wVHbMKjOwnq3ks3Z+1P8N1wsNT3WN';
+const TFLITE_WASM = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@0.0.1-alpha.10/dist/';
 
-function loadScript(src) {
+function loadScript(src, integrity) {
   return new Promise((res, rej) => {
     const s = document.createElement('script');
+    // integrity braucht einen CORS-Request (crossOrigin), sonst verweigert der Browser die
+    // Prüfung und lädt gar nicht. jsDelivr liefert Access-Control-Allow-Origin: *.
+    if (integrity) { s.integrity = integrity; s.crossOrigin = 'anonymous'; }
     s.src = src; s.onload = () => res(); s.onerror = () => rej(new Error('script fehlgeschlagen: ' + src));
     document.head.appendChild(s);
   });
@@ -70,7 +87,8 @@ export class BirdNetRecognizer {
   }
 
   async load() {
-    if (!(window.tf && window.tflite)) { await loadScript(TF_URL); await loadScript(TFLITE_URL); }
+    if (this.ready) return true; // createRecognizer() lädt schon vor, app.js ruft load() danach erneut
+    if (!(window.tf && window.tflite)) { await loadScript(TF_URL, TF_SRI); await loadScript(TFLITE_URL, TFLITE_SRI); }
     const tf = window.tf; this.tf = tf;
     this.labels = await this._loadLabels();
     if (await this._exists(this.base + 'model.tflite')) {
@@ -186,14 +204,26 @@ export class ServerRecognizer {
     // Server neugestartet, ...), darum bei jedem Klassifizierungsversuch neu bewertet.
     this.status = 'unknown'; // 'ok' | 'error' | 'unknown'
   }
-  async load() { const r = await fetch(this.url + '/health'); if (!r.ok) throw new Error('BirdNET-Server nicht erreichbar'); this.ready = true; this.status = 'ok'; return true; }
+  async load() {
+    if (this.ready) return true; // idempotent: createRecognizer() prüft schon, app.js ruft load() nochmal
+    // Timeout, weil createRecognizer() beim App-Start darauf wartet — ein Server, der Pakete nur
+    // schluckt (WLAN ohne Internet, falsche IP), würde sonst den Boot minutenlang blockieren.
+    const r = await fetch(this.url + '/health', { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error('BirdNET-Server nicht erreichbar');
+    this.ready = true; this.status = 'ok'; return true;
+  }
   setGeo(pos) { this.geo = pos; }
   async classify(samples, sampleRate) {
     if (!this.ready || this.busy) return null;   // nur eine Anfrage gleichzeitig
     this.busy = true;
     try {
       let q = '?min_conf=0.25';
-      if (this.geo) q += `&lat=${this.geo.lat.toFixed(5)}&lon=${this.geo.lng.toFixed(5)}&week=${week48()}`;
+      // Nur auf 0,1° (≈ 11 km) gerundet: BirdNETs Range-Filter arbeitet ohnehin auf einem groben
+      // Raster (Artenliste je Region/Woche), mehr Genauigkeit bringt keine besseren Treffer —
+      // verrät dem (evtl. fremden) Server aber sonst alle 3 s den exakten Standort.
+      if (this.geo && Number.isFinite(this.geo.lat) && Number.isFinite(this.geo.lng)) {
+        q += `&lat=${roundCoord(this.geo.lat, 1)}&lon=${roundCoord(this.geo.lng, 1)}&week=${week48()}`;
+      }
       const r = await fetch(this.url + '/analyze' + q, {
         method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
         body: encodeWav(samples, sampleRate || 48000)
@@ -202,25 +232,58 @@ export class ServerRecognizer {
       this.status = 'ok';
       const top = ((await r.json()).results || [])[0];
       if (!top) return null;
-      const key = ensureSpecies({ sci: top.sci, name: top.common });
+      // Server-Antwort ist fremde Eingabe: Konfidenz muss eine Zahl 0..1 sein, Namen Strings.
+      const conf = +top.confidence;
+      if (!Number.isFinite(conf) || conf < 0 || conf > 1) return null;
+      if (typeof top.sci !== 'string' && typeof top.common !== 'string') return null;
+      const key = ensureSpecies({ sci: String(top.sci ?? '').slice(0, 120), name: String(top.common ?? '').slice(0, 120) });
       const sp = SPECIES[key];
-      return { key, name: sp.name, sci: sp.sci, rarity: sp.rarity, confidence: +(+top.confidence).toFixed(2), source: 'birdnet-server' };
+      return { key, name: sp.name, sci: sp.sci, rarity: sp.rarity, confidence: +conf.toFixed(2), source: 'birdnet-server' };
     } catch (e) { console.warn('server classify', e); this.status = 'error'; return null; }
     finally { this.busy = false; }
   }
 }
 
+// Nutzer-konfigurierte Server-URL prüfen: nur https:// — oder http:// auf das eigene Gerät
+// (lokaler Entwicklungs-/Heimserver). Klartext-http ins Netz würde jede 3-s-Aufnahme samt
+// Standort unverschlüsselt durchs (Café-)WLAN schicken, und aus der https-PWA heraus blockt der
+// Browser Mixed Content ohnehin. Gibt die normalisierte Basis-URL (ohne Query/Hash/Slash am
+// Ende) zurück oder null.
+export function validateServerUrl(raw) {
+  let u;
+  try { u = new URL(String(raw).trim()); } catch { return null; }
+  if (u.username || u.password) return null; // keine Zugangsdaten in der URL (landen sonst in Logs)
+  const localHttp = u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]');
+  if (u.protocol !== 'https:' && !localHttp) return null;
+  return (u.origin + u.pathname).replace(/\/+$/, '');
+}
+
+// Liefert IMMER einen Erkenner. Kann der gewünschte (Server / On-Device-Modell) nicht genutzt
+// werden, kommt ein MockRecognizer mit gesetztem fallbackReason zurück — app.js muss das prüfen
+// (rec.id === 'mock'), statt Zufallstreffer still als echte Funde zu speichern. Darum wird der
+// echte Erkenner HIER schon geladen (load() ist idempotent, der spätere Aufruf in app.js kostet
+// nichts), sonst könnte nur app.js den Fehlschlag sehen und der Grund ginge verloren.
 export async function createRecognizer() {
-  const ls = k => (typeof localStorage !== 'undefined') ? localStorage.getItem(k) : null;
-  const serverUrl = ls('waldohr.server');     // z. B. 'http://localhost:8800'
-  if (serverUrl) return new ServerRecognizer(serverUrl);
+  const ls = k => { try { return (typeof localStorage !== 'undefined') ? localStorage.getItem(k) : null; } catch { return null; } };
+  const serverUrl = ls('waldohr.server');     // z. B. 'https://….hf.space' oder 'http://localhost:8800'
+  if (serverUrl) {
+    const url = validateServerUrl(serverUrl);
+    if (!url) { console.warn('BirdNET-Server-URL abgelehnt (nur https:// oder http://localhost):', serverUrl); return new MockRecognizer('invalid-url'); }
+    const r = new ServerRecognizer(url);
+    try { await r.load(); return r; }
+    catch (e) { console.warn('BirdNET-Server nicht erreichbar:', e); return new MockRecognizer('unreachable'); }
+  }
   const force = ls('waldohr.birdnet');
-  if (force === '0') return new MockRecognizer();
-  if (force === '1') return new BirdNetRecognizer();
+  if (force === '0') return new MockRecognizer('no-server');
+  let wantModel = force === '1';
   // .tflite läuft nicht im Browser (STFT/RFFT) → nur ein TF.js-GraphModel auto-aktivieren.
-  try {
-    const r = await fetch('models/birdnet/model.json', { method: 'HEAD' });
-    if (r.ok) return new BirdNetRecognizer();
-  } catch {}
-  return new MockRecognizer();
+  if (!wantModel) {
+    try { const r = await fetch('models/birdnet/model.json', { method: 'HEAD' }); wantModel = r.ok; } catch {}
+  }
+  if (wantModel) {
+    const r = new BirdNetRecognizer();
+    try { await r.load(); return r; }
+    catch (e) { console.warn('BirdNET-Modell nicht nutzbar:', e); return new MockRecognizer('model-error'); }
+  }
+  return new MockRecognizer('no-server');
 }

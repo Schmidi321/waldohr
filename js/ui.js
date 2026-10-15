@@ -2,12 +2,20 @@
 import { SPECIES, SPECIES_LIST, ensureSpecies } from './species.js';
 import { gemini } from './gemini.js';
 import { todayNearby, todayNearbyDetections, groupByLocation, haversineKm, bearingDeg, computeStats, getQualifyConfidence, setQualifyConfidence } from './db.js';
-import { getMorgenchor, setMorgenchor, getNachtModus, setNachtModus, getFotoWecker, setFotoWecker, getSunriseFull } from './alarm.js';
-import { weatherEmoji, weatherLabel } from './weather.js';
+import { getMorgenchor, setMorgenchor, getNachtModus, setNachtModus, getFotoWecker, setFotoWecker, getSunriseFull, getDauerUeberwachung } from './alarm.js';
+import { weatherLabel } from './weather.js';
+import { esc, roundCoord } from './util.js';
 
 const $ = id => document.getElementById(id);
 const DEFAULT_GRAD = ['#0e5840', '#0a4733'];
-const CAMERA_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+// Linien-Icons aus dem Sprite in index.html (#i-…) — ein einheitlicher Satz statt Emoji.
+export const icon = (name, cls = '') => `<svg class="ic${cls ? ' ' + cls : ''}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const CAMERA_ICON = icon('camera');
+// Kartenfarben je Kategorie — identisch mit der Legende (.dot-* in styles.css).
+const MAP_COLORS = { fav: '#60a5fa', rare: '#fbbf24', mammal: '#fb7185', common: '#34d399' };
+const fmtHM = d => d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+// Lesbares Kurzdatum ("15. Okt.") statt ISO-Datum in Zeiträumen/KPIs.
+export const fmtShortDate = ts => new Date(ts).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
 
 function avatarSVG(key, size) {
   const sp = SPECIES[key] || SPECIES.amsel;
@@ -72,7 +80,9 @@ async function fetchImageCredit(imgUrl) {
       const page = pages && Object.values(pages)[0];
       const meta = page && page.imageinfo && page.imageinfo[0] && page.imageinfo[0].extmetadata;
       if (meta) {
-        const strip = h => (h || '').replace(/<[^>]+>/g, '').trim();
+        // Commons liefert Artist als HTML-Schnipsel: per DOMParser (führt nichts aus) zu reinem Text
+        // machen — dekodiert dabei auch Entities wie &amp;, da die Anzeige jetzt per textContent läuft.
+        const strip = h => { try { return (new DOMParser().parseFromString(String(h || ''), 'text/html').body.textContent || '').trim(); } catch { return String(h || '').replace(/<[^>]+>/g, '').trim(); } };
         out = {
           artist: strip(meta.Artist && meta.Artist.value),
           license: (meta.LicenseShortName && meta.LicenseShortName.value) || '',
@@ -91,65 +101,99 @@ function applySpeciesImage(el, sci) {
   if (!el || !sci) return;
   fetchSpeciesWiki(sci).then(w => {
     if (!w || !w.img || !el.isConnected) return;
-    el.style.backgroundImage = `url('${w.img}')`;
+    // Bild-URL kommt aus der Wikipedia-API (bzw. dem localStorage-Cache) — als CSS-String mit
+    // escapten Anführungszeichen einsetzen, damit sie nicht aus url('…') ausbrechen kann.
+    el.style.backgroundImage = `url(${JSON.stringify(String(w.img))})`;
     el.style.backgroundSize = 'cover';
     el.style.backgroundPosition = 'center';
+    // has-img blendet Silhouette + Anfangsbuchstaben aus (CSS), statt nur das SVG zu verstecken.
+    el.classList.add('has-img');
     const svg = el.querySelector('svg'); if (svg) svg.style.opacity = '0';
   });
 }
 
-function rarityTag(r) {
+// "Neu" gibt es nur noch beim allerersten Fund einer Art (Lifer) — vorher trug JEDE häufige Art
+// das Etikett, es sagte also nichts mehr aus. Selten/Säuger bleiben als Hinweis immer stehen.
+function rarityTag(r, lifer) {
   if (r === 'rare') return '<span class="tag rare">selten</span>';
-  if (r === 'mammal') return '<span class="tag rare" style="color:var(--rose);border-color:#fb718555;background:#7c1d2e33">Säuger</span>';
-  return '<span class="tag new">neu</span>';
+  if (r === 'mammal') return '<span class="tag mammal">Säuger</span>';
+  return lifer ? '<span class="tag new">neu</span>' : '';
 }
+// Erster Fund je Art über ALLE gespeicherten (qualifizierenden) Funde — Grundlage für "neu".
+function firstSeenMap(dets) {
+  const m = new Map();
+  for (const d of dets) { const t = m.get(d.key); if (t == null || d.ts < t) m.set(d.key, d.ts); }
+  return m;
+}
+let FIRST_SEEN = new Map();
 function badge(s) {
-  if (s.rarity === 'rare') return '<span class="badge" style="background:#7c2d1233;color:var(--amber)">selten</span>';
-  if (s.rarity === 'mammal') return '<span class="badge" style="background:#7c1d2e33;color:var(--rose)">Säuger</span>';
-  if (Date.now() - s.last < 2 * 864e5) return '<span class="badge" style="background:#16653433;color:var(--lime)">neu</span>';
+  if (s.rarity === 'rare') return '<span class="badge rare">selten</span>';
+  if (s.rarity === 'mammal') return '<span class="badge mammal">Säuger</span>';
+  const first = FIRST_SEEN.get(s.key);
+  if (first != null && Date.now() - first < 2 * 864e5) return '<span class="badge new">neu</span>';
   return '';
 }
 
 export function initUI() {
   const nav = document.querySelectorAll('.nav button');
   nav.forEach(b => b.onclick = () => {
-    nav.forEach(x => x.classList.remove('on')); b.classList.add('on');
+    nav.forEach(x => { x.classList.remove('on'); x.removeAttribute('aria-current'); });
+    b.classList.add('on'); b.setAttribute('aria-current', 'page');
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    $('v-' + b.dataset.v).classList.add('active');
+    const view = $('v-' + b.dataset.v);
+    view.classList.add('active');
+    // Eine gemeinsame Kopfzeile für alle Tabs: nur der Titel wechselt (data-title der View).
+    const title = $('viewTitle'); if (title) title.textContent = view.dataset.title || '';
     if (b.dataset.v === 'map') {
       invalidateMapSize();
       if (mapNeedsRender) renderMap(lastMapDets);   // während "unsichtbar" übersprungenes volles Rendern nachholen
     }
+    // app.js hängt sich hier an (Foto-Tab: Galerie-Badge löschen, Licht & Wetter laden).
+    document.dispatchEvent(new CustomEvent('waldohr:tab', { detail: b.dataset.v }));
   });
   $('sheetScrim').onclick = closeSheet;
   $('sheetClose').onclick = closeSheet;
   const compassBtn = $('mCompassBtn');
   if (compassBtn) compassBtn.onclick = activateCompass;
 
-  // Einstellungen (Gemini-Key + Xeno-canto-Key + BirdNET-Server)
+  // Segment-Umschalter (Funde, Foto): blendet die Panels data-seg → #<prefix><Seg> um.
+  wireSegments('fundeSeg', { arten: 'fundeArten', orte: 'fundeOrte', stat: 'fundeStat' }, seg => {
+    fundeSeg = seg;
+    if (seg === 'stat') renderStatsForMode();
+  });
+  wireSegments('fotoSeg', { galerie: 'fotoGalerie', licht: 'fotoLicht', wecker: 'fotoWecker', tipps: 'fotoTipps' }, seg => {
+    document.dispatchEvent(new CustomEvent('waldohr:fotoseg', { detail: seg }));
+    if (seg === 'wecker') initFotoWecker(livePos || lastCollPos);
+  });
+
+  // Einstellungen: speichern SOFORT (change/blur). Früher gab es einen "Speichern"-Knopf, und das
+  // Schließen über den Hintergrund verwarf Eingaben still. Nur die Server-URL braucht "Übernehmen",
+  // weil der Erkenner beim Start gewählt wird (App lädt neu).
   const settings = $('settingsModal');
   const closeSettings = () => settings.classList.remove('open');
-  $('gearBtn').onclick = () => {
+  const openSettings = () => {
     $('geminiKey').value = gemini.getKey();
     $('xcKey').value = xcKeyGet();
     const sv = serverUrlGet();
     $('serverUrl').value = sv;
-    $('serverStat').textContent = sv ? 'gesetzt ✓' : 'nicht gesetzt (Demo)';
+    $('serverStat').textContent = sv ? 'gesetzt' : 'nicht gesetzt (Demo-Modus)';
     populateMicSelect();
     settings.classList.add('open');
+    const sh = settings.querySelector('.sheet'); if (sh) sh.scrollTop = 0;
   };
+  $('gearBtn').onclick = openSettings;
   $('settingsScrim').onclick = closeSettings;
   $('settingsClose').onclick = closeSettings;
-  $('settingsSave').onclick = () => {
-    gemini.setKey($('geminiKey').value);
-    xcKeySet($('xcKey').value);
+  $('geminiKey').addEventListener('change', e => { gemini.setKey(e.target.value); showInfoToast('Gespeichert', e.target.value.trim() ? 'Gemini-Key ist hinterlegt.' : 'Gemini-Key entfernt.', 'check'); });
+  $('xcKey').addEventListener('change', e => { xcKeySet(e.target.value); showInfoToast('Gespeichert', e.target.value.trim() ? 'Xeno-canto-Key ist hinterlegt.' : 'Xeno-canto-Key entfernt.', 'check'); });
+  $('serverApply').onclick = () => {
     const before = serverUrlGet();
     const after = serverUrlSet($('serverUrl').value);
-    closeSettings();
-    if (after !== before) location.reload();
+    if (after === before) { showInfoToast('Keine Änderung', 'Die Server-Adresse ist bereits aktiv.', 'info'); return; }
+    location.reload();
   };
 
-  // Beobachtungsliste — nur noch über Stern-Icon im Topbar.
+  // Suchliste (bisher "Beobachtungsliste") — Stern in Funde und im Arten-Sheet.
   const favModal = $('favModal');
   const favSearch = $('favSearch');
   const openFavList = () => { if (favSearch) favSearch.value = ''; renderFavList(); favModal.classList.add('open'); };
@@ -162,18 +206,10 @@ export function initUI() {
     favSearch.oninput = () => { clearTimeout(t); t = setTimeout(() => renderFavList(favSearch.value), 150); };
   }
 
-  // Foto-Tipps
-  const tipsModal = $('tipsModal');
-  const tipsOpenBtn = $('tipsOpenBtn');
-  if (tipsOpenBtn && tipsModal) tipsOpenBtn.onclick = () => { closeSettings(); tipsModal.classList.add('open'); };
-  const tipsScrim = $('tipsScrim'); if (tipsScrim) tipsScrim.onclick = () => tipsModal.classList.remove('open');
-  const tipsClose = $('tipsClose'); if (tipsClose) tipsClose.onclick = () => tipsModal.classList.remove('open');
-
-  // Hilfe & Anleitung
+  // Hilfe & Anleitung: "?" im Einstellungs-Kopf UND Eintrag unter "Über & Hilfe".
   const helpModal = $('helpModal');
-  const helpOpenBtn = $('helpOpenBtn');
   const closeHelp = () => { if (helpModal) helpModal.classList.remove('open'); };
-  if (helpOpenBtn && helpModal) helpOpenBtn.onclick = () => {
+  const openHelp = () => {
     closeSettings();
     // Immer eingeklappt starten (alle <details> zu), damit die Abschnitts-Übersicht sichtbar ist,
     // und wieder nach oben scrollen — sonst zeigt das Sheet die Scroll-Position vom letzten Mal.
@@ -181,6 +217,7 @@ export function initUI() {
     helpModal.classList.add('open');
     const sheet = helpModal.querySelector('.sheet'); if (sheet) sheet.scrollTop = 0;
   };
+  ['helpOpenBtn', 'helpOpenBtn2'].forEach(id => { const b = $(id); if (b && helpModal) b.onclick = openHelp; });
   const helpScrim = $('helpScrim'); if (helpScrim) helpScrim.onclick = closeHelp;
   const helpClose = $('helpClose'); if (helpClose) helpClose.onclick = closeHelp;
   // Beim Aufklappen den Kopf des Abschnitts an den oberen Rand holen, damit nicht der halbe
@@ -196,67 +233,152 @@ export function initUI() {
     });
   }
 
-  // Timing-Modal — close/save verdrahten (open erfolgt über exportiertes openTimingModal)
+  // "Automatisch lauschen" (Morgenchor, Nacht-Modus; Dauerüberwachung verdrahtet ornithologie.js).
   const timingModal = $('timingModal');
   const closeTimingModal = () => timingModal && timingModal.classList.remove('open');
   const timingScrim = $('timingScrim'); if (timingScrim) timingScrim.onclick = closeTimingModal;
   const timingClose = $('timingClose'); if (timingClose) timingClose.onclick = closeTimingModal;
-  // Timing-Controls: Auto-Save bei jeder Änderung — kein Speichern-Button nötig
-  function autoSaveTiming() {
-    // parseInt(x)||default würde eine echte 0 (z.B. ":00"-Minuten oder "00:"-Stunde) still-
-    // schweigend durch den Default ersetzen (0 ist falsy) — NaN-Check erhält echte Nullen.
-    const numOr = (v, d) => { const n = parseInt(v, 10); return Number.isNaN(n) ? d : n; };
-    const mc = getMorgenchor();
-    setMorgenchor({ enabled: $('mcEnabled')?.checked ?? mc.enabled, offsetMin: numOr($('mcOffset')?.value, 15) });
-    const nm = getNachtModus();
-    const nmStart = ($('nmTime')?.value || '22:00').split(':');
-    const nmEnd = ($('nmEndTime')?.value || '23:30').split(':');
-    setNachtModus({ enabled: $('nmEnabled')?.checked ?? nm.enabled, hour: numOr(nmStart[0], 22), minute: numOr(nmStart[1], 0), endEnabled: $('nmEndEnabled')?.checked ?? nm.endEnabled, endHour: numOr(nmEnd[0], 23), endMinute: numOr(nmEnd[1], 30) });
-    const fw = getFotoWecker();
-    const fwParts = ($('fwTime')?.value || '05:30').split(':');
-    setFotoWecker({ enabled: $('fwEnabled')?.checked ?? fw.enabled, hour: numOr(fwParts[0], 5), minute: numOr(fwParts[1], 30), vibrateOnly: $('fwVibrateOnly')?.checked ?? fw.vibrateOnly ?? false });
-  }
-  ['mcEnabled','nmEnabled','nmEndEnabled','fwEnabled','fwVibrateOnly'].forEach(id => {
-    const el = $(id); if (el) el.addEventListener('change', autoSaveTiming);
-  });
-  ['nmTime','nmEndTime','fwTime'].forEach(id => {
-    const el = $(id); if (el) el.addEventListener('change', autoSaveTiming);
-  });
+  // Jede Gruppe speichert NUR ihren eigenen Teil: Morgenchor/Nacht-Modus im Sheet, der Fotografen-
+  // Wecker im Foto-Tab. Ein gemeinsames Speichern aller Felder hätte sonst z. B. beim Umschalten des
+  // Weckers die (evtl. noch nie befüllten) Morgenchor-Felder als "aus" mitgeschrieben.
+  // parseInt(x)||default würde eine echte 0 (":00"-Minuten, "00:"-Stunde) durch den Default ersetzen
+  // (0 ist falsy) — der NaN-Check erhält echte Nullen.
+  const numOr = (v, d) => { const n = parseInt(v, 10); return Number.isNaN(n) ? d : n; };
+  const saveMc = () => { setMorgenchor({ enabled: $('mcEnabled').checked, offsetMin: numOr($('mcOffset').value, 15) }); updateScheduleChip(); };
+  const saveNm = () => {
+    const s = ($('nmTime').value || '22:00').split(':'), e = ($('nmEndTime').value || '23:30').split(':');
+    setNachtModus({ enabled: $('nmEnabled').checked, hour: numOr(s[0], 22), minute: numOr(s[1], 0), endEnabled: $('nmEndEnabled').checked, endHour: numOr(e[0], 23), endMinute: numOr(e[1], 30) });
+    updateScheduleChip();
+  };
+  const saveFw = () => {
+    const p = ($('fwTime').value || '05:30').split(':');
+    setFotoWecker({ enabled: $('fwEnabled').checked, hour: numOr(p[0], 5), minute: numOr(p[1], 30), vibrateOnly: $('fwVibrateOnly').checked });
+  };
+  syncTimingControls();
+  $('mcEnabled').addEventListener('change', saveMc);
+  ['nmEnabled', 'nmEndEnabled', 'nmTime', 'nmEndTime'].forEach(id => $(id).addEventListener('change', saveNm));
+  ['fwEnabled', 'fwVibrateOnly', 'fwTime'].forEach(id => $(id).addEventListener('change', saveFw));
   const mcOffsetEl = $('mcOffset');
-  if (mcOffsetEl) mcOffsetEl.addEventListener('input', autoSaveTiming);
+  mcOffsetEl.addEventListener('input', () => {
+    // Wert-Anzeige neben dem Regler — stand früher als inline oninput="…" in index.html, das eine
+    // künftige Content-Security-Policy (ohne 'unsafe-inline') blockieren würde.
+    $('mcOffsetVal').textContent = mcOffsetEl.value + ' Min';
+    saveMc();
+  });
+  // Dauerüberwachung schaltet ornithologie.js — der Zeitplan-Chip soll trotzdem sofort mitziehen.
+  const duEn = $('orniDuEnabled'); if (duEn) duEn.addEventListener('change', () => setTimeout(updateScheduleChip, 0));
+  const duStop = $('duStop'); if (duStop) duStop.addEventListener('click', () => setTimeout(updateScheduleChip, 0));
+  const srCard = $('fwSunriseCard');
+  if (srCard) srCard.onclick = () => {
+    const popup = $('fwDetailPopup'); if (!popup) return;
+    popup.hidden = !popup.hidden;
+    srCard.setAttribute('aria-expanded', String(!popup.hidden));
+  };
 
   setInterval(renderLive, 2000);   // abgelaufene Einträge entfernen
+  setInterval(updateScheduleChip, 60000);
   initWakeLockToggle();
   initShutterToggle();
   initLeftHandToggle();
   initSensitivitySliders();
+  updateScheduleChip();
 
-  // Sammlung: "Heute hier" / "Global nach Ort"
+  // Funde: Bereich "Heute hier" / "Alle" gilt für Arten, Orte UND Statistik gemeinsam.
   const toggle = $('collToggle');
   if (toggle) {
     toggle.querySelectorAll('button').forEach(b => b.onclick = () => {
       toggle.querySelectorAll('button').forEach(x => x.classList.remove('on'));
       b.classList.add('on');
-      collMode = b.dataset.mode;
+      collMode = statMode = b.dataset.mode;
       $('collHere').hidden = collMode !== 'here';
       $('collGlobal').hidden = collMode !== 'global';
       renderCollStats();
+      renderLocList();
+      renderStatsForMode();
     });
   }
+  // Überlaufmenü schließen, sobald irgendwo anders getippt wird.
+  document.addEventListener('click', e => {
+    document.querySelectorAll('details.menu[open]').forEach(m => { if (!m.contains(e.target) || e.target.closest('.menu-item')) m.removeAttribute('open'); });
+  });
 
-  // Statistik: "Global" / "Heute hier" / "Export"
-  const statToggle = $('statToggle');
-  if (statToggle) {
-    statToggle.querySelectorAll('button').forEach(b => b.onclick = () => {
-      statToggle.querySelectorAll('button').forEach(x => x.classList.remove('on'));
-      b.classList.add('on');
-      statMode = b.dataset.mode;
-      const isExport = statMode === 'export';
-      const sc = $('statContent'); if (sc) sc.hidden = isExport;
-      const se = $('statExport'); if (se) se.hidden = !isExport;
-      if (isExport) renderExportTab(); else renderStatsForMode();
-    });
-  }
+  // Arten-Sheet: Aktionen (Suchliste, Richtung, Foto) — die Art steht in curSheet.
+  $('mFavBtn').onclick = () => {
+    if (!curSheet) return;
+    toggleFavorite(curSheet.key);
+    updateSheetFav();
+  };
+  $('mScanBtn').onclick = () => {
+    if (!curSheet) return;
+    const name = curSheet.name;
+    closeSheet();   // Scan-Overlay liegt unter den Sheets — erst schließen
+    if (typeof window.__waldohrScanDirection === 'function') window.__waldohrScanDirection(name);
+  };
+  $('mPhotoBtn').onclick = () => {
+    if (!curSheet) return;
+    const { name, key } = curSheet;
+    closeSheet();
+    if (typeof window.__waldohrCapturePhoto === 'function') window.__waldohrCapturePhoto(name, key);
+  };
+}
+
+// Segment-Umschalter: Buttons mit data-seg → zeigen genau ein Panel (IDs aus map).
+function wireSegments(segId, map, onChange) {
+  const seg = $(segId); if (!seg) return;
+  seg.querySelectorAll('button').forEach(b => b.onclick = () => {
+    seg.querySelectorAll('button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', String(x === b)); });
+    for (const [k, id] of Object.entries(map)) { const p = $(id); if (p) p.hidden = k !== b.dataset.seg; }
+    if (onChange) onChange(b.dataset.seg);
+  });
+}
+// Von app.js: Foto-Tab gezielt auf ein Segment stellen (z. B. "galerie" nach einem Video).
+export function showFotoSegment(seg) {
+  const b = document.querySelector(`#fotoSeg button[data-seg="${seg}"]`);
+  if (b && !b.classList.contains('on')) b.click();
+}
+export function isFotoSegment(seg) {
+  return !!document.querySelector(`#fotoSeg button.on[data-seg="${seg}"]`);
+}
+
+// ---- "Automatisch lauschen": Formular aus dem Speicher füllen + Status-Chip unter dem Orb ----
+function syncTimingControls() {
+  const mc = getMorgenchor();
+  $('mcEnabled').checked = !!mc.enabled;
+  $('mcOffset').value = mc.offsetMin; $('mcOffsetVal').textContent = mc.offsetMin + ' Min';
+  const nm = getNachtModus();
+  $('nmEnabled').checked = !!nm.enabled;
+  $('nmTime').value = String(nm.hour).padStart(2, '0') + ':' + String(nm.minute).padStart(2, '0');
+  $('nmEndTime').value = String(nm.endHour ?? 23).padStart(2, '0') + ':' + String(nm.endMinute ?? 30).padStart(2, '0');
+  $('nmEndEnabled').checked = !!nm.endEnabled;
+  const fw = getFotoWecker();
+  $('fwEnabled').checked = !!fw.enabled;
+  $('fwTime').value = String(fw.hour).padStart(2, '0') + ':' + String(fw.minute).padStart(2, '0');
+  $('fwVibrateOnly').checked = !!fw.vibrateOnly;
+}
+let _sunCache = { key: '', sunrise: null };
+async function _sunriseFor(pos) {
+  if (!pos || pos.lat == null) return null;
+  const key = new Date().toDateString() + '|' + pos.lat.toFixed(1) + '|' + pos.lng.toFixed(1);
+  if (_sunCache.key === key) return _sunCache.full;
+  try { const full = await getSunriseFull(pos.lat, pos.lng); _sunCache = { key, full }; return full; } catch { return null; }
+}
+// Kurzer Zustandstext: "Zeitplan: aus" · "Morgenchor 06:58" · "Nacht-Modus 22:00" · "Dauer 30 Min".
+export async function updateScheduleChip() {
+  const el = $('scheduleTxt'); if (!el) return;
+  const parts = [];
+  const du = getDauerUeberwachung();
+  if (du && du.enabled) parts.push('Dauer ' + (du.durationMin >= 60 ? (du.durationMin / 60) + ' Std' : du.durationMin + ' Min'));
+  const mc = getMorgenchor();
+  let mcStart = null;
+  const full = await _sunriseFor(livePos || lastCollPos);
+  if (full && full.sunrise) mcStart = new Date(full.sunrise.getTime() - (mc.offsetMin || 0) * 60000);
+  if (mc.enabled) parts.push('Morgenchor ' + (mcStart ? fmtHM(mcStart) : 'an'));
+  const nm = getNachtModus();
+  if (nm.enabled) parts.push('Nacht ' + String(nm.hour).padStart(2, '0') + ':' + String(nm.minute).padStart(2, '0'));
+  el.textContent = parts.length ? parts.join(' · ') : 'Zeitplan: aus';
+  $('timingBtn')?.classList.toggle('is-set', parts.length > 0);
+  const info = $('mcStartInfo');
+  if (info) info.textContent = mcStart ? 'Start heute um ' + fmtHM(mcStart) + ' Uhr (Sonnenaufgang ' + fmtHM(full.sunrise) + ')' : 'Startzeit erscheint, sobald dein Standort bekannt ist.';
 }
 
 // ---- Display anbleiben (Wake Lock) ----
@@ -312,8 +434,10 @@ async function populateMicSelect() {
   try {
     const all = await navigator.mediaDevices.enumerateDevices();
     const mics = all.filter(d => d.kind === 'audioinput');
-    sel.innerHTML = '<option value="">Automatisch (Standard)</option>' +
-      mics.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Mikrofon ' + (i + 1)}</option>`).join('');
+    // new Option() statt innerHTML-Template: Geräte-Label/-ID liefert das Betriebssystem bzw. das
+    // angeschlossene (Bluetooth-)Gerät selbst — frei wählbarer Text, der sonst als HTML landen würde.
+    sel.replaceChildren(new Option('Automatisch (Standard)', ''),
+      ...mics.map((d, i) => new Option(d.label || 'Mikrofon ' + (i + 1), d.deviceId)));
     sel.value = mics.some(d => d.deviceId === saved) ? saved : '';
   } catch (e) { console.warn('mic enumerate', e); }
   sel.onchange = () => { try { localStorage.setItem(LS_MIC, sel.value); } catch {} };
@@ -385,11 +509,20 @@ function favRow(entry) {
   const sp = key ? SPECIES[key] : null;
   const g = (sp && sp.grad) || DEFAULT_GRAD;
   const on = key && FAVORITES.has(key);
-  return `<div class="favrow" data-sci="${entry.sci || ''}" data-name="${(entry.name || '').replace(/"/g, '&quot;')}" data-key="${key}">
+  // Namen/sci stammen aus labels.txt bzw. dem (per Server/Backup erweiterbaren) Katalog -> überall esc(),
+  // auch in den data-Attributen (dataset liest sie beim Markieren wieder unescaped zurück).
+  return `<div class="favrow" data-sci="${esc(entry.sci)}" data-name="${esc(entry.name)}" data-key="${esc(key)}">
     <div class="ph" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(key, 20)}</div>
-    <div class="favmeta"><div class="nm">${entry.name}</div><div class="lt">${entry.sci || ''}</div></div>
-    <button class="favstar${on ? ' on' : ''}">${on ? '★' : '☆'}</button>
+    <div class="favmeta"><div class="nm">${esc(entry.name)}</div><div class="lt">${esc(entry.sci)}</div></div>
+    <button class="favstar${on ? ' on' : ''}" aria-pressed="${on}" aria-label="Auf die Suchliste">${icon(on ? 'star-fill' : 'star')}</button>
   </div>`;
+}
+// Suchliste umschalten (Liste, Arten-Sheet) — Kartenfarben ziehen sofort mit.
+function toggleFavorite(key) {
+  if (FAVORITES.has(key)) FAVORITES.delete(key); else FAVORITES.add(key);
+  saveFavorites();
+  renderMap(lastMapDets);
+  return FAVORITES.has(key);
 }
 
 // Arten aus der vollen BirdNET-Liste werden erst beim ersten Markieren in den echten
@@ -405,11 +538,10 @@ function wireFavRows(list) {
         row.dataset.key = key;
         row.querySelector('.ph').innerHTML = avatarSVG(key, 20);
       }
-      if (FAVORITES.has(key)) FAVORITES.delete(key); else FAVORITES.add(key);
-      saveFavorites();
-      btn.classList.toggle('on');
-      btn.textContent = FAVORITES.has(key) ? '★' : '☆';
-      renderMap(lastMapDets);   // Kartenfarben sofort an die neue Auswahl anpassen
+      const on = toggleFavorite(key);
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', String(on));
+      btn.innerHTML = icon(on ? 'star-fill' : 'star');
     };
   });
 }
@@ -439,16 +571,25 @@ async function renderFavList(query) {
 // ---- Live-Liste „jetzt zu hören" ----
 const LIVE = new Map();
 const LIVE_TTL = 15000;
+// Arten, die in dieser Sitzung zum allerersten Mal gehört wurden (Lifer) — bleiben "neu", auch wenn
+// die Zeile nach 15 s ausläuft und die Art später wiederkommt.
+const LIFERS = new Set();
 export function liveAdd(det) {
   const isNew = !LIVE.has(det.key);
+  // Lifer = noch kein gespeicherter Fund dieser Art VOR dieser Erkennung. lastCollDets ist hier noch
+  // der Stand vor dem refresh(), enthält den gerade gespeicherten Fund also nicht.
+  if (isNew && !det.demo && !LIFERS.has(det.key) && !lastCollDets.some(d => d.key === det.key && d.ts < det.ts - 1000)) LIFERS.add(det.key);
   const e = LIVE.get(det.key) || { key: det.key, count: 0 };
   e.name = det.species; e.sci = det.sci; e.rarity = det.rarity;
   e.conf = det.confidence; e.ts = Date.now(); e.count++;
+  // Demo-Treffer (Mock-Erkenner, zufällige Arten) sichtbar als solche markieren.
+  e.demo = !!det.demo;
   LIVE.set(det.key, e);
   renderLive();
   // Fotografen-Funktion: einmalig beim Eintreffen alarmieren (selten ODER auf der Beobachtungsliste),
-  // nicht bei jedem weiteren Erkennungsfenster derselben Art.
-  if (isNew && (det.rarity !== 'common' || FAVORITES.has(det.key))) rareAlert(det);
+  // nicht bei jedem weiteren Erkennungsfenster derselben Art. Nie für Demo-Treffer — ein
+  // "Seltene Art!"-Alarm für einen zufällig gewürfelten Eisvogel wäre schlicht falsch.
+  if (isNew && !det.demo && (det.rarity !== 'common' || FAVORITES.has(det.key))) rareAlert(det);
 }
 
 // ---- Seltenheits-/Beobachtungs-Alarm: vibriert + zeigt einen Toast, wenn gerade eine relevante Art auftaucht ----
@@ -458,11 +599,11 @@ function rareAlert(det) {
   if (navigator.vibrate) { try { navigator.vibrate([120, 70, 120]); } catch {} }
   const isMammal = det.rarity === 'mammal';
   const isRare = det.rarity !== 'common';
-  const icon = isMammal ? '🦌' : isRare ? '✨' : '⭐';
-  const title = isMammal ? 'Seltenes Tier!' : isRare ? 'Seltene Art!' : 'Beobachtete Art!';
-  toast.innerHTML = `<span class="rt-ico">${icon}</span>
-    <div class="rt-txt"><div class="rt-t">${title}</div><div class="rt-s">${det.species} ist gerade hier</div></div>
-    <button class="rt-cam" title="Foto aufnehmen">${CAMERA_ICON}</button>`;
+  const ico = isMammal ? 'paw' : isRare ? 'sparkle' : 'star';
+  const title = isMammal ? 'Seltenes Tier!' : isRare ? 'Seltene Art!' : 'Art von deiner Suchliste!';
+  toast.innerHTML = `<span class="rt-ico">${icon(ico)}</span>
+    <div class="rt-txt"><div class="rt-t">${title}</div><div class="rt-s">${esc(det.species)} ist gerade hier</div></div>
+    <button class="rt-cam" title="Foto aufnehmen" aria-label="Foto aufnehmen">${CAMERA_ICON}</button>`;
   toast.className = 'rare-toast show' + (isMammal ? ' mammal' : !isRare ? ' fav' : '');
   toast.onclick = () => { openModal(det.key); toast.classList.remove('show'); };
   const camBtn = toast.querySelector('.rt-cam');
@@ -478,14 +619,19 @@ function rareAlert(det) {
 // Schlichte Bestätigung für nicht-art-bezogene Aktionen (z. B. "Daten gelöscht") — selber
 // Toast wie der Seltenheits-Alarm, aber neutral eingefärbt und ohne Kamera-Knopf/Klick-Ziel.
 // Optionaler actionCb + actionLabel zeigt einen kleinen Button im Toast.
-export function showInfoToast(title, sub, icon = 'ℹ️', actionCb, actionLabel) {
+// Alle Texte reiner Text (esc): Aufrufer reichen u. a. Artnamen, Dateinamen und Sitzungsnamen durch.
+// Aufrufer reichen teils noch Emoji als Icon (und am Titelanfang) durch — die werden hier auf die
+// Linien-Icons abgebildet bzw. entfernt, damit Toasts überall gleich aussehen.
+const TOAST_ICONS = { '📍': 'pin', '🗑️': 'trash', '🗑': 'trash', '💾': 'disk', '⚠️': 'alert', '⚠': 'alert', '⏱': 'timer', '🌅': 'sunrise', '🦉': 'moon', '📷': 'camera', '🗺️': 'route', 'ℹ️': 'info' };
+const ICON_NAMES = new Set(['pin', 'trash', 'disk', 'alert', 'timer', 'sunrise', 'moon', 'camera', 'route', 'info', 'check', 'download', 'share', 'mic', 'sparkle', 'star']);
+export function showInfoToast(title, sub, ico = 'info', actionCb, actionLabel) {
   const toast = $('rareToast'); if (!toast) return;
+  const name = ICON_NAMES.has(ico) ? ico : (TOAST_ICONS[ico] || 'info');
+  title = String(title ?? '').replace(/^[\p{Extended_Pictographic}️‍\s]+/u, '');
   let actionHtml = '';
-  if (actionCb && actionLabel) {
-    actionHtml = `<button class="rt-action" style="margin-top:6px;padding:4px 10px;border-radius:10px;border:1px solid var(--stroke-strong);background:transparent;color:var(--lime);font-size:11px;cursor:pointer;font-family:inherit">${actionLabel}</button>`;
-  }
-  toast.innerHTML = `<span class="rt-ico">${icon}</span>
-    <div class="rt-txt"><div class="rt-t">${title}</div><div class="rt-s">${sub || ''}</div>${actionHtml}</div>`;
+  if (actionCb && actionLabel) actionHtml = `<button class="rt-action">${esc(actionLabel)}</button>`;
+  toast.innerHTML = `<span class="rt-ico">${icon(name)}</span>
+    <div class="rt-txt"><div class="rt-t">${esc(title)}</div><div class="rt-s">${esc(sub)}</div>${actionHtml}</div>`;
   toast.className = 'rare-toast show info';
   const dur = actionCb ? 8000 : 3500;
   if (actionCb) {
@@ -505,20 +651,37 @@ export function renderLive() {
   const empty = $('liveEmpty');
   list.querySelectorAll('.live-row').forEach(r => r.remove());
   // Der Hinweis "Tippe unten das Mikrofon…" macht keinen Sinn mehr, sobald gelauscht wird.
-  if (!arr.length) { if (empty) empty.style.display = document.body.classList.contains('listening') ? 'none' : ''; return; }
+  // Der Hinweis "Tippe auf den Kreis…" macht keinen Sinn mehr, sobald gelauscht wird — dann
+  // stattdessen sagen, dass gerade gehört wird.
+  if (!arr.length) {
+    if (empty) { empty.style.display = ''; empty.textContent = document.body.classList.contains('listening') ? 'Lauscht … noch keine Art erkannt.' : 'Tippe auf den Kreis – erkannte Arten erscheinen hier.'; }
+    return;
+  }
   if (empty) empty.style.display = 'none';
+  // Läuft gerade eine Ruf-Aufnahme für eine Art (app.js setzt body.dataset.recKey), leuchtet deren Knopf.
+  const recKey = document.body.dataset.recKey || '';
   for (const e of arr) {
     const g = grad(e.key), fresh = now - e.ts < 2500;
     const row = document.createElement('div');
-    row.className = 'live-row' + (fresh ? ' fresh' : '');
-    row.innerHTML = `<div class="lr-av" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(e.key, 24)}</div>
-      <div class="lr-meta"><div class="lr-nm">${e.name} ${rarityTag(e.rarity)}</div><div class="lr-lt">${e.sci}</div></div>
-      <div class="lr-conf">${Math.round(e.conf * 100)}%</div>
-      <button class="lr-photo" title="Foto aufnehmen">${CAMERA_ICON}</button>
-      <button class="lr-rec" title="Diesen Ruf aufnehmen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/></svg></button>`;
-    ['.lr-av', '.lr-meta', '.lr-conf'].forEach(sel => { const el = row.querySelector(sel); if (el) el.onclick = () => openModal(e.key); });
+    row.className = 'live-row' + (fresh ? ' fresh' : '') + (e.demo ? ' is-demo' : '');
+    const tag = e.demo ? '<span class="tag demo" title="Demo-Modus: zufällige Art, wird nicht gespeichert">Demo</span>' : rarityTag(e.rarity, LIFERS.has(e.key));
+    const recOn = recKey && recKey === e.key;
+    row.innerHTML = `<div class="lr-av" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(e.key, 22)}</div>
+      <div class="lr-meta"><div class="lr-nm">${esc(e.name)}</div><div class="lr-sub">${tag}<span class="lr-lt">${esc(e.sci)}</span></div></div>
+      <div class="lr-conf">${Math.round(e.conf * 100)} %</div>
+      <div class="lr-acts">
+        <button class="lr-scan lr-act" title="Richtung finden" aria-label="Richtung finden: ${esc(e.name)}">${icon('compass')}</button>
+        <button class="lr-photo lr-act" title="Foto aufnehmen" aria-label="Foto von ${esc(e.name)}">${CAMERA_ICON}</button>
+        <button class="lr-rec lr-act${recOn ? ' on' : ''}" title="${recOn ? 'Aufnahme stoppen' : 'Diesen Ruf aufnehmen'}" aria-label="Ruf von ${esc(e.name)} aufnehmen" aria-pressed="${recOn}">${icon(recOn ? 'rec' : 'mic')}</button>
+      </div>`;
+    ['.lr-av', '.lr-meta', '.lr-conf'].forEach(sel => { const el = row.querySelector(sel); if (el) el.onclick = () => openModal(e.key, { conf: e.conf, demo: e.demo }); });
+    // Demo-Treffer: keine art-beschrifteten Aufnahmen/Fotos anbieten — die würden mit einem frei
+    // erfundenen Artnamen dauerhaft in Galerie & Sammlung landen.
+    // (style.display statt hidden: .lr-rec/.lr-photo setzen display:grid und schlagen [hidden].)
+    if (e.demo) { row.querySelector('.lr-rec').style.display = 'none'; row.querySelector('.lr-photo').style.display = 'none'; }
     const recBtn = row.querySelector('.lr-rec');
     recBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrRecordSpecies === 'function') window.__waldohrRecordSpecies(e.name, e.key); };
+    row.querySelector('.lr-scan').onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrScanDirection === 'function') window.__waldohrScanDirection(e.name); };
     const photoBtn = row.querySelector('.lr-photo');
     photoBtn.onclick = ev => { ev.stopPropagation(); if (typeof window.__waldohrCapturePhoto === 'function') window.__waldohrCapturePhoto(e.name, e.key); };
     applySpeciesImage(row.querySelector('.lr-av'), e.sci);
@@ -527,28 +690,50 @@ export function renderLive() {
 }
 
 export function renderAll(stats, dets, pos) {
+  FIRST_SEEN = firstSeenMap(dets || []);
   renderCollection(stats, dets || [], pos || null);
   lastStatDets = dets || []; lastStatPos = pos || null;
-  renderStatsForMode();
+  // Statistik nur rendern, wenn sie zu sehen ist (spart Arbeit bei jeder neuen Erkennung);
+  // beim Umschalten auf "Statistik" rendert wireSegments sie nach.
+  if (fundeSeg === 'stat') renderStatsForMode();
 }
 
-let statMode = 'here', lastStatDets = [], lastStatPos = null;
+let statMode = 'here', lastStatDets = [], lastStatPos = null, fundeSeg = 'arten';
+function statScopeDets() { return statMode === 'here' ? todayNearbyDetections(lastStatDets, lastStatPos) : lastStatDets; }
 function renderStatsForMode() {
-  const stats = statMode === 'here' ? computeStats(todayNearbyDetections(lastStatDets, lastStatPos)) : computeStats(lastStatDets);
+  const dets = statScopeDets();
+  const stats = computeStats(dets);
   renderStats(stats);
   drawDayChart(stats.hourly);
+  // Echter Zeitraum statt eines festen "Juni 2026".
+  const per = $('statPeriod');
+  if (per) {
+    if (!dets.length) per.textContent = statMode === 'here' ? 'Heute hier noch keine Funde.' : 'Noch keine Funde.';
+    else {
+      let lo = Infinity, hi = -Infinity; for (const d of dets) { if (d.ts < lo) lo = d.ts; if (d.ts > hi) hi = d.ts; }
+      const a = fmtShortDate(lo), b = fmtShortDate(hi);
+      per.textContent = (statMode === 'here' ? 'Heute im Umkreis von 3 km · ' : 'Zeitraum: ') + (a === b ? a : a + ' – ' + b) + ' · ' + dets.length + ' Erkennungen';
+    }
+  }
 }
 
 // Eigene Aufnahmen (manuell + automatisch) je Art — session-only, damit sie sofort als kleines
 // Icon auf der Sammlungskarte auftauchen, antippbar zum direkten Abspielen.
+// Vertrag: die übergebene blob:-URL GEHÖRT ab jetzt dem Badge (wird hier beim Ersetzen/Entfernen
+// freigegeben) — app.js reicht darum immer eine eigene URL rein, nie die der Galerie-Zeile. Sonst
+// würde das Löschen/Zuschneiden einer Zeile dem Badge die URL unter den Füßen wegziehen (oder umgekehrt).
 const RECORDINGS = new Map();
 export function registerRecording(key, url) {
   if (!key || !url) return;
+  const old = RECORDINGS.get(key);
+  // Ersetzte Badge-URL freigeben — vorher blieb pro neuer Aufnahme derselben Art ein Blob hängen.
+  if (old && old.url !== url) { try { URL.revokeObjectURL(old.url); } catch {} }
   RECORDINGS.set(key, { url, ts: Date.now() });
   refreshRecordingBadges();
 }
 export function unregisterRecording(key) {
   if (!key || !RECORDINGS.has(key)) return;
+  try { URL.revokeObjectURL(RECORDINGS.get(key).url); } catch {}
   RECORDINGS.delete(key);
   refreshRecordingBadges();
 }
@@ -567,6 +752,7 @@ function refreshRecordingBadges() {
       b = document.createElement('button');
       b.className = 'rec-badge';
       b.title = 'Eigene Aufnahme abspielen';
+      b.setAttribute('aria-label', 'Eigene Aufnahme abspielen');
       b.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
       b.onclick = async ev => {
         ev.stopPropagation();
@@ -583,15 +769,27 @@ function refreshRecordingBadges() {
   });
 }
 
+// Artkarte: Wikimedia-Bild (nachgeladen) oder getönte Silhouette mit Anfangsbuchstaben; EINE
+// Kennzahlenzeile (Anzahl · zuletzt) statt zweier.
 function speciesCard(s) {
   const g = grad(s.key);
   const geo = lastGeoForKey(s.key);
-  return `<div class="spc" data-key="${s.key}">${badge(s)}
-    <div class="ph" style="background:linear-gradient(140deg,${g[0]},${g[1]})">${avatarSVG(s.key, 34)}</div>
-    <div class="nm">${s.name}</div><div class="lt">${s.sci}</div>
-    <div class="cnt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>${s.count}× gehört</div>
-    <div class="spc-meta">${relTime(s.last)}${geo ? ' · <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg> verortet' : ''}</div>
+  const ini = esc(String(s.name || '?').trim().charAt(0).toUpperCase());
+  return `<div class="spc" data-key="${esc(s.key)}" role="button" tabindex="0" aria-label="${esc(s.name)}, ${s.count}× gehört">
+    <div class="ph" style="background:linear-gradient(140deg,${g[0]},${g[1]})"><span class="ph-ini" aria-hidden="true">${ini}</span>${avatarSVG(s.key, 64)}</div>
+    ${badge(s)}
+    <div class="spc-body">
+      <div class="nm">${esc(s.name)}</div><div class="lt">${esc(s.sci)}</div>
+      <div class="spc-meta"><b>${s.count}×</b> · ${relTime(s.last)}${geo ? icon('pin') : ''}</div>
+    </div>
   </div>`;
+}
+function wireCards(root) {
+  root.querySelectorAll('.spc').forEach(el => {
+    el.onclick = () => openModal(el.dataset.key);
+    el.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openModal(el.dataset.key); } };
+    applySpeciesImage(el.querySelector('.ph'), (SPECIES[el.dataset.key] || {}).sci);
+  });
 }
 
 let collMode = 'here';
@@ -610,8 +808,8 @@ function renderCollStats() {
     n = lastCollStats.speciesCount; total = lastCollStats.total; rare = lastCollStats.rareCount;
   }
   $('collStats').innerHTML = `
-    <div class="stat"><div class="n">${n}</div><div class="l">Arten gehört</div></div>
-    <div class="stat"><div class="n">${total}</div><div class="l">Aufnahmen</div></div>
+    <div class="stat"><div class="n">${n}</div><div class="l">Arten</div></div>
+    <div class="stat"><div class="n">${total}</div><div class="l">Erkennungen</div></div>
     <div class="stat"><div class="n">${rare}</div><div class="l">seltene</div></div>`;
 }
 
@@ -624,68 +822,63 @@ function renderCollection(stats, dets, pos) {
   if (hereGrid) {
     const here = todayNearby(dets, pos);
     hereGrid.innerHTML = here.map(s => speciesCard(s)).join('') ||
-      `<div class="lt" style="color:var(--faint);grid-column:1/-1">${pos ? 'Heute hier noch nichts entdeckt.' : 'Standort aktivieren, um Funde in deiner Nähe zu sehen.'}</div>`;
-    hereGrid.querySelectorAll('.spc').forEach(el => {
-      el.onclick = () => openModal(el.dataset.key);
-      applySpeciesImage(el.querySelector('.ph'), (SPECIES[el.dataset.key] || {}).sci);
-    });
+      `<div class="empty-note">${pos ? 'Heute hier noch nichts entdeckt. Starte das Lauschen im Tab Lauschen.' : 'Standort aktivieren, um Funde in deiner Nähe zu sehen.'}</div>`;
+    wireCards(hereGrid);
   }
 
-  // "Global nach Ort" — alle Funde, zuletzt entdeckt + nach Fundort gruppiert
-  const recent = [...stats.perSpecies].sort((a, b) => b.last - a.last).slice(0, 8);
-  $('collGrid').innerHTML = recent.map(s => speciesCard(s)).join('') || '<div class="lt" style="color:var(--faint)">Noch nichts gehört.</div>';
-  document.querySelectorAll('#collGrid .spc').forEach(el => {
-    el.onclick = () => openModal(el.dataset.key);
-    applySpeciesImage(el.querySelector('.ph'), (SPECIES[el.dataset.key] || {}).sci);
-  });
+  // "Alle" — jede Art, zuletzt gehörte zuerst (früher nur die letzten 8)
+  const all = [...stats.perSpecies].sort((a, b) => b.last - a.last);
+  const collGrid = $('collGrid');
+  collGrid.innerHTML = all.map(s => speciesCard(s)).join('') || '<div class="empty-note">Noch nichts gehört.</div>';
+  wireCards(collGrid);
 
   refreshRecordingBadges();
+  renderLocList();
+}
 
-  const locList = $('locList');
-  if (locList) {
-    const groups = groupByLocation(dets);
-    locList.innerHTML = groups.map((g, i) => `
-      <div class="locrow">
-        <div class="lr-head">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg>
-          <span class="nm">Fundort ${i + 1}</span>
-          <span class="cnt">${g.speciesCount} Arten · ${g.total}×</span>
-        </div>
-        <div class="lr-species">${g.perSpecies.map(s => `<span class="lr-chip" data-key="${s.key}">${s.name} ×${s.count}</span>`).join('')}</div>
-      </div>`).join('') || '<div class="lt" style="color:var(--faint)">Noch keine verorteten Funde.</div>';
-    locList.querySelectorAll('.lr-chip').forEach(el => el.onclick = () => openModal(el.dataset.key));
-  }
+// Fundorte (gruppiert ~600 m) — folgt dem Bereich "Heute hier" / "Alle".
+function renderLocList() {
+  const locList = $('locList'); if (!locList) return;
+  const dets = collMode === 'here' ? todayNearbyDetections(lastCollDets, lastCollPos) : lastCollDets;
+  const groups = groupByLocation(dets);
+  locList.innerHTML = groups.map((g, i) => `
+    <div class="locrow">
+      <div class="lr-head">
+        ${icon('pin')}
+        <span class="nm">Fundort ${i + 1} <span class="cnt">· ${relTime(g.last)}</span></span>
+        <span class="cnt">${g.speciesCount} ${g.speciesCount === 1 ? 'Art' : 'Arten'} · ${g.total}×</span>
+      </div>
+      <div class="lr-species">${g.perSpecies.map(s => `<button class="lr-chip" data-key="${esc(s.key)}">${esc(s.name)}<b>×${s.count}</b></button>`).join('')}</div>
+    </div>`).join('') || `<div class="empty-note">${collMode === 'here' ? 'Heute hier noch keine verorteten Funde.' : 'Noch keine verorteten Funde.'}</div>`;
+  locList.querySelectorAll('.lr-chip').forEach(el => el.onclick = () => openModal(el.dataset.key));
 }
 
 function renderStats(stats) {
-  const ico = {
-    rec:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
-    bird:'<path d="M3 12a9 9 0 0 1 9-9"/><path d="M7 12a5 5 0 0 1 5-5"/><circle cx="12" cy="12" r="1.6"/>',
-    fire:'<path d="M12 3c2 3 4 5 4 8a4 4 0 0 1-8 0c0-1 .5-2 1-3 .5 2 2 2 2 0 0-2-1-4 1-5z"/>',
-    plus:'<path d="M12 5v14M5 12h14"/>'
-  };
-  const kpi = (n, label, icon, gradCls) =>
-    `<div class="kpi"><div class="n${gradCls ? ' grad' : ''}">${n}</div><div class="l"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>${label}</div></div>`;
+  const kpi = (n, label, ico) =>
+    `<div class="kpi"><div class="n">${n}</div><div class="l">${icon(ico)}${label}</div></div>`;
   $('kpis').innerHTML =
-    kpi(stats.total, 'Aufnahmen gesamt', ico.rec, true) +
-    kpi(stats.speciesCount, 'Arten', ico.bird, true) +
-    kpi(stats.streak, 'Tage in Serie', ico.fire, false) +
-    kpi('+' + stats.newThisWeek, 'neu diese Woche', ico.plus, true);
+    kpi(stats.total, 'Erkennungen', 'listen') +
+    kpi(stats.speciesCount, stats.speciesCount === 1 ? 'Art' : 'Arten', 'grid') +
+    kpi(stats.streak, stats.streak === 1 ? 'Tag in Serie' : 'Tage in Serie', 'clock') +
+    kpi(stats.newThisWeek, 'Erkennungen diese Woche', 'sparkle');
 
   const top = stats.perSpecies.slice(0, 10);
   const tmax = Math.max(1, ...top.map(s => s.count));
   $('topSpecies').innerHTML = top.map((s, i) =>
-    `<div class="row"><span class="nm">${s.name}</span>
+    `<div class="row"><span class="nm">${esc(s.name)}</span>
       <div class="track"><div class="fill" style="width:${Math.round(s.count / tmax * 100)}%;animation-delay:${(0.05 + i * 0.07).toFixed(2)}s"></div></div>
       <span class="vv">${s.count}</span></div>`
-  ).join('') || '<div class="lt" style="color:var(--faint)">Noch keine Daten</div>';
+  ).join('') || '<div class="empty-note">Noch keine Daten</div>';
 
+  // 14 Tage: flache Balken, der stärkste Tag in Lime (kein Amber, keine Sonntags-Färbung mehr);
+  // Beschriftung nur jeden zweiten Tag + heute, damit nichts gequetscht wird.
   const days14 = stats.last14 || stats.week;
   const wmax = Math.max(1, ...days14.map(d => d.count));
   $('weekBars').innerHTML = days14.map((d, i) => {
     const hi = d.count === wmax && d.count > 0 ? ' hi' : '';
-    const lbl = d.weekday === 'Mo' || i === 0 || i === days14.length - 1 ? d.label : (d.weekday === 'So' ? '<span style="color:var(--lime)">' + d.label + '</span>' : d.label);
-    return `<div class="col"><span class="vv">${d.count || ''}</span>
+    const last = i === days14.length - 1;
+    const lbl = last ? 'heute' : ((days14.length - 1 - i) % 2 === 0 ? d.label : '');
+    return `<div class="col${last ? ' today' : ''}" title="${d.weekday} ${d.label}: ${d.count}"><span class="vv">${d.count || ''}</span>
       <i class="bar${hi}" style="height:${Math.round(d.count / wmax * 100)}%;animation-delay:${(0.02 + i * 0.03).toFixed(2)}s"></i>
       <span class="d">${lbl}</span></div>`;
   }).join('');
@@ -704,11 +897,10 @@ function smooth(p) {
 
 export function drawDayChart(hourly) {
   const line = $('dayLine'); if (!line) return;
-  const fallback = [.05,.04,.04,.05,.2,.55,.95,.85,.65,.5,.42,.38,.35,.36,.4,.45,.5,.55,.7,.82,.7,.45,.2,.1];
+  // Keine erfundene Beispielkurve mehr: ohne Daten eine flache Linie und ein ehrlicher Hinweis.
   const sum = hourly.reduce((a, b) => a + b, 0);
-  const src = sum > 0 ? hourly : fallback;
-  const max = Math.max(1, ...src);
-  const act = src.map(v => v / max);
+  const max = Math.max(1, ...hourly);
+  const act = hourly.map(v => v / max);
   const L = 14, R = 306, T = 16, B = 96;
   const pts = act.map((v, i) => [L + (i / (act.length - 1)) * (R - L), B - v * (B - T)]);
   const d = smooth(pts);
@@ -716,75 +908,17 @@ export function drawDayChart(hourly) {
   $('dayArea').setAttribute('d', d + ` L${R},104 L${L},104 Z`);
   let mi = 0; act.forEach((v, i) => { if (v > act[mi]) mi = i; });
   const pk = $('dayPeak'); pk.setAttribute('cx', pts[mi][0].toFixed(1)); pk.setAttribute('cy', pts[mi][1].toFixed(1));
+  pk.style.display = sum ? '' : 'none';
+  // Echte Spitzenstunde statt des festen Texts "Spitze: Morgenchor".
+  const lbl = $('dayPeakLbl');
+  if (lbl) lbl.textContent = sum ? 'Spitze: ' + mi + '–' + (mi + 1) + ' Uhr' : 'noch keine Daten';
 }
 
-// ---- eBird / Ornitho Export ----
-function _csvBlob(rows) {
-  const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
-  return new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
-}
+// Download eines Blobs (Share-Karte ohne Web-Share) — revoked die object URL nach dem Klick.
 function _dlBlob(blob, name) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 8000);
-}
-function _groupByDateSpecies(dets) {
-  const map = new Map();
-  for (const d of dets) {
-    const date = new Date(d.ts).toISOString().slice(0, 10);
-    const k = date + '__' + d.key;
-    if (!map.has(k)) map.set(k, { species: d.species, sci: d.sci || '', key: d.key, date, count: 0, firstTs: d.ts, lat: d.lat, lng: d.lng });
-    const g = map.get(k);
-    g.count++;
-    if (d.ts < g.firstTs) { g.firstTs = d.ts; if (d.lat != null) g.lat = d.lat; if (d.lng != null) g.lng = d.lng; }
-  }
-  return [...map.values()].sort((a, b) => a.date.localeCompare(b.date) || a.species.localeCompare(b.species));
-}
-function exportEbird(dets) {
-  const groups = _groupByDateSpecies(dets);
-  const rows = [['Common Name', 'Scientific Name', 'Count', 'Date', 'Start Time', 'Duration (Min)', 'All Obs Reported', 'Location', 'Latitude', 'Longitude', 'Protocol', 'Checklist Comments']];
-  for (const g of groups) {
-    const time = new Date(g.firstTs).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-    rows.push([g.species, g.sci, g.count, g.date, time, '60', 'Y', 'WaldOhr', g.lat?.toFixed(6) ?? '', g.lng?.toFixed(6) ?? '', 'Stationary', 'WaldOhr app']);
-  }
-  _dlBlob(_csvBlob(rows), 'waldohr-ebird-' + new Date().toISOString().slice(0, 10) + '.csv');
-}
-function exportOrnitho(dets) {
-  const groups = _groupByDateSpecies(dets);
-  const rows = [['Art', 'Wissenschaftlicher Name', 'Anzahl', 'Datum', 'Uhrzeit', 'Breitengrad', 'Längengrad', 'Ort', 'Quelle']];
-  for (const g of groups) {
-    const time = new Date(g.firstTs).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-    rows.push([g.species, g.sci, g.count, g.date, time, g.lat?.toFixed(6) ?? '', g.lng?.toFixed(6) ?? '', 'WaldOhr', 'WaldOhr app']);
-  }
-  _dlBlob(_csvBlob(rows), 'waldohr-ornitho-' + new Date().toISOString().slice(0, 10) + '.csv');
-}
-function renderExportTab() {
-  // Scope-Toggle einmalig verdrahten
-  const scopeEl = $('exportScope');
-  if (scopeEl && !scopeEl._wired) {
-    scopeEl._wired = true;
-    scopeEl.querySelectorAll('button').forEach(b => b.onclick = () => {
-      scopeEl.querySelectorAll('button').forEach(x => x.classList.remove('on'));
-      b.classList.add('on');
-      _renderExportContent();
-    });
-  }
-  _renderExportContent();
-}
-function _renderExportContent() {
-  const scopeEl = $('exportScope');
-  const scope = scopeEl?.querySelector('button.on')?.dataset.scope ?? 'here';
-  const dets = scope === 'here' ? todayNearbyDetections(lastStatDets, lastStatPos) : lastStatDets;
-  const groups = _groupByDateSpecies(dets);
-  const dates = [...new Set(groups.map(g => g.date))].sort();
-  const speciesCount = new Set(groups.map(g => g.key)).size;
-  const totalCount = groups.reduce((s, g) => s + g.count, 0);
-  const dateRange = dates.length > 1 ? dates[0] + ' – ' + dates[dates.length - 1] : (dates[0] || '–');
-  const kpi = (n, l) => `<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`;
-  const summary = $('exportSummary');
-  if (summary) summary.innerHTML = kpi(speciesCount, 'Arten') + kpi(totalCount, 'Beobachtungen') + kpi(dateRange, 'Zeitraum');
-  const eb = $('ebirdBtn'); if (eb) eb.onclick = () => exportEbird(dets);
-  const ob = $('ornithoBtn'); if (ob) ob.onclick = () => exportOrnitho(dets);
 }
 
 // ---- Echte Karte (Leaflet + OpenStreetMap), lazy geladen erst wenn die Kartenansicht gebraucht wird ----
@@ -792,18 +926,28 @@ let leafletPromise = null;
 function loadLeaflet() {
   if (window.L) return Promise.resolve(window.L);
   if (leafletPromise) return leafletPromise;
+  // Subresource Integrity: unpkg ist ein fremdes CDN — ohne integrity würde ein dort manipuliertes
+  // leaflet.js mit vollen Rechten in der App laufen (IndexedDB, Mikro-Stream, Standort). Hashes selbst
+  // aus den 1.9.4-Dateien berechnet, identisch mit den offiziellen Werten auf leafletjs.com/download.
+  // Bei einem Versions-Update MÜSSEN beide Hashes mitgezogen werden, sonst lädt die Karte nicht.
+  // crossOrigin='' (anonymous) ist Pflicht, sonst prüft der Browser SRI bei Cross-Origin gar nicht.
   leafletPromise = new Promise((resolve, reject) => {
     if (!document.querySelector('link[data-leaflet]')) {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
       link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      link.integrity = 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=';
+      link.crossOrigin = '';
       link.setAttribute('data-leaflet', '');
       document.head.appendChild(link);
     }
     const script = document.createElement('script');
     script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    script.integrity = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=';
+    script.crossOrigin = '';
     script.onload = () => resolve(window.L);
-    script.onerror = () => reject(new Error('Leaflet konnte nicht geladen werden'));
+    // Promise zurücksetzen, damit ein späterer Tab-Wechsel (z. B. wieder mit Netz) neu versucht.
+    script.onerror = () => { leafletPromise = null; script.remove(); reject(new Error('Leaflet konnte nicht geladen werden')); };
     document.head.appendChild(script);
   });
   return leafletPromise;
@@ -812,15 +956,9 @@ function loadLeaflet() {
 let mapInst = null, markersLayer = null, userMarker = null, lastMapDets = [], mapCenteredOnLive = false, mapNeedsRender = false;
 // Ob der Karten-Tab gerade sichtbar ist (initUI toggelt "active" auf #v-map beim Tab-Wechsel).
 function _isMapTabVisible() { const v = document.getElementById('v-map'); return !!v && v.classList.contains('active'); }
-const peerMarkers = new Map(); // peerId -> { marker, lastAnimPos }
-const peerPositions = new Map(); // peerId -> {lat,lng}
-// Stufe 4: manuelle Positions-Korrektur + Ortungs-Marker der 3-Geräte-Fixes
+// Manuelle Positions-Korrektur (eigener Standort per Tippen auf die Karte)
 let _manualPosHandler = null, _manualMode = false, _manualMarker = null;
-let fixLayer = null, _fixArHandler = null;
-const _fixes = []; // {lat,lng,uncertM,species,ts,...} — jüngste Mehr-Handy-Ortungen
 export function setManualPosHandler(fn) { _manualPosHandler = fn; }
-// Antippen eines 🎯-Fix-Popups öffnet darüber die AR-Peilung (app.js registriert den Handler).
-export function setFixArHandler(fn) { _fixArHandler = fn; }
 export async function renderMap(dets) {
   lastMapDets = dets;
   const mapEl = document.getElementById('map');
@@ -854,11 +992,13 @@ export async function renderMap(dets) {
       maxZoom: 19, attribution: '© OpenStreetMap-Mitwirkende'
     }).addTo(mapInst);
     markersLayer = L.layerGroup().addTo(mapInst);
-    fixLayer = L.layerGroup().addTo(mapInst);
     if (livePos) mapCenteredOnLive = true;
     else if (recentGeo.length > 1) mapInst.fitBounds(recentGeo.map(d => [d.lat, d.lng]), { padding: [28, 28], maxZoom: 16 });
     _setupManualPosControl(L);
-    // Im Positions-setzen-Modus setzt ein Tippen auf die Karte die eigene Position (Stufe 4).
+    // Liegt kein einziger Fund im sichtbaren Ausschnitt, einen Hinweis mit "Alle Funde zeigen" einblenden.
+    mapInst.on('moveend zoomend', _checkMapOutside);
+    const fitBtn = $('mapFitBtn'); if (fitBtn) fitBtn.onclick = fitAllFinds;
+    // Im Positions-setzen-Modus setzt ein Tippen auf die Karte die eigene Position.
     mapInst.on('click', e => {
       if (!_manualMode) return;
       _manualMode = false;
@@ -867,21 +1007,21 @@ export async function renderMap(dets) {
       if (_manualPosHandler) _manualPosHandler(pos);
     });
   }
-  _renderFixes();
 
   markersLayer.clearLayers();
-  // Funde von Arten aus der Beobachtungsliste heben sich farblich ab — unabhängig von ihrer Seltenheit.
-  const colorFor = d => FAVORITES.has(d.key) ? '#a3e635' : d.rarity === 'rare' ? '#fbbf24' : d.rarity === 'mammal' ? '#fb7185' : '#34d399';
-  const iconFor = d => FAVORITES.has(d.key) ? '⭐' : d.rarity === 'rare' ? '✨' : d.rarity === 'mammal' ? '🦌' : '🐦';
+  // Funde von Arten aus der Suchliste heben sich farblich ab (Himmelblau, unabhängig von der Seltenheit) —
+  // vorher Lime, das neben dem Grün der häufigen Arten kaum zu unterscheiden war.
+  const colorFor = d => FAVORITES.has(d.key) ? MAP_COLORS.fav : MAP_COLORS[d.rarity] || MAP_COLORS.common;
   for (const d of recentGeo) {
-    const m = L.circleMarker([d.lat, d.lng], { radius: 7, color: colorFor(d), weight: 2, fillColor: colorFor(d), fillOpacity: .8 });
-    // Erst Name+Icon als Vorschau (Leaflet-Popup) statt direkt das volle Detail-Fenster zu öffnen —
+    const m = L.circleMarker([d.lat, d.lng], { radius: 7, color: '#04130d', weight: 1.5, fillColor: colorFor(d), fillOpacity: .95 });
+    // Erst Name als Vorschau (Leaflet-Popup) statt direkt das volle Detail-Fenster zu öffnen —
     // bei dicht liegenden Punkten sieht man so, welchen man erwischt hat, bevor man reinklickt.
-    const popupEl = document.createElement('div');
+    const popupEl = document.createElement('button');
     popupEl.className = 'map-pin-popup';
-    const icoSpan = document.createElement('span'); icoSpan.className = 'mp-ico'; icoSpan.textContent = iconFor(d);
+    const dot = document.createElement('span'); dot.className = 'mp-dot'; dot.style.background = colorFor(d);
     const nameSpan = document.createElement('span'); nameSpan.className = 'mp-name'; nameSpan.textContent = d.species || 'Unbekannt';
-    popupEl.append(icoSpan, nameSpan);
+    const chev = document.createElement('span'); chev.innerHTML = icon('chev');
+    popupEl.append(dot, nameSpan, chev);
     popupEl.onclick = () => openModal(d.key);
     m.bindPopup(popupEl, { closeButton: false, offset: [0, -4], className: 'map-pin-popup-wrap' });
     m.addTo(markersLayer);
@@ -897,26 +1037,37 @@ export async function renderMap(dets) {
     mapCenteredOnLive = true;
   }
   updateUserMarker();
-  for (const peerId of peerPositions.keys()) _applyPeerMarker(peerId);
-  setTimeout(() => mapInst && mapInst.invalidateSize(), 60);
+  setTimeout(() => { if (mapInst) { mapInst.invalidateSize(); _checkMapOutside(); } }, 60);
 }
 
-// Mini-Männchen-Icon fürs "Du bist hier"/Partner-Marker: Pulsring + Figur + Richtungspfeil
-// (Pfeil wird nur eingeblendet/gedreht, sobald sich die Position tatsächlich ändert). Partner-
-// Marker bekommen zusätzlich eine kleine Nummer (im Stern-Modell mit 3+ Handys zur Unterscheidung,
-// wer wer ist) — badgeNum ist immer eine intern vergebene Verbindungs-Nummer, kein Fremdtext.
+// Alle verorteten Funde ins Bild holen (Knopf unter "Position setzen" und im Leerhinweis).
+function fitAllFinds() {
+  if (!mapInst) return;
+  const pts = lastMapDets.filter(d => typeof d.lat === 'number' && typeof d.lng === 'number').slice(-200).map(d => [d.lat, d.lng]);
+  if (!pts.length) { if (livePos) mapInst.setView([livePos.lat, livePos.lng], 14); return; }
+  if (pts.length === 1) mapInst.setView(pts[0], 16);
+  else mapInst.fitBounds(pts, { padding: [32, 32], maxZoom: 16 });
+}
+function _checkMapOutside() {
+  const hint = $('mapOutside'); if (!hint || !mapInst) return;
+  const geo = lastMapDets.filter(d => typeof d.lat === 'number' && typeof d.lng === 'number');
+  if (!geo.length) { hint.hidden = true; return; }
+  const b = mapInst.getBounds();
+  hint.hidden = geo.some(d => b.contains([d.lat, d.lng]));
+}
+
+// Mini-Männchen-Icon fürs "Du bist hier": Pulsring + Figur + Richtungspfeil
+// (Pfeil wird nur eingeblendet/gedreht, sobald sich die Position tatsächlich ändert).
 const PERSON_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6.5" r="4.2"/><path d="M12 13c-4.7 0-8.5 2.8-8.5 6.3V22h17v-2.7c0-3.5-3.8-6.3-8.5-6.3z"/></svg>';
-function _walkerIconHtml(kind, badgeNum) {
-  const badge = badgeNum != null ? `<span class="peer-badge">${badgeNum}</span>` : '';
-  return `<span class="${kind}-pulse"></span><span class="map-heading-arrow"></span><span class="${kind}-figure">${PERSON_SVG}</span>${badge}`;
+function _walkerIconHtml() {
+  return `<span class="you-pulse"></span><span class="map-heading-arrow"></span><span class="you-figure">${PERSON_SVG}</span>`;
 }
 
 // Bewegt einen Marker weich von seiner aktuellen Position zur neuen (statt hart zu springen) und
 // dreht den kleinen Richtungspfeil in die Bewegungsrichtung. Bei der allerersten Platzierung
 // (kein vorheriger Punkt) wird direkt gesetzt, ohne zu gleiten (nichts, wovon man "herkommen" könnte).
-// Pro Marker aktive Glide-"Generation" (WeakMap, kein Leak): Peer-Updates treffen bei aktivem
-// Multi-Handy-Tracking (~300-500ms) öfter ein als eine Glide-Animation dauert (~900ms) — ohne
-// diesen Zähler würde der ältere, noch laufende Tick-Loop den Marker nach dem neueren Zielwechsel
+// Pro Marker aktive Glide-"Generation" (WeakMap, kein Leak): trifft ein neues Ziel ein, während
+// die vorige Glide-Animation (~900ms) noch läuft, würde der ältere Tick-Loop den Marker sonst
 // wieder auf sein inzwischen veraltetes Ziel zurückspringen lassen (sichtbares Rückwärts-Zucken).
 const _glideGen = new WeakMap();
 function _glideMarker(marker, fromPos, toPos, durMs = 900) {
@@ -949,7 +1100,7 @@ function updateUserMarker() {
   if (!mapInst || !window.L || !livePos) return;
   const L = window.L;
   if (!userMarker) {
-    const icon = L.divIcon({ className: 'you-marker', html: _walkerIconHtml('you'), iconSize: [26, 26], iconAnchor: [13, 13] });
+    const icon = L.divIcon({ className: 'you-marker', html: _walkerIconHtml(), iconSize: [26, 26], iconAnchor: [13, 13] });
     userMarker = L.marker([livePos.lat, livePos.lng], { icon, interactive: false, zIndexOffset: 1000 }).addTo(mapInst);
     _lastUserPos = livePos;
   } else {
@@ -958,19 +1109,28 @@ function updateUserMarker() {
   }
 }
 
-// ---- Stufe 4: manuelle Positions-Korrektur ----
+// ---- Manuelle Positions-Korrektur ----
 // Eigener Leaflet-Control-Button: aktiviert den Setz-Modus; das nächste Tippen auf die Karte legt
-// die eigene Position fest (überschreibt den GPS-Fehler, der die gemeinsame Peilung dominiert).
+// die eigene Position fest (überschreibt den GPS-Fehler, z. B. für die Koordinaten neuer Funde).
 let _manualBtnEl = null;
 function _setupManualPosControl(L) {
   const Ctl = L.Control.extend({
     options: { position: 'topright' },
     onAdd() {
-      const el = L.DomUtil.create('button', 'map-manual-btn');
+      // Zwei Knöpfe untereinander: Position setzen (Stecknadel) und darunter "Alle Funde zeigen".
+      const wrap = L.DomUtil.create('div', 'map-ctl');
+      const el = L.DomUtil.create('button', 'map-manual-btn', wrap);
       el.type = 'button';
       el.title = 'Eigene Position manuell setzen';
-      el.innerHTML = '📍';
-      L.DomEvent.disableClickPropagation(el);
+      el.setAttribute('aria-label', 'Eigene Position manuell setzen');
+      el.innerHTML = icon('pin');
+      const fit = L.DomUtil.create('button', 'map-manual-btn map-fit-btn', wrap);
+      fit.type = 'button';
+      fit.title = 'Alle Funde zeigen';
+      fit.setAttribute('aria-label', 'Alle Funde zeigen');
+      fit.innerHTML = icon('frame');
+      fit.onclick = fitAllFinds;
+      L.DomEvent.disableClickPropagation(wrap);
       el.onclick = () => {
         // Ist bereits eine manuelle Position gesetzt -> Klick hebt sie auf (zurück zu GPS).
         if (_manualMarker) { showManualPos(null); if (_manualPosHandler) _manualPosHandler(null); return; }
@@ -978,7 +1138,7 @@ function _setupManualPosControl(L) {
         _updateManualBtn();
       };
       _manualBtnEl = el;
-      return el;
+      return wrap;
     },
   });
   mapInst.addControl(new Ctl());
@@ -997,100 +1157,10 @@ export function showManualPos(pos) {
   const L = window.L;
   if (_manualMarker) { _manualMarker.remove(); _manualMarker = null; }
   if (pos) {
-    const icon = L.divIcon({ className: 'manual-pos-marker', html: '📍', iconSize: [30, 30], iconAnchor: [15, 28] });
-    _manualMarker = L.marker([pos.lat, pos.lng], { icon, interactive: false, zIndexOffset: 1100 }).addTo(mapInst);
+    const pinIcon = L.divIcon({ className: 'manual-pos-marker', html: '<svg viewBox="0 0 24 24"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.4"/></svg>', iconSize: [30, 30], iconAnchor: [15, 28] });
+    _manualMarker = L.marker([pos.lat, pos.lng], { icon: pinIcon, interactive: false, zIndexOffset: 1100 }).addTo(mapInst);
   }
   _updateManualBtn();
-}
-
-// ---- Stufe 4: Ortungs-Marker der Mehr-Handy-Fixes ----
-// Trägt alle Fix-Daten mit, damit die AR-Peilung später direkt vom Marker aus geöffnet werden
-// kann (Popup antippen) — das Ergebnis-Popup selbst ist ja nach ~25 s wieder weg.
-export function addFixMarker(fix) {
-  if (!fix || typeof fix.lat !== 'number' || typeof fix.lng !== 'number') return;
-  _fixes.push({
-    lat: fix.lat, lng: fix.lng, uncertM: fix.uncertM || 40, species: fix.species || 'Fund', ts: Date.now(),
-    dirSpreadDeg: fix.dirSpreadDeg, rangeMinM: fix.rangeMinM, rangeMaxM: fix.rangeMaxM,
-    calibrated: !!fix.calibrated, nPhones: fix.nPhones || 3,
-  });
-  while (_fixes.length > 12) _fixes.shift();
-  _renderFixes();
-}
-function _renderFixes() {
-  if (!mapInst || !window.L || !fixLayer) return;
-  const L = window.L;
-  fixLayer.clearLayers();
-  const now = Date.now();
-  for (const f of _fixes) {
-    if (now - f.ts > 30 * 60000) continue; // älter als 30 min ausblenden
-    L.circle([f.lat, f.lng], { radius: Math.max(10, f.uncertM), color: '#f0abfc', weight: 1.5, fillColor: '#f0abfc', fillOpacity: .12 }).addTo(fixLayer);
-    const icon = L.divIcon({ className: 'fix-marker', html: '🎯', iconSize: [26, 26], iconAnchor: [13, 13] });
-    const m = L.marker([f.lat, f.lng], { icon, zIndexOffset: 900 }).addTo(fixLayer);
-    const pop = document.createElement('div');
-    pop.className = 'map-pin-popup';
-    const ico = document.createElement('span'); ico.className = 'mp-ico'; ico.textContent = '🎯';
-    const nm = document.createElement('span'); nm.className = 'mp-name';
-    nm.textContent = f.species + ' · ±' + Math.round(f.uncertM) + ' m' + (_fixArHandler ? ' · 📷 AR' : '');
-    pop.append(ico, nm);
-    if (_fixArHandler) pop.onclick = () => _fixArHandler(f);
-    m.bindPopup(pop, { closeButton: false, offset: [0, -4], className: 'map-pin-popup-wrap' });
-  }
-}
-
-// Position eines gekoppelten Partner-Handys (js/locate.js meldet Updates hierher, ein Aufruf pro
-// Partner) — eigener nummerierter Marker pro Partner, unabhängig von den Fund-Pins und dem "Du
-// bist hier"-Punkt. pos===null entfernt genau diesen einen Partner-Marker wieder (z.B. Trennung).
-// Wird gemerkt, auch bevor die Karte je geöffnet wurde (mapInst existiert dann noch nicht) — beim
-// nächsten renderMap() zieht _applyPeerMarker die zwischengespeicherte Position dann nach.
-export function updatePeerMarker(peerId, pos) {
-  if (pos) peerPositions.set(peerId, pos); else peerPositions.delete(peerId);
-  _applyPeerMarker(peerId);
-}
-
-// Distanz + Peilung zu einem Partner NICHT mehr ständig als Text-Chip (skaliert nicht auf mehrere
-// Partner) — stattdessen zeigt ein Klick auf den nummerierten Partner-Marker die Werte in einem
-// kleinen Popup, genau wie bei den Fund-Pins.
-function _peerDistText(peerId) {
-  const pos = peerPositions.get(peerId);
-  if (!pos || !livePos) return null;
-  const distM = Math.round(haversineKm(livePos, pos) * 1000);
-  const brg = bearingDeg(livePos, pos);
-  const dirs = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
-  const dirTxt = dirs[Math.round(brg / 45) % 8];
-  const distTxt = distM >= 1000 ? (distM / 1000).toFixed(1) + ' km' : distM + ' m';
-  return distTxt + ' · ' + dirTxt;
-}
-
-function _showPeerDistPopup(peerId, marker) {
-  const txt = _peerDistText(peerId);
-  const popupEl = document.createElement('div');
-  popupEl.className = 'map-pin-popup';
-  const icoSpan = document.createElement('span'); icoSpan.className = 'mp-ico'; icoSpan.textContent = '🤝';
-  const nameSpan = document.createElement('span'); nameSpan.className = 'mp-name';
-  nameSpan.textContent = 'Partner ' + peerId + (txt ? ' · ' + txt : ' · Entfernung noch unbekannt');
-  popupEl.append(icoSpan, nameSpan);
-  marker.bindPopup(popupEl, { closeButton: false, offset: [0, -4], className: 'map-pin-popup-wrap' }).openPopup();
-}
-
-function _applyPeerMarker(peerId) {
-  const pos = peerPositions.get(peerId);
-  let entry = peerMarkers.get(peerId);
-  if (!pos) {
-    if (entry) { entry.marker.remove(); peerMarkers.delete(peerId); }
-    return;
-  }
-  if (!mapInst || !window.L) return;
-  const L = window.L;
-  if (!entry) {
-    const icon = L.divIcon({ className: 'peer-marker', html: _walkerIconHtml('peer', peerId), iconSize: [26, 26], iconAnchor: [13, 13] });
-    const marker = L.marker([pos.lat, pos.lng], { icon, interactive: true, zIndexOffset: 999 }).addTo(mapInst);
-    marker.on('click', () => _showPeerDistPopup(peerId, marker));
-    entry = { marker, lastAnimPos: pos };
-    peerMarkers.set(peerId, entry);
-  } else {
-    _glideMarker(entry.marker, entry.lastAnimPos, pos);
-    entry.lastAnimPos = pos;
-  }
 }
 
 let routeLayer = null;
@@ -1217,7 +1287,7 @@ async function togglePlayCall(sci) {
   if (callAudio && !callAudio.paused) { stopCallAudio(); return; }
   if (callBusy) return;   // vorherige Anfrage noch in Flight — zweiten Tap ignorieren statt zu überlagern
   if (!xcKeyGet()) {
-    const label = $('mPlayLabel'); if (label) label.textContent = 'Xeno-canto-Key fehlt (⚙ Einstellungen)';
+    const label = $('mPlayLabel'); if (label) label.textContent = 'Xeno-canto-Key fehlt (Einstellungen)';
     setTimeout(() => { if (label) label.textContent = 'Ruf anhören'; }, 3000);
     return;
   }
@@ -1304,9 +1374,10 @@ async function buildShareCard(sp, imgUrl, credit, pos) {
   // Location + date
   const dateStr = new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
   ctx.font = '28px Inter, sans-serif';
+  // pos kommt hier schon vergröbert (bzw. null bei schützenswerten Arten) aus sharePhotoCard.
   if (pos) {
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.fillText('📍 ' + pos.lat.toFixed(4) + '° N, ' + pos.lng.toFixed(4) + '° O · ' + dateStr, W / 2, 870);
+    ctx.fillText('📍 ' + _fmtSharePos(pos) + ' · ' + dateStr, W / 2, 870);
   } else {
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.fillText(dateStr, W / 2, 870);
@@ -1328,11 +1399,40 @@ async function buildShareCard(sp, imgUrl, credit, pos) {
 }
 
 let modalToken = 0;
-function openModal(key) {
+// Die gerade im Arten-Sheet gezeigte Art (für Suchliste/Richtung/Foto-Aktionen).
+let curSheet = null;
+function updateSheetFav() {
+  const b = $('mFavBtn'); if (!b || !curSheet) return;
+  const on = FAVORITES.has(curSheet.key);
+  b.classList.toggle('on', on);
+  b.setAttribute('aria-pressed', String(on));
+  b.querySelector('svg').outerHTML = icon(on ? 'star-fill' : 'star');
+  b.querySelector('span').textContent = on ? 'Auf Suchliste' : 'Suchliste';
+}
+// opts.conf: Erkennungssicherheit (nur aus der Live-Liste bekannt) · opts.demo: Demo-Treffer
+function openModal(key, opts = {}) {
   const sp = SPECIES[key] || SPECIES.amsel;
   const g = sp.grad || DEFAULT_GRAD;
+  curSheet = { key, name: sp.name };
   $('mName').textContent = sp.name;
   $('mSci').textContent = sp.sci;
+  // Konfidenz als Zahl neben dem Balken — früher stand hier fest 96 %, egal woher man kam.
+  const confRow = $('mConfRow');
+  if (confRow) {
+    const has = typeof opts.conf === 'number';
+    confRow.hidden = !has;
+    if (has) {
+      const pct = Math.round(opts.conf * 100);
+      $('mConfFill').style.width = pct + '%';
+      $('mConfVal').textContent = pct + ' %';
+      confRow.title = 'Erkennungssicherheit ' + pct + ' %';
+    }
+  }
+  updateSheetFav();
+  // Demo-Treffer: kein art-beschriftetes Foto (der Artname ist zufällig gewürfelt).
+  const photoBtn = $('mPhotoBtn'); if (photoBtn) photoBtn.hidden = !!opts.demo;
+  const wiki = $('mWikiLink');
+  if (wiki) wiki.href = 'https://de.wikipedia.org/wiki/' + encodeURIComponent(String(sp.sci || sp.name || '').replace(/ /g, '_'));
   const av = $('mAvatar');
   av.style.background = `linear-gradient(140deg,${g[0]},${g[1]})`;
   av.style.backgroundImage = ''; av.style.backgroundSize = ''; av.style.backgroundPosition = '';
@@ -1360,9 +1460,9 @@ function openModal(key) {
     if (crEl) {
       const c = av._credit;
       if (c && (c.artist || c.license)) {
-        crEl.textContent = '📷 ' + (c.artist || 'Wikimedia Commons') + (c.license ? ' · ' + c.license : '');
+        crEl.textContent = 'Foto: ' + (c.artist || 'Wikimedia Commons') + (c.license ? ' · ' + c.license : '');
         crEl.style.cursor = c.pageUrl ? 'pointer' : 'default';
-        crEl.onclick = c.pageUrl ? e => { e.stopPropagation(); window.open(c.pageUrl, '_blank'); } : null;
+        crEl.onclick = c.pageUrl ? e => { e.stopPropagation(); window.open(c.pageUrl, '_blank', 'noopener,noreferrer'); } : null;
       } else {
         crEl.textContent = 'Wikimedia Commons';
       }
@@ -1411,9 +1511,9 @@ function openModal(key) {
         ? lastDet.lat.toFixed(4) + '° N, ' + lastDet.lng.toFixed(4) + '° O' : null;
       const dirs = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
       const dir = (typeof lastDet.heading === 'number')
-        ? '🧭 ' + dirs[Math.round(lastDet.heading / 45) % 8] + ' (' + lastDet.heading + '°)' : null;
+        ? 'Blick nach ' + dirs[Math.round(lastDet.heading / 45) % 8] + ' (' + lastDet.heading + '°)' : null;
       const wx = lastDet.weather
-        ? weatherEmoji(lastDet.weather.wmo) + ' ' + lastDet.weather.temp + '°C' : null;
+        ? lastDet.weather.temp + ' °C, ' + weatherLabel(lastDet.weather.wmo) : null;
       $('mLastInfo').textContent = [when, where, dir, wx].filter(Boolean).join(' · ');
     } else {
       lastBlock.hidden = true;
@@ -1430,8 +1530,10 @@ function openModal(key) {
         if (token !== modalToken || !c) return;
         av._credit = c;
         if (!creditEl || (!c.artist && !c.license)) return;
-        creditEl.innerHTML = `📷 ${c.artist || 'Wikimedia Commons'}${c.license ? ' · ' + c.license : ''}`;
-        creditEl.onclick = () => c.pageUrl && window.open(c.pageUrl, '_blank');
+        // textContent statt innerHTML: Urheber/Lizenz sind freier Text aus der Commons-API (bzw. dem
+        // localStorage-Cache) — das HTML-Strippen in fetchImageCredit ist kein Escaping.
+        creditEl.textContent = `Foto: ${c.artist || 'Wikimedia Commons'}${c.license ? ' · ' + c.license : ''}`;
+        creditEl.onclick = () => c.pageUrl && window.open(c.pageUrl, '_blank', 'noopener,noreferrer');
         creditEl.hidden = false;
       });
     });
@@ -1449,14 +1551,14 @@ function openModal(key) {
 
   // Optionale Gemini-Anreicherung (gecacht, läuft nur 1× pro Art/Gerät; danach kommt's aus dem localStorage-Cache).
   if (gemini.hasKey() && sp.sci) {
-    if (badge) { badge.hidden = false; badge.textContent = '✨ Gemini …'; }
+    if (badge) { badge.hidden = false; badge.textContent = 'Gemini …'; }
     gemini.enrich(sp.sci, sp.name).then(res => {
       if (token !== modalToken) return;
       if (!res) { if (badge) badge.hidden = true; return; }
       $('mMeaning').textContent = res.meaning;
       $('mSteckbrief').textContent = res.steckbrief;
       textSource = 'gemini';
-      if (badge) badge.textContent = '✨ erklärt von Gemini';
+      if (badge) badge.textContent = 'erklärt von Gemini';
       if (res.photoTip) {
         const b = $('mPhotoTipBlock'), p = $('mPhotoTip');
         if (b && p) { p.textContent = res.photoTip; b.hidden = false; }
@@ -1464,70 +1566,60 @@ function openModal(key) {
     });
   }
 }
-function closeSheet() { $('sheet').classList.remove('open'); stopOrientation(); stopCallAudio(); curTargetGeo = null; }
+function closeSheet() { $('sheet').classList.remove('open'); stopOrientation(); stopCallAudio(); curTargetGeo = null; curSheet = null; }
 
-// Timing-Modal öffnen: lädt aktuelle Einstellungen + Sonnenaufgang + Morgen-Wetter.
-export async function openTimingModal(pos) {
+// "Automatisch lauschen" öffnen: Formular frisch aus dem Speicher (Dauerüberwachung kann
+// inzwischen von selbst geendet haben) + Startzeit des Morgenchors.
+export async function openTimingModal() {
   const modal = $('timingModal');
   if (!modal) return;
-  // Morgenchor
-  const mc = getMorgenchor();
-  if ($('mcEnabled')) $('mcEnabled').checked = mc.enabled;
-  if ($('mcOffset')) { $('mcOffset').value = mc.offsetMin; if ($('mcOffsetVal')) $('mcOffsetVal').textContent = mc.offsetMin + ' Min'; }
-  // Nacht-Modus
-  const nm = getNachtModus();
-  if ($('nmEnabled')) $('nmEnabled').checked = nm.enabled;
-  if ($('nmTime')) $('nmTime').value = String(nm.hour).padStart(2, '0') + ':' + String(nm.minute).padStart(2, '0');
-  if ($('nmEndTime')) $('nmEndTime').value = String(nm.endHour ?? 23).padStart(2, '0') + ':' + String(nm.endMinute ?? 30).padStart(2, '0');
-  if ($('nmEndEnabled')) $('nmEndEnabled').checked = nm.endEnabled ?? false;
-  // Fotografen-Wecker
-  const fw = getFotoWecker();
-  if ($('fwEnabled')) $('fwEnabled').checked = fw.enabled;
-  if ($('fwTime')) $('fwTime').value = String(fw.hour).padStart(2, '0') + ':' + String(fw.minute).padStart(2, '0');
-  if ($('fwVibrateOnly')) $('fwVibrateOnly').checked = fw.vibrateOnly ?? false;
-  // Sonnenaufgang-Karte: Klick → Detail-Popup toggle (einmalig verdrahten)
-  const srCard = $('fwSunriseCard');
-  if (srCard && !srCard._popupWired) {
-    srCard._popupWired = true;
-    srCard.addEventListener('click', () => {
-      const popup = $('fwDetailPopup');
-      if (popup) popup.hidden = !popup.hidden;
-    });
-  }
-  // Sonnenaufgang + Dämmerungsphasen abrufen
-  const srEl = $('fwSunriseTime');
-  if (srEl) srEl.textContent = '…';
-  if (pos && pos.lat != null) {
-    getSunriseFull(pos.lat, pos.lng).then(full => {
-      if (!full) { if (srEl) srEl.textContent = '– : –'; return; }
-      const fmt = d => d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
-      if (srEl) srEl.textContent = fmt(full.sunrise);
-      const popup = $('fwDetailPopup');
-      if (popup) {
-        const golden = new Date(full.sunrise.getTime() + 60 * 60000);
-        const el = id => $(id);
-        if (el('fwPhaseAstro')) el('fwPhaseAstro').textContent = fmt(full.astronomicalBegin);
-        if (el('fwPhaseNaut')) el('fwPhaseNaut').textContent = fmt(full.nauticalBegin);
-        if (el('fwPhaseCivil')) el('fwPhaseCivil').textContent = fmt(full.civilBegin);
-        if (el('fwPhaseSunrise')) el('fwPhaseSunrise').textContent = fmt(full.sunrise);
-        if (el('fwPhaseGolden')) el('fwPhaseGolden').textContent = fmt(full.sunrise) + '–' + fmt(golden);
-      }
-    }).catch(() => { if (srEl) srEl.textContent = '– : –'; });
-  } else {
-    if (srEl) srEl.textContent = '– : –';
-  }
+  syncTimingControls();
+  updateScheduleChip();
   modal.classList.add('open');
+  const sh = modal.querySelector('.sheet'); if (sh) sh.scrollTop = 0;
+}
+
+// Fotografen-Wecker (Foto-Tab → Wecker): Sonnenaufgang + Dämmerungsphasen für heute.
+export function initFotoWecker(pos) {
+  syncTimingControls();
+  const srEl = $('fwSunriseTime');
+  if (!srEl) return;
+  if (!pos || pos.lat == null) { srEl.textContent = '–:–'; return; }
+  if (srEl.textContent === '–:–') srEl.textContent = '…';
+  _sunriseFor(pos).then(full => {
+    if (!full) { srEl.textContent = '–:–'; return; }
+    srEl.textContent = fmtHM(full.sunrise);
+    const golden = new Date(full.sunrise.getTime() + 60 * 60000);
+    const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+    set('fwPhaseAstro', fmtHM(full.astronomicalBegin));
+    set('fwPhaseNaut', fmtHM(full.nauticalBegin));
+    set('fwPhaseCivil', fmtHM(full.civilBegin));
+    set('fwPhaseSunrise', fmtHM(full.sunrise));
+    set('fwPhaseGolden', fmtHM(full.sunrise) + '–' + fmtHM(golden));
+  }).catch(() => { srEl.textContent = '–:–'; });
 }
 
 // Galerie-Share: eigenes Foto → Share-Karte → nativer Share-Dialog.
 // Wird von app.js aus den Foto-Zeilen der Galerie aufgerufen.
-export async function sharePhotoCard(photoUrl, key, label, pos) {
+// Geteilte Bilder/Texte verlassen das Gerät dauerhaft (Social Media, Messenger) — darum nie die
+// präzise Position: auf 2 Nachkommastellen (≈ 1 km) vergröbert, und bei allem außer häufigen Arten
+// (selten / Säuger) ganz weggelassen, damit sich Brut- und Rückzugsplätze nicht ablesen lassen.
+// In der App/DB und in den Ornithologie-Exporten bleiben die genauen Koordinaten erhalten.
+function _sharePos(pos, sp) {
+  if (!pos || typeof pos.lat !== 'number' || typeof pos.lng !== 'number') return null;
+  if (sp && sp.rarity && sp.rarity !== 'common') return null;
+  return { lat: roundCoord(pos.lat, 2), lng: roundCoord(pos.lng, 2) };
+}
+function _fmtSharePos(p) { return p.lat.toFixed(2) + '° N, ' + p.lng.toFixed(2) + '° O'; }
+
+export async function sharePhotoCard(photoUrl, key, label, rawPos) {
   const sp = SPECIES[key] || { name: label || 'Unbekannte Art', sci: '' };
+  const pos = _sharePos(rawPos, SPECIES[key]);
   const blob = await buildShareCard(sp, photoUrl, { artist: 'Eigenes Foto' }, pos);
   const fname = 'waldohr-' + (sp.name || label || 'vogel').toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.jpg';
   const file = blob ? new File([blob], fname, { type: 'image/jpeg' }) : null;
   const appUrl = location.origin + location.pathname;
-  const locTxt = pos ? '\n📍 ' + pos.lat.toFixed(4) + '° N, ' + pos.lng.toFixed(4) + '° O' : '';
+  const locTxt = pos ? '\n📍 ' + _fmtSharePos(pos) : '';
   const title = 'WaldOhr – ' + (sp.name || label || '');
   const text = (sp.name || label || '') + (sp.sci ? ' (' + sp.sci + ')' : '') + ' – eigenes Foto! 📸'
     + locTxt + '\n\n#WaldOhr #Ornithologie #Vogelbeobachtung #Natur'

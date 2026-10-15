@@ -1,4 +1,10 @@
 // Open-Meteo (kostenlos, kein API-Key): aktuelles Wetter + Morgen-Prognose.
+// Koordinaten gehen an Drittanbieter (Open-Meteo, Nominatim) nur auf 2 Nachkommastellen
+// (≈ 1 km) gerundet raus — Wetter-Raster sind ohnehin gröber, aber der exakte GPS-Punkt
+// (Wohnhaus, Brutplatz seltener Arten) landet so nicht in fremden Server-Logs. Die Caches
+// unten vergleichen weiter die ROHEN Koordinaten mit Toleranz (0,05° bzw. 0,02°) — das passt,
+// weil jede Toleranz ≥ der Rundungsauflösung ist.
+import { roundCoord } from './util.js';
 const TTL = 10 * 60 * 1000;
 let _cache = null;
 let _tmwCache = null; // { lat, lng, ts, slots }
@@ -34,7 +40,7 @@ export async function fetchWeather(lat, lng) {
   }
   try {
     const url = 'https://api.open-meteo.com/v1/forecast'
-      + '?latitude=' + lat.toFixed(4) + '&longitude=' + lng.toFixed(4)
+      + '?latitude=' + roundCoord(lat, 2) + '&longitude=' + roundCoord(lng, 2)
       + '&current=temperature_2m,weathercode&timezone=auto';
     const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
     if (!res.ok) return null;
@@ -58,7 +64,7 @@ export async function fetchPhotoWeather(lat, lng) {
   }
   try {
     const url = 'https://api.open-meteo.com/v1/forecast'
-      + '?latitude=' + lat.toFixed(4) + '&longitude=' + lng.toFixed(4)
+      + '?latitude=' + roundCoord(lat, 2) + '&longitude=' + roundCoord(lng, 2)
       + '&current=temperature_2m,weathercode,wind_speed_10m,wind_direction_10m,'
       + 'relative_humidity_2m,visibility,cloudcover,uv_index'
       + '&timezone=auto';
@@ -132,7 +138,8 @@ export async function reverseGeocode(lat, lng) {
   if (_geoNameCache && Math.abs(_geoNameCache.lat - lat) < 0.02 && Math.abs(_geoNameCache.lng - lng) < 0.02)
     return _geoNameCache.name;
   try {
-    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat.toFixed(4)}&lon=${lng.toFixed(4)}&format=json&zoom=12`;
+    // zoom=12 liefert ohnehin nur Ort/Stadt — dafür reichen 2 Nachkommastellen (≈ 1 km).
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${roundCoord(lat, 2)}&lon=${roundCoord(lng, 2)}&format=json&zoom=12`;
     const res = await fetch(url, { headers: { 'Accept-Language': 'de' }, signal: AbortSignal.timeout(6000) });
     const j = await res.json();
     const a = j.address || {};
@@ -160,7 +167,7 @@ export async function fetchMoonTimes(lat, lng) {
     return _moonTimesCache.data;
   try {
     const url = 'https://api.open-meteo.com/v1/forecast'
-      + '?latitude=' + lat.toFixed(4) + '&longitude=' + lng.toFixed(4)
+      + '?latitude=' + roundCoord(lat, 2) + '&longitude=' + roundCoord(lng, 2)
       + '&daily=moonrise,moonset&timezone=auto&forecast_days=1';
     const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
     if (!res.ok) return null;
@@ -190,7 +197,7 @@ export async function fetchTodayHours(lat, lng) {
     return _todayCache.slots;
   try {
     const url = 'https://api.open-meteo.com/v1/forecast'
-      + '?latitude=' + lat.toFixed(4) + '&longitude=' + lng.toFixed(4)
+      + '?latitude=' + roundCoord(lat, 2) + '&longitude=' + roundCoord(lng, 2)
       + '&hourly=temperature_2m,precipitation_probability,cloudcover,weathercode,visibility'
       + '&timezone=auto&forecast_days=1';
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
@@ -227,7 +234,7 @@ export async function fetchTomorrowMorning(lat, lng) {
   }
   try {
     const url = 'https://api.open-meteo.com/v1/forecast'
-      + '?latitude=' + lat.toFixed(4) + '&longitude=' + lng.toFixed(4)
+      + '?latitude=' + roundCoord(lat, 2) + '&longitude=' + roundCoord(lng, 2)
       + '&hourly=temperature_2m,precipitation_probability,cloudcover,weathercode,visibility'
       + '&timezone=auto&forecast_days=2';
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });

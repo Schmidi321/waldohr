@@ -43,6 +43,71 @@ export async function addDetection(d) {
   });
 }
 
+// Backup-Import in EINER Transaktion über beide Stores: entweder landet alles oder nichts
+// (vorher Einzel-Transaktionen je Fund — brach der Import mittendrin ab, blieben halbe Daten
+// liegen und ein zweiter Versuch duplizierte alles). Duplikate werden gegen den Bestand über
+// ts+key erkannt, damit zweimaliges Einspielen derselben Sicherung nichts verdoppelt; Anhänge
+// über ts+key+kind+Größe. Die Datensätze müssen VORHER validiert sein (backup.js) — hier wird
+// nur noch geschrieben. dets: [{ oldId, rec }], atts: [{ oldDetId, rec }] (rec ohne id).
+export async function importRecords(dets, atts) {
+  const database = await db();
+  return new Promise((res, rej) => {
+    const tx = database.transaction([STORE, ATT_STORE], 'readwrite');
+    const store = tx.objectStore(STORE), attStore = tx.objectStore(ATT_STORE);
+    const out = { detAdded: 0, detDuplicates: 0, attAdded: 0, attDuplicates: 0 };
+    const idMap = new Map();      // alte Fund-ID aus der Sicherung -> neue/vorhandene ID
+    const dKey = d => d.ts + '|' + d.key;
+    const aKey = a => a.ts + '|' + (a.key ?? '') + '|' + a.kind + '|' + (a.blob?.size ?? 0);
+
+    const writeAtts = existingAtts => {
+      for (const { oldDetId, rec } of atts) {
+        const k = aKey(rec);
+        if (existingAtts.has(k)) { out.attDuplicates++; continue; }
+        existingAtts.add(k);
+        const detId = oldDetId != null && idMap.has(oldDetId) ? idMap.get(oldDetId) : null;
+        attStore.add({ ...rec, detId });
+        out.attAdded++;
+      }
+    };
+    const aliases = []; // [alteId, ts|key] für Duplikate innerhalb der Datei — ID erst nach add() bekannt
+    const afterDets = () => {
+      for (const [oldId, k] of aliases) idMap.set(oldId, seen.get(k));
+      if (!atts.length) return;
+      const r = attStore.getAll();
+      r.onsuccess = () => writeAtts(new Set((r.result || []).map(aKey)));
+    };
+
+    const seen = new Map();   // ts|key -> vorhandene ID (null = in dieser Transaktion noch im Schreiben)
+    const getReq = store.getAll();
+    getReq.onsuccess = () => {
+      for (const d of getReq.result || []) seen.set(dKey(d), d.id);
+      let pending = 0;
+      for (const { oldId, rec } of dets) {
+        const k = dKey(rec);
+        if (seen.has(k)) {
+          out.detDuplicates++;
+          // Anhänge an den vorhandenen Fund hängen statt sie zu verwaisen
+          if (oldId != null) aliases.push([oldId, k]);
+          continue;
+        }
+        seen.set(k, null); // Duplikate INNERHALB der Datei ebenfalls nur einmal schreiben
+        pending++;
+        const addReq = store.add(rec);
+        addReq.onsuccess = () => {
+          if (oldId != null) idMap.set(oldId, addReq.result);
+          seen.set(k, addReq.result);
+          if (--pending === 0) afterDets();
+        };
+        out.detAdded++;
+      }
+      if (pending === 0) afterDets();
+    };
+    tx.oncomplete = () => res(out);
+    tx.onerror = () => rej(tx.error);
+    tx.onabort = () => rej(tx.error || new Error('Import abgebrochen'));
+  });
+}
+
 // ---- Anhänge (eigene Audio-Aufnahmen & Fotos) — Grundlage fürs Naturtagebuch ----
 export async function addAttachment({ detId = null, key = null, label = null, kind, blob, mime = '', note = null, ts = Date.now() }) {
   const database = await db();
@@ -212,36 +277,48 @@ export function qualifyingDetections(dets) {
   return dets.filter(d => typeof d.confidence !== 'number' || d.confidence >= threshold);
 }
 
+// Aggregationen je Art laufen über Map statt Plain-Object: der Schlüssel (d.key / d.species)
+// kann aus einem importierten Backup oder vom BirdNET-Server stammen — ein Fund mit key
+// '__proto__' oder 'constructor' würde bei `map[k] = …` sonst Object.prototype verbiegen
+// (Prototype Pollution) bzw. auf geerbte Eigenschaften treffen und die Zählung verfälschen.
+function _speciesAgg(dets, withLast) {
+  const map = new Map();
+  for (const d of dets) {
+    const k = d.key || d.species;
+    let e = map.get(k);
+    if (!e) { e = { key: k, name: d.species, sci: d.sci, rarity: d.rarity, count: 0 }; if (withLast) e.last = 0; map.set(k, e); }
+    e.count++; if (withLast && d.ts > e.last) e.last = d.ts;
+  }
+  return [...map.values()];
+}
+
 export function computeStats(dets) {
-  const map = {}, hourly = new Array(24).fill(0), perDay = {};
+  const hourly = new Array(24).fill(0), perDay = new Map();
   const weekStart = startOfWeek().getTime();
   let newThisWeek = 0;
 
   for (const d of dets) {
     const t = new Date(d.ts);
-    const k = d.key || d.species;
-    if (!map[k]) map[k] = { key: k, name: d.species, sci: d.sci, rarity: d.rarity, count: 0, last: 0 };
-    map[k].count++; if (d.ts > map[k].last) map[k].last = d.ts;
     hourly[t.getHours()]++;
-    perDay[dayKey(t)] = (perDay[dayKey(t)] || 0) + 1;
+    perDay.set(dayKey(t), (perDay.get(dayKey(t)) || 0) + 1);
     if (d.ts >= weekStart) newThisWeek++;
   }
 
-  const perSpecies = Object.values(map).sort((a, b) => b.count - a.count);
+  const perSpecies = _speciesAgg(dets, true).sort((a, b) => b.count - a.count);
   const labels = ['Mo','Di','Mi','Do','Fr','Sa','So'];
   const ws = startOfWeek();
   const week = labels.map((label, i) => {
     const d = new Date(ws); d.setDate(ws.getDate() + i);
-    return { label, count: perDay[dayKey(d)] || 0 };
+    return { label, count: perDay.get(dayKey(d)) || 0 };
   });
   const last14 = [];
   for (let i = 13; i >= 0; i--) {
     const d = new Date(); d.setDate(d.getDate() - i); d.setHours(0, 0, 0, 0);
-    last14.push({ label: d.getDate() + '.', weekday: ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getDay()], count: perDay[dayKey(d)] || 0 });
+    last14.push({ label: d.getDate() + '.', weekday: ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getDay()], count: perDay.get(dayKey(d)) || 0 });
   }
 
   // Serie: aufeinanderfolgende Tage mit mindestens einem Fund (heute oder gestern als Start)
-  const present = new Set(Object.keys(perDay));
+  const present = new Set(perDay.keys());
   let streak = 0; const cur = new Date(); cur.setHours(0, 0, 0, 0);
   if (!present.has(dayKey(cur))) cur.setDate(cur.getDate() - 1);
   while (present.has(dayKey(cur))) { streak++; cur.setDate(cur.getDate() - 1); }
@@ -287,13 +364,7 @@ export function todayNearbyDetections(dets, pos, radiusKm = 3) {
 // Heutige Funde in der Nähe der aktuellen Position (für "neu hier angekommen").
 export function todayNearby(dets, pos, radiusKm = 3) {
   const near = todayNearbyDetections(dets, pos, radiusKm);
-  const map = {};
-  for (const d of near) {
-    const k = d.key || d.species;
-    if (!map[k]) map[k] = { key: k, name: d.species, sci: d.sci, rarity: d.rarity, count: 0, last: 0 };
-    map[k].count++; if (d.ts > map[k].last) map[k].last = d.ts;
-  }
-  return Object.values(map).sort((a, b) => b.last - a.last);
+  return _speciesAgg(near, true).sort((a, b) => b.last - a.last);
 }
 
 // Löscht einzelne Funde anhand ihrer ID (z. B. zum Zurücksetzen von "Heute hier") sowie alle
@@ -330,14 +401,9 @@ export function groupByLocation(dets) {
     c.n++; c.dets.push(d);
   }
   return clusters.map(c => {
-    const map = {};
     let last = 0;
-    for (const d of c.dets) {
-      const k = d.key || d.species;
-      if (!map[k]) map[k] = { key: k, name: d.species, sci: d.sci, rarity: d.rarity, count: 0 };
-      map[k].count++; if (d.ts > last) last = d.ts;
-    }
-    const perSpecies = Object.values(map).sort((a, b) => b.count - a.count);
+    for (const d of c.dets) if (d.ts > last) last = d.ts;
+    const perSpecies = _speciesAgg(c.dets, false).sort((a, b) => b.count - a.count);
     return { lat: c.lat, lng: c.lng, total: c.dets.length, speciesCount: perSpecies.length, perSpecies, last };
   }).sort((a, b) => b.last - a.last);
 }
