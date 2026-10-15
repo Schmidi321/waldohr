@@ -1,7 +1,7 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
-import { initOfflineModelSettings } from './offline-model.js';
+import { initOfflineModelSettings, isNativeApp } from './offline-model.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment, haversineKm } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, getMicDeviceId, setManualPosHandler, showManualPos, updateScheduleChip, showFotoSegment, isFotoSegment, icon } from './ui.js';
 import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, fetchMoonTimes, fetchTodayHours, weatherLabel, windDirLabel, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
@@ -155,7 +155,7 @@ const geo = {
 };
 
 // Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v115';
+const APP_VERSION = 'v116';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -2215,6 +2215,9 @@ if (dbResetBtn) dbResetBtn.onclick = async () => {
 };
 
 function registerSW() {
+  // In der App-Hülle (Capacitor) liegen alle Dateien im App-Paket — ein Service Worker brächte dort
+  // nichts außer veralteten Kopien nach einem App-Update (und wird unter iOS ohnehin nicht unterstützt).
+  if (isNativeApp()) return;
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 

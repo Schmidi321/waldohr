@@ -6,7 +6,7 @@
 // createRecognizer() wählt automatisch (siehe dort).
 import { SPECIES, ensureSpecies } from './species.js';
 import { roundCoord } from './util.js';
-import { MODEL_CACHE, modelBase, vendorBase, offlineModelInstalled } from './offline-model.js';
+import { MODEL_CACHE, modelBase, vendorBase, offlineModelInstalled, nativeModelFiles } from './offline-model.js';
 
 const WEIGHTS = [
   ['buchfink', 5], ['kohlmeise', 4], ['amsel', 4], ['rotkehlchen', 3],
@@ -71,10 +71,14 @@ export class BirdNetRecognizer {
         const p = this._wait.get(m.id); if (p) { this._wait.delete(m.id); p(m); }
       };
       w.onerror = e => { console.warn('BirdNET-Worker', e.message); };
+      // App-Hülle (Capacitor): Modell liegt im Dateisystem -> Dateien hier lesen und ohne Kopie an
+      // den Worker übergeben. Browser: files = null, der Worker liest selbst aus Cache Storage.
+      const files = await nativeModelFiles();
       const m = await new Promise((res, rej) => {
         const to = setTimeout(() => { this._wait.delete('init'); rej(new Error('BirdNET-Modell lädt nicht (Zeitüberschreitung)')); }, 90000);
         this._wait.set('init', v => { clearTimeout(to); res(v); });
-        w.postMessage({ type: 'init', cacheName: MODEL_CACHE, base: modelBase(), vendor: vendorBase() });
+        w.postMessage({ type: 'init', cacheName: files ? null : MODEL_CACHE, files, base: modelBase(), vendor: vendorBase() },
+          files ? Object.values(files) : []);
       });
       if (m.type !== 'ready') throw new Error(m.message || 'BirdNET-Modell nicht nutzbar');
       this.backend = m.backend;

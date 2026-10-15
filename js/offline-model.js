@@ -25,8 +25,46 @@ export const vendorBase = () => new URL('vendor/tfjs-4.22.0/', document.baseURI)
 const VENDOR_FILES = ['tf.min.js', 'tf-backend-wasm.min.js', 'tfjs-backend-wasm.wasm', 'tfjs-backend-wasm-simd.wasm'];
 const MARKER = 'installed.json';
 
+// ---- Ablage: Browser/PWA = Cache Storage, App-Hülle (Capacitor) = Dateisystem ----------------
+// In der nativen App ist Cache Storage unzuverlässig (iOS-WKWebView: evtl. gar nicht vorhanden bzw.
+// vom System räumbar). Dort landen die Modell-Dateien im App-eigenen Datenordner (Directory.Data,
+// wird nie automatisch geräumt). TF.js und labels.txt sind in der App ohnehin mit eingebaut.
+export const isNativeApp = () => { try { return !!self.Capacitor?.isNativePlatform?.(); } catch { return false; } };
+const FS = () => self.Capacitor.Plugins.Filesystem;
+const FS_DIR = 'birdnet-v24';
+const FS_OPT = { directory: 'DATA' };
+
+function b64(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+// Datei in Stücken schreiben: die Capacitor-Brücke transportiert Base64-Text, 4-MB-Shards am Stück
+// wären auf schwachen Handys unnötig speicherhungrig.
+async function fsWrite(name, u8) {
+  const path = FS_DIR + '/' + name, CH = 3 * 1024 * 1024;
+  await FS().writeFile({ ...FS_OPT, path, data: b64(u8.subarray(0, CH)), recursive: true });
+  for (let o = CH; o < u8.length; o += CH) await FS().appendFile({ ...FS_OPT, path, data: b64(u8.subarray(o, o + CH)) });
+}
+
+// Für den Worker: in der App alle Modell-Dateien als ArrayBuffer (werden per Transfer übergeben,
+// also ohne Kopie); im Browser null — dann liest der Worker selbst aus Cache Storage.
+export async function nativeModelFiles() {
+  if (!isNativeApp()) return null;
+  const marker = JSON.parse((await FS().readFile({ ...FS_OPT, path: FS_DIR + '/' + MARKER, encoding: 'utf8' })).data);
+  const files = {};
+  for (const name of marker.files || []) {
+    const { uri } = await FS().getUri({ ...FS_OPT, path: FS_DIR + '/' + name });
+    const r = await fetch(self.Capacitor.convertFileSrc(uri));
+    if (!r.ok) throw new Error('Modell-Datei fehlt: ' + name);
+    files[name] = await r.arrayBuffer();
+  }
+  return files;
+}
+
 export async function offlineModelInstalled() {
   try {
+    if (isNativeApp()) { await FS().stat({ ...FS_OPT, path: FS_DIR + '/' + MARKER }); return true; }
     if (!('caches' in self) || !(await caches.has(MODEL_CACHE))) return false;   // open() würde ihn leer anlegen
     const c = await caches.open(MODEL_CACHE);
     return !!(await c.match(modelBase() + MARKER));
@@ -103,19 +141,27 @@ export async function downloadOfflineModel(onProgress = () => {}, signal) {
   if (lastErr) throw lastErr;
 
   // 3) Nur die benötigten Dateien entpacken und ablegen
-  const base = modelBase();
-  await caches.delete(MODEL_CACHE);           // halbfertige Reste eines früheren Versuchs weg
-  const cache = await caches.open(MODEL_CACHE);
+  const base = modelBase(), native = isNativeApp();
+  await removeOfflineModel();                 // halbfertige Reste eines früheren Versuchs weg
+  const cache = native ? null : await caches.open(MODEL_CACHE);
   const wanted = zipEntries(buf).filter(e => /^model\/(model\.json|group1-shard\d+of\d+\.bin|mdata\/(model\.json|group1-shard\d+of\d+\.bin))$/.test(e.name));
   if (wanted.length < 4) throw new Error('Archiv enthält das Modell nicht wie erwartet.');
   let k = 0;
+  const total = wanted.length + (native ? 1 : VENDOR_FILES.length + 1);
   for (const e of wanted) {
     if (signal?.aborted) throw new DOMException('Abgebrochen', 'AbortError');
     let body = new Blob([buf.subarray(e.start, e.end)]).stream();
     if (e.method === 8) body = body.pipeThrough(new DecompressionStream('deflate-raw'));
     else if (e.method !== 0) throw new Error('Unbekannte ZIP-Kompression');
-    await cache.put(base + e.name, new Response(body, { headers: { 'Content-Type': typeOf(e.name) } }));
-    onProgress({ phase: 'unpack', done: ++k, total: wanted.length + VENDOR_FILES.length + 1 });
+    if (native) await fsWrite(e.name, new Uint8Array(await new Response(body).arrayBuffer()));
+    else await cache.put(base + e.name, new Response(body, { headers: { 'Content-Type': typeOf(e.name) } }));
+    onProgress({ phase: 'unpack', done: ++k, total });
+  }
+  if (native) {
+    // TF.js und labels.txt sind in der App eingebaut — nur noch der Marker (mit Dateiliste) zuletzt.
+    await FS().writeFile({ ...FS_OPT, path: FS_DIR + '/' + MARKER, encoding: 'utf8', recursive: true,
+      data: JSON.stringify({ model: 'BirdNET_GLOBAL_6K_V2.4', sha256: ZIP_SHA256, installed: new Date().toISOString(), files: wanted.map(e => e.name) }) });
+    return true;
   }
   // TF.js (liegt im Repo) und die deutschen Artnamen ebenfalls in den Offline-Cache: der Worker liest
   // sie direkt daraus, und der Service Worker findet sie dort per caches.match() auch ohne Netz.
@@ -124,7 +170,7 @@ export async function downloadOfflineModel(onProgress = () => {}, signal) {
     const r = await fetch(u, { signal });
     if (!r.ok) throw new Error('Datei fehlt: ' + u);
     await cache.put(u, new Response(await r.blob(), { headers: { 'Content-Type': typeOf(u) } }));
-    onProgress({ phase: 'unpack', done: ++k, total: wanted.length + extra.length });
+    onProgress({ phase: 'unpack', done: ++k, total });
   }
   await cache.put(base + MARKER, new Response(JSON.stringify({ model: 'BirdNET_GLOBAL_6K_V2.4', sha256: ZIP_SHA256, installed: new Date().toISOString() }), { headers: { 'Content-Type': 'application/json' } }));
   // Browser bitten, den Speicher nicht bei Platzmangel still zu räumen (sonst wäre das Modell im Wald plötzlich weg).
@@ -132,7 +178,10 @@ export async function downloadOfflineModel(onProgress = () => {}, signal) {
   return true;
 }
 
-export async function removeOfflineModel() { try { await caches.delete(MODEL_CACHE); } catch {} }
+export async function removeOfflineModel() {
+  if (isNativeApp()) { try { await FS().rmdir({ ...FS_OPT, path: FS_DIR, recursive: true }); } catch {} return; }
+  try { await caches.delete(MODEL_CACHE); } catch {}
+}
 
 // ---- Einstellungen: Zeile "Offline-Erkennung" -------------------------------------------------
 // onChange() wird nach Installation/Entfernen aufgerufen (app.js tauscht dann den Erkenner aus).

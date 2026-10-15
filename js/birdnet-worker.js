@@ -5,7 +5,7 @@
 // liegt unter vendor/ und wird ebenfalls aus diesem Cache gelesen — so läuft alles ohne Netz, auch
 // wenn ein Browser den Worker nicht über den Service Worker leitet.
 //
-// Nachrichten:  init {cacheName, base, vendor} -> ready {backend, ms} | error {message}
+// Nachrichten:  init {cacheName, files?, base, vendor} -> ready {backend, ms} | error {message}
 //               area {lat, lon, week}          -> area {count}
 //               classify {id, samples}         -> result {id, top:[{i, c}]}
 
@@ -20,10 +20,19 @@ async function cachedUrl(name, type) {
   if (!hit) return url;
   return URL.createObjectURL(new Blob([await hit.arrayBuffer()], { type }));
 }
-// fetch-Ersatz für tf.loadLayersModel/loadGraphModel: liest Modell-Dateien nur aus dem Cache.
+// fetch-Ersatz für tf.loadLayersModel/loadGraphModel: liest Modell-Dateien nur aus dem Cache —
+// bzw. in der App-Hülle aus den mitgeschickten Puffern (cfg.files, je Datei einmal verbraucht).
 async function cacheFetch(u) {
-  const hit = await cache.match(String(u));
-  return hit || new Response(null, { status: 404, statusText: 'nicht im Offline-Cache: ' + u });
+  u = String(u);
+  if (cfg.files) {
+    const name = u.startsWith(cfg.base) ? u.slice(cfg.base.length) : u;
+    const buf = cfg.files[name];
+    if (buf) { delete cfg.files[name]; return new Response(buf); }
+  } else {
+    const hit = cache && await cache.match(u);
+    if (hit) return hit;
+  }
+  return new Response(null, { status: 404, statusText: 'nicht im Offline-Speicher: ' + u });
 }
 
 // --- Schnelle STFT ---------------------------------------------------------------------------
@@ -100,7 +109,9 @@ function defineMelLayer() {
 
 async function init(msg) {
   const t0 = Date.now();
-  cfg = msg; cache = await caches.open(msg.cacheName);
+  cfg = msg;
+  // App-Hülle: kein Cache Storage nötig (TF.js eingebaut, Modell kommt als cfg.files).
+  cache = (msg.cacheName && self.caches) ? await caches.open(msg.cacheName) : null;
   importScripts(await cachedUrl('tf.min.js', 'text/javascript'));
   importScripts(await cachedUrl('tf-backend-wasm.min.js', 'text/javascript'));
   tf = self.tf;
