@@ -8,7 +8,12 @@
 // Fehlt der Marker, gilt das Modell als nicht installiert (abgebrochene Downloads zählen nicht).
 
 export const MODEL_CACHE = 'waldohr-birdnet-v24';   // sw.js lässt alle 'waldohr-birdnet-*' beim Update stehen
-const ZIP_URL = 'https://zenodo.org/api/records/15050749/files/BirdNET_v2.4_tfjs.zip/content';
+// Zenodo zuerst (Originalquelle); der eigene Spiegel springt nur ein, wenn Zenodo hakt (Wartung,
+// Drosselung). Gleiche Datei, gleiche SHA-256 — ein veränderter Spiegel fällt bei der Prüfung durch.
+const ZIP_URLS = [
+  'https://zenodo.org/api/records/15050749/files/BirdNET_v2.4_tfjs.zip/content',
+  'https://waldohr.fotoreich.eu/modell/BirdNET_v2.4_tfjs.zip'
+];
 const ZIP_BYTES = 75044113;
 const ZIP_SHA256 = 'f81af091fe334b15ad3f82766b3340ed768b0a6acd274ab10e8fc32d19410655';
 export const MODEL_MB = Math.round(ZIP_BYTES / 1e6);   // 75
@@ -56,6 +61,24 @@ function zipEntries(u8) {
 const TYPES = { json: 'application/json', bin: 'application/octet-stream', js: 'text/javascript', wasm: 'application/wasm', txt: 'text/plain; charset=utf-8' };
 const typeOf = name => TYPES[name.split('.').pop()] || 'application/octet-stream';
 
+// Lädt EINE Quelle in buf und prüft sie: genau das veröffentlichte Zenodo-Archiv, nichts anderes.
+async function fetchZip(url, buf, onProgress, signal) {
+  const res = await fetch(url, { signal, cache: 'no-store' });
+  if (!res.ok || !res.body) throw new Error('Download fehlgeschlagen (HTTP ' + res.status + ')');
+  let got = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (got + value.length > ZIP_BYTES) { reader.cancel().catch(() => {}); throw new Error('Unerwartete Dateigröße — Download abgebrochen.'); }
+    buf.set(value, got); got += value.length;
+    onProgress({ phase: 'download', done: got, total: ZIP_BYTES });
+  }
+  if (got !== ZIP_BYTES) throw new Error('Download unvollständig (' + Math.round(got / 1e6) + ' von ' + MODEL_MB + ' MB) — bitte nochmal versuchen.');
+  onProgress({ phase: 'verify', done: 0, total: 1 });
+  if (hex(await crypto.subtle.digest('SHA-256', buf)) !== ZIP_SHA256) throw new Error('Prüfsumme stimmt nicht — Datei beschädigt oder verändert.');
+}
+
 // onProgress({phase:'download'|'verify'|'unpack', done, total}); signal: AbortSignal
 export async function downloadOfflineModel(onProgress = () => {}, signal) {
   if (typeof DecompressionStream === 'undefined') throw new Error('Dieser Browser kann das Modell nicht entpacken (zu alt).');
@@ -65,24 +88,19 @@ export async function downloadOfflineModel(onProgress = () => {}, signal) {
     if (est && est.quota && est.quota - est.usage < 200e6) throw new Error('Zu wenig freier Speicher auf dem Gerät (mind. 200 MB nötig).');
   } catch (e) { if (/Speicher/.test(e.message)) throw e; }
 
-  // 1) Download mit Fortschritt in einen vorab reservierten Puffer
-  const res = await fetch(ZIP_URL, { signal, cache: 'no-store' });
-  if (!res.ok || !res.body) throw new Error('Download fehlgeschlagen (HTTP ' + res.status + ')');
+  // 1+2) Download + Echtheitsprüfung, Quelle für Quelle. Der Puffer wird nur EINMAL reserviert
+  // (75 MB doppelt wären auf schwachen Handys zu viel); ein Fehlversuch überschreibt ihn einfach.
   const buf = new Uint8Array(ZIP_BYTES);
-  let got = 0;
-  const reader = res.body.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (got + value.length > ZIP_BYTES) throw new Error('Unerwartete Dateigröße — Download abgebrochen.');
-    buf.set(value, got); got += value.length;
-    onProgress({ phase: 'download', done: got, total: ZIP_BYTES });
+  let lastErr;
+  for (const url of ZIP_URLS) {
+    try { await fetchZip(url, buf, onProgress, signal); lastErr = null; break; }
+    catch (e) {
+      if (e.name === 'AbortError') throw e;   // Nutzer hat abgebrochen — keine zweite Quelle
+      console.warn('Modell-Download von', url, 'fehlgeschlagen:', e.message);
+      lastErr = e;
+    }
   }
-  if (got !== ZIP_BYTES) throw new Error('Download unvollständig (' + Math.round(got / 1e6) + ' von ' + MODEL_MB + ' MB) — bitte nochmal versuchen.');
-
-  // 2) Echtheit prüfen: genau das veröffentlichte Zenodo-Archiv, nichts anderes
-  onProgress({ phase: 'verify', done: 0, total: 1 });
-  if (hex(await crypto.subtle.digest('SHA-256', buf)) !== ZIP_SHA256) throw new Error('Prüfsumme stimmt nicht — Datei beschädigt oder verändert.');
+  if (lastErr) throw lastErr;
 
   // 3) Nur die benötigten Dateien entpacken und ablegen
   const base = modelBase();
