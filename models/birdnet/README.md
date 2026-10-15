@@ -1,27 +1,27 @@
 # BirdNET-Modell
 
-## ⚠️ Befund (2026-06-20): BirdNET läuft NICHT im Browser
-Das echte Modell ist hier installiert (`model.tflite` 26 MB FP16 + `labels.txt` de, von
-Zenodo record 15050749). ABER: BirdNET v2.4 enthält **STFT/RFFT-Ops** für sein internes
-Spektrogramm, die die TFLite-**WASM**-Laufzeit (`@tensorflow/tfjs-tflite`) nicht ausführen
-kann → das Modell lädt zwar (XNNPACK-Delegate), `predict` bricht aber mit `Aborted()` ab.
-Bestätigt im Browser-Test. Das ist eine harte Runtime-Grenze, kein Konfigurationsfehler.
+## Stand (2026-10-15): Offline-Erkennung läuft im Browser ✅
+Die App nutzt die **offizielle TF.js-Fassung** von BirdNET v2.4 aus der Zenodo-Veröffentlichung
+(record 15050749, `BirdNET_v2.4_tfjs.zip`, 75 MB, SHA-256 in `js/offline-model.js` gepinnt).
+Der Nutzer lädt sie in den Einstellungen → „Offline-Erkennung“ einmalig herunter; sie landet in
+Cache Storage (`waldohr-birdnet-v24`), **nicht** im Repo (Lizenz CC BY-NC(-SA) 4.0 = nicht-kommerziell).
 
-Deshalb wird die `.tflite` **nicht automatisch** aktiviert; die App bleibt auf Mock.
-Mit `localStorage.setItem('waldohr.birdnet','1')` lässt es sich erzwingen – ein Warmup-
-Selbsttest in `load()` fängt den Abbruch ab und fällt wieder auf Mock zurück.
+- Rechnet in `js/birdnet-worker.js` (Web Worker, TF.js 4.22.0 + WASM aus `vendor/tfjs-4.22.0/`).
+- Der Custom-Layer `MelSpecLayerSimple` ist nachgebaut, die STFT aber durch eine eigene Radix-2-FFT
+  ersetzt: `tf.signal.stft` rechnet die FFT als O(n²)-DFT (~15 s pro Fenster). Mit eigener FFT:
+  ~0,2 s/Fenster (PC, wasm), ~0,4–0,6 s im Handy-Profil mit 4–6× CPU-Drosselung.
+- Treffer und Konfidenzen identisch zum HF-Server (16 Testclips, 8 Arten).
+- Range-Filter (Meta-Modell `mdata/`, lat/lon/Woche, Schwelle 0,03) läuft ebenfalls im Worker.
+- Mit eingetragenem Server: Server zuerst, im Funkloch automatisch das Handy-Modell (Retry nach 60 s).
 
-### Wege zu echter BirdNET-Erkennung
-- **Server-seitig** (zuverlässig): kleines Python-/Node-Backend mit dem `birdnet`-Paket
-  (führt dieselbe `.tflite` nativ aus, wo STFT/RFFT funktionieren). PWA schickt 3-s-Clips
-  hin. Braucht Netz (kein Offline im Wald) – passt als optionale Online-Anreicherung.
-- **Native App** (Capacitor/RN): native TFLite kann die Signal-Ops → echtes On-Device-Offline.
-- **GraphModel-Konvertierung**: nur sinnvoll, wenn ein Front-end ohne STFT genutzt wird
-  (Mel-Spektrogramm in JS vorrechnen, klassifizierer-only Modell). Aufwändig.
+Labels: `labels.txt` (deutsch, 6522 Zeilen) hat exakt dieselbe Reihenfolge wie `labels.json` im ZIP.
 
-Sobald hier ein **TF.js-GraphModel** (`model.json`) liegt, aktiviert die App es automatisch.
+## Historie: Die `.tflite` läuft NICHT im Browser (Befund 2026-06-20)
+BirdNET v2.4 als `.tflite` enthält **STFT/RFFT-Ops**, die die TFLite-**WASM**-Laufzeit
+(`@tensorflow/tfjs-tflite`) nicht ausführen kann → `predict` bricht mit `Aborted()` ab.
+Die lokale `model.tflite` (gitignored) wird von der App nicht mehr verwendet.
 
-## Erwartete Dateien
+## Alt: Erwartete Dateien (tflite-Weg, überholt)
 
 Variante A – TFLite (empfohlen, einfachste):
 ```

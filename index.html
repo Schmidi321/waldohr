@@ -5,9 +5,10 @@
 <!-- Content-Security-Policy: erlaubt nur die Quellen, die die App wirklich nutzt. Falls doch einmal
      fremder Text als HTML durchrutscht, kann er so weder fremde Skripte nachladen noch Daten
      (GPS-Verlauf, API-Keys) an beliebige Server schicken. Der BirdNET-Server ist auf *.hf.space und
-     localhost beschränkt; ein anderer Server muss hier ergänzt werden. 'wasm-unsafe-eval' und
-     cdn.jsdelivr.net nur für das (derzeit ungenutzte) On-Device-Modell. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://unpkg.com; font-src 'self'; img-src 'self' data: blob: https://upload.wikimedia.org https://thumb.wikimedia.org https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://unpkg.com; media-src 'self' blob: data: https://xeno-canto.org https://*.xeno-canto.org; connect-src 'self' blob: data: https://api.open-meteo.com https://api.sunrise-sunset.org https://nominatim.openstreetmap.org https://de.wikipedia.org https://commons.wikimedia.org https://xeno-canto.org https://generativelanguage.googleapis.com https://cdn.jsdelivr.net https://*.hf.space http://localhost:* http://127.0.0.1:*; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'" />
+     localhost beschränkt; ein anderer Server muss hier ergänzt werden. zenodo.org nur für den
+     einmaligen Download der Offline-Erkennung (BirdNET-Modell); TF.js liegt lokal unter vendor/ und
+     läuft im Worker ('wasm-unsafe-eval' für dessen WASM). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://unpkg.com 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://unpkg.com; font-src 'self'; img-src 'self' data: blob: https://upload.wikimedia.org https://thumb.wikimedia.org https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://unpkg.com; media-src 'self' blob: data: https://xeno-canto.org https://*.xeno-canto.org; connect-src 'self' blob: data: https://api.open-meteo.com https://api.sunrise-sunset.org https://nominatim.openstreetmap.org https://de.wikipedia.org https://commons.wikimedia.org https://xeno-canto.org https://generativelanguage.googleapis.com https://zenodo.org https://*.hf.space http://localhost:* http://127.0.0.1:*; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <meta name="theme-color" content="#04130d" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -537,6 +538,15 @@
         <section class="setgroup">
           <h3 class="setgroup-h">Erkennung</h3>
           <div class="setlist">
+            <!-- Offline-Erkennung: BirdNET einmalig von Zenodo aufs Gerät laden (js/offline-model.js). -->
+            <div class="setrow setrow-col" id="offlineRow">
+              <div class="setrow-txt"><b>Offline-Erkennung</b><small>BirdNET läuft direkt auf dem Handy und erkennt Vögel auch ohne Empfang im Wald. Einmal im WLAN herunterladen (75 MB). Ist ein Server eingetragen, springt das Handy nur im Funkloch ein.</small></div>
+              <progress id="offlineProg" class="offline-prog" max="1" value="0" hidden></progress>
+              <div class="field-actions">
+                <span class="setrow-status-inline">Status: <span id="offlineStat">…</span></span>
+                <button class="btn ghost small" id="offlineBtn" data-mode="download" disabled>Herunterladen</button>
+              </div>
+            </div>
             <div class="setrow setrow-col">
               <div class="sliderlabel"><span>In Funde aufnehmen ab</span><span id="qualifyVal">70%</span></div>
               <input type="range" id="qualifySlider" min="50" max="95" step="5" value="70" aria-label="In Funde aufnehmen ab" />
@@ -585,7 +595,7 @@
           <summary class="setgroup-h">Dienste &amp; Schlüssel <span>Erweitert</span><svg class="ic ic-sm chev"><use href="#i-chev"/></svg></summary>
           <div class="setlist">
             <div class="setrow setrow-col">
-              <label class="setrow-txt" for="serverUrl"><b>BirdNET-Server</b><small>Adresse deines Erkennungs-Servers (z. B. HuggingFace-Space). Leer = Demo-Modus.</small></label>
+              <label class="setrow-txt" for="serverUrl"><b>BirdNET-Server</b><small>Adresse deines Erkennungs-Servers (z. B. HuggingFace-Space). Leer = nur Offline-Erkennung (falls geladen), sonst Demo-Modus.</small></label>
               <input id="serverUrl" class="field" type="url" autocomplete="off" inputmode="url" placeholder="https://…hf.space" />
               <div class="field-actions">
                 <span class="setrow-status-inline">Status: <span id="serverStat">nicht gesetzt</span></span>
@@ -608,7 +618,7 @@
           <div class="setlist">
             <button class="setrow setrow-btn" id="helpOpenBtn2"><svg class="ic"><use href="#i-help"/></svg><span class="setrow-txt"><b>Hilfe &amp; Anleitung</b><small>Alle Funktionen Schritt für Schritt</small></span></button>
             <div class="setrow setrow-col about">
-              <p>Die Vogel- und Tierstimmenerkennung basiert auf <b>BirdNET</b>, entwickelt vom K. Lisa Yang Center for Conservation Bioacoustics am Cornell Lab of Ornithology mit der TU Chemnitz. Modell lizenziert unter CC BY-NC-SA 4.0 · <a href="https://birdnet.cornell.edu" target="_blank" rel="noopener">birdnet.cornell.edu</a></p>
+              <p>Die Vogel- und Tierstimmenerkennung basiert auf <b>BirdNET</b>, entwickelt vom K. Lisa Yang Center for Conservation Bioacoustics am Cornell Lab of Ornithology mit der TU Chemnitz. Modell lizenziert unter CC BY-NC-SA 4.0 (nur nicht-kommerzielle Nutzung) · <a href="https://birdnet.cornell.edu" target="_blank" rel="noopener">birdnet.cornell.edu</a>. Die Offline-Erkennung lädt das Modell direkt aus der offiziellen Veröffentlichung (Zenodo, doi:10.5281/zenodo.15050749) und rechnet mit TensorFlow.js (Apache-2.0).</p>
               <p>Artfotos stammen von Wikipedia / Wikimedia Commons. In Listen und Karten bleiben die Vorschaubilder bewusst ohne Bildunterschrift (bei 40–60 px nicht lesbar); Fotograf und Lizenz stehen verlinkt im Arten-Steckbrief — die bei Miniaturansichten übliche Form der Namensnennung nach CC BY / CC BY-SA.</p>
               <p>Schriften: Outfit und Inter (SIL Open Font License), lokal mitgeliefert. Version <span id="aboutVer"></span></p>
             </div>
@@ -639,7 +649,7 @@
                 <li>Eine Art antippen öffnet ihren Steckbrief mit Foto, Ruf-Erklärung und Richtung zum letzten Fundort.</li>
                 <li>Standort erlauben — dann landen Funde auf der <span class="hl">Karte</span> und unter <span class="hl">Funde</span>.</li>
               </ol>
-              <div class="help-note">Für echte Erkennung braucht WaldOhr eine Internet-Verbindung zum BirdNET-Server (Einstellungen → Dienste &amp; Schlüssel). Ohne Server läuft der <b>Demo-Modus</b>: Die Kopfzeile zeigt dann „Demo“, Treffer sind zufällig, als „Demo“ markiert und werden nicht gespeichert.</div>
+              <div class="help-note">Für echte Erkennung gibt es zwei Wege: die <b>Offline-Erkennung</b> (Einstellungen → Erkennung, einmal im WLAN 75 MB laden — danach erkennt das Handy selbst, auch ohne Empfang; Kopfzeile zeigt „Offline“) oder einen BirdNET-Server (Einstellungen → Dienste &amp; Schlüssel, braucht Internet). Hast du beides, nutzt WaldOhr den Server und springt im Funkloch automatisch aufs Handy um. Ohne beides läuft der <b>Demo-Modus</b>: Die Kopfzeile zeigt dann „Demo“, Treffer sind zufällig, als „Demo“ markiert und werden nicht gespeichert.</div>
             </div>
           </details>
 

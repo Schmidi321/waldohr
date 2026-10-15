@@ -1,6 +1,7 @@
 // Orchestrierung: verdrahtet Audio -> Erkennung -> Speicher -> UI.
 import { AudioEngine, enhanceSamples, enhanceBlob } from './audio.js';
 import { createRecognizer, MockRecognizer, encodeWav } from './recognizer.js';
+import { initOfflineModelSettings } from './offline-model.js';
 import { addDetection, allDetections, seedIfEmpty, computeStats, migrateGeo, cleanupFakeGeo, todayNearbyDetections, deleteByIds, clearAll, qualifyingDetections, addAttachment, allAttachments, latestAudioAttachmentsByKey, deleteAttachment, haversineKm } from './db.js';
 import { initUI, renderAll, liveAdd, renderMap, setLivePos, registerRecording, unregisterRecording, clearRecordings, renderLive, showInfoToast, sharePhotoCard, updateRouteMap, openTimingModal, getMicDeviceId, setManualPosHandler, showManualPos, updateScheduleChip, showFotoSegment, isFotoSegment, icon } from './ui.js';
 import { fetchWeather, fetchPhotoWeather, fetchTomorrowMorning, fetchMoonTimes, fetchTodayHours, weatherLabel, windDirLabel, moonPhaseLabel, uvLabel, moonCalendar, reverseGeocode } from './weather.js';
@@ -12,7 +13,7 @@ import { initOrni } from './ornithologie.js';
 import { exportBackup, importBackup } from './backup.js';
 import { esc, roundCoord } from './util.js';
 
-// ---- In-App Lightbox fÃ¼r Fotos ----
+// ---- In-App Lightbox für Fotos ----
 function openPhotoLightbox(url) {
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center';
@@ -31,7 +32,7 @@ function openPhotoLightbox(url) {
   document.body.appendChild(ov);
 }
 
-// ---- DauerÃ¼berwachung Timer ----
+// ---- Dauerüberwachung Timer ----
 let _duTimeout = null, _duInterval = null;
 function startDauerUeberwachung() {
   stopDauerUeberwachung();
@@ -41,11 +42,11 @@ function startDauerUeberwachung() {
   const end = Date.now() + ms;
   _duInterval = setInterval(() => {
     const rem = Math.max(0, Math.ceil((end - Date.now()) / 60000));
-    if (audio.running) setUI('mic', 'Lauschtâ€¦ noch ' + rem + ' Min');
+    if (audio.running) setUI('mic', 'Lauscht… noch ' + rem + ' Min');
   }, 30000);
   _duTimeout = setTimeout(() => {
     stopDauerUeberwachung();
-    showInfoToast('â± DauerÃ¼berwachung', 'Zeitlimit erreicht â€” Lauschen gestoppt.', 'â±');
+    showInfoToast('⏱ Dauerüberwachung', 'Zeitlimit erreicht — Lauschen gestoppt.', '⏱');
     if (audio.running) { audio.stop(); detectionActive = false; setUI('off'); }
   }, ms);
 }
@@ -70,7 +71,7 @@ async function playFotoAlarm(vibrateOnly) {
   try {
     if (alarmCtx.state === 'suspended') await alarmCtx.resume();
     const t = alarmCtx.currentTime;
-    // C5â†’E5â†’G5â†’C6, zweimal wiederholt
+    // C5→E5→G5→C6, zweimal wiederholt
     [[523.25,0],[659.25,.28],[783.99,.56],[1046.5,.84],[523.25,1.5],[659.25,1.78],[783.99,2.06],[1046.5,2.34]].forEach(([freq, delay]) => {
       const osc = alarmCtx.createOscillator();
       const gain = alarmCtx.createGain();
@@ -91,7 +92,7 @@ const audio = new AudioEngine();
 let rec = null;
 let detectionActive = false;
 
-// Chip bleibt bewusst knapp ("GPS") â€” der volle Status (Genauigkeit, "verweigert" etc.)
+// Chip bleibt bewusst knapp ("GPS") — der volle Status (Genauigkeit, "verweigert" etc.)
 // steckt im title-Tooltip, die Farbe signalisiert den Zustand auf einen Blick.
 const locChip = document.getElementById('locChip');
 const setLoc = (state, detail) => {
@@ -99,21 +100,21 @@ const setLoc = (state, detail) => {
   if (locChip) { locChip.className = 'chip loc-' + state; locChip.title = detail || ''; }
 };
 
-// Standort-Erfassung: lÃ¤uft unabhÃ¤ngig vom Mikro, sobald die App startet (nicht erst beim
-// Lauschen) â€” Karte & Kompass-Richtung sollen auch ohne aktives Mikro die Position kennen.
-// Manuell auf der Karte gesetzte eigene Position: Ã¼berschreibt GPS fÃ¼r die Koordinaten neuer
-// Funde, solange man steht â€” GPS liegt gerade im Wald oft etliche Meter daneben.
+// Standort-Erfassung: läuft unabhängig vom Mikro, sobald die App startet (nicht erst beim
+// Lauschen) — Karte & Kompass-Richtung sollen auch ohne aktives Mikro die Position kennen.
+// Manuell auf der Karte gesetzte eigene Position: überschreibt GPS für die Koordinaten neuer
+// Funde, solange man steht — GPS liegt gerade im Wald oft etliche Meter daneben.
 let manualPos = null;
-// Die fÃ¼r Fund-Koordinaten und die Karte maÃŸgebliche eigene Position: manuell gesetzt hat Vorrang, sonst GPS.
+// Die für Fund-Koordinaten und die Karte maßgebliche eigene Position: manuell gesetzt hat Vorrang, sonst GPS.
 function myPos() { return manualPos || geo.pos; }
 
 const geo = {
   watchId: null, pos: null, rawPos: null, accuracy: null,
-  _buf: [],  // jÃ¼ngste Rohfixes {lat,lng,acc,t} zur Mittelung im Stand
-  // GPS-Mittelung: Fotografen stehen meist still â€” dann schwankt der reine GPS-Punkt trotzdem um
+  _buf: [],  // jüngste Rohfixes {lat,lng,acc,t} zur Mittelung im Stand
+  // GPS-Mittelung: Fotografen stehen meist still — dann schwankt der reine GPS-Punkt trotzdem um
   // mehrere Meter. Solange die letzten Fixes eng beieinander liegen (Stand), wird accuracy-gewichtet
   // gemittelt (ruhigerer, genauerer Punkt). Bewegt man sich (neuer Fix weit weg vom Mittel), wird
-  // der Puffer verworfen und dem neuen Punkt sofort gefolgt â€” kein "Nachziehen".
+  // der Puffer verworfen und dem neuen Punkt sofort gefolgt — kein "Nachziehen".
   _averaged(lat, lng, acc) {
     const now = Date.now();
     const cur = { lat, lng, acc: acc || 20, t: now };
@@ -132,7 +133,7 @@ const geo = {
   start() {
     if (!('geolocation' in navigator)) { setLoc('off', 'kein GPS'); return; }
     if (this.watchId != null) return;
-    setLoc('searching', 'Standort: sucheâ€¦');
+    setLoc('searching', 'Standort: suche…');
     this.watchId = navigator.geolocation.watchPosition(
       p => {
         const had = !!this.pos;
@@ -140,10 +141,10 @@ const geo = {
         this.accuracy = p.coords.accuracy;
         this.pos = this._averaged(this.rawPos.lat, this.rawPos.lng, p.coords.accuracy);
         const nAvg = this._buf.length;
-        setLoc('active', 'Standort Â±' + Math.round(p.coords.accuracy) + ' m' + (nAvg > 3 ? ' Â· âŒ€' + nAvg : ''));
-        // LÃ¤uft man deutlich vom manuell gesetzten Punkt weg, ist dieser veraltet -> automatisch lÃ¶sen.
-        if (manualPos && haversineKm(manualPos, this.rawPos) * 1000 > 30) { manualPos = null; showManualPos(null); showInfoToast('ðŸ“ Manuelle Position gelÃ¶st', 'Du hast dich bewegt â€” es zÃ¤hlt wieder das echte GPS.', 'ðŸ“'); }
-        setLivePos(myPos());   // live fÃ¼rs Kompass-Feature, ohne vollen Re-Render
+        setLoc('active', 'Standort ±' + Math.round(p.coords.accuracy) + ' m' + (nAvg > 3 ? ' · ⌀' + nAvg : ''));
+        // Läuft man deutlich vom manuell gesetzten Punkt weg, ist dieser veraltet -> automatisch lösen.
+        if (manualPos && haversineKm(manualPos, this.rawPos) * 1000 > 30) { manualPos = null; showManualPos(null); showInfoToast('📍 Manuelle Position gelöst', 'Du hast dich bewegt — es zählt wieder das echte GPS.', '📍'); }
+        setLivePos(myPos());   // live fürs Kompass-Feature, ohne vollen Re-Render
         if (!had) { refresh(); updateScheduleChip(); }   // erster Fix: "Heute hier" + Morgenchor-Startzeit sofort aktualisieren
       },
       e => { console.warn('geo', e); setLoc('off', e.code === 1 ? 'GPS verweigert' : 'kein GPS'); },
@@ -153,8 +154,8 @@ const geo = {
   stop() { if (this.watchId != null) { navigator.geolocation.clearWatch(this.watchId); this.watchId = null; } setLoc('off', 'Standort aus'); }
 };
 
-// Beim VerÃ¶ffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
-const APP_VERSION = 'v113';
+// Beim Veröffentlichen mit der SW-Cache-Version (sw.js) gleich halten.
+const APP_VERSION = 'v114';
 function wireSplash() {
   const splash = document.getElementById('splash');
   const btn = document.getElementById('splashContinue');
@@ -176,6 +177,24 @@ function wireSplash() {
   }
 }
 
+async function initRecognizer() {
+  const old = rec;
+  const next = await createRecognizer();
+  try { await next.load(); rec = next; }
+  catch (e) {
+    console.warn('Recognizer-Fallback auf Mock:', e);
+    // Grund explizit setzen (nicht nur per Konstruktor-Argument): so stimmt der Demo-Hinweis auch,
+    // falls recognizer.js den Vertrag (fallbackReason) noch nicht oder anders umsetzt.
+    const reason = next.id === 'birdnet-server' ? 'unreachable' : 'model-error';
+    next.dispose?.();
+    rec = new MockRecognizer(reason); rec.fallbackReason = reason;
+    await rec.load();
+  }
+  if (old && old !== rec) old.dispose?.();   // alten Worker (Offline-Modell) freigeben
+  updateServerStatusChip();
+  updateDemoHint();
+}
+
 async function boot() {
   initUI();
   initOrni();
@@ -185,33 +204,22 @@ async function boot() {
   setManualPosHandler(pos => {
     manualPos = pos;
     setLivePos(myPos());
-    if (pos) showInfoToast('ðŸ“ Position gesetzt', 'Deine Position wurde manuell gesetzt â€” neue Funde bekommen diese Koordinaten. Bewegst du dich, gilt wieder GPS.', 'ðŸ“');
-    else showInfoToast('ðŸ“ GPS aktiv', 'Manuelle Position aufgehoben â€” es zÃ¤hlt wieder das echte GPS.', 'ðŸ“');
+    if (pos) showInfoToast('📍 Position gesetzt', 'Deine Position wurde manuell gesetzt — neue Funde bekommen diese Koordinaten. Bewegst du dich, gilt wieder GPS.', '📍');
+    else showInfoToast('📍 GPS aktiv', 'Manuelle Position aufgehoben — es zählt wieder das echte GPS.', '📍');
     refresh();
   });
   try { await seedIfEmpty(); } catch (e) { console.warn('seed', e); }
   try { await migrateGeo(); } catch (e) { console.warn('migrateGeo', e); }
-  try { const n = await cleanupFakeGeo(); if (n) console.info(n + ' Fund(e) hatten eine falsche Fake-Position (Bug) â€” Koordinaten entfernt.'); } catch (e) { console.warn('cleanupFakeGeo', e); }
+  try { const n = await cleanupFakeGeo(); if (n) console.info(n + ' Fund(e) hatten eine falsche Fake-Position (Bug) — Koordinaten entfernt.'); } catch (e) { console.warn('cleanupFakeGeo', e); }
   await refresh();
   hydrateAttachments();
   geo.start();
   checkAlarms(geo.pos?.lat, geo.pos?.lng, onAlarm);
   setInterval(() => checkAlarms(geo.pos?.lat, geo.pos?.lng, onAlarm), 60000);
 
-  rec = await createRecognizer();
-  if (rec.id === 'birdnet') statusTxt.textContent = 'BirdNET-Modell wird geladenâ€¦';
-  else if (rec.id === 'birdnet-server') statusTxt.textContent = 'Verbinde mit BirdNET-Serverâ€¦';
-  try { await rec.load(); }
-  catch (e) {
-    console.warn('Recognizer-Fallback auf Mock:', e);
-    // Grund explizit setzen (nicht nur per Konstruktor-Argument): so stimmt der Demo-Hinweis auch,
-    // falls recognizer.js den Vertrag (fallbackReason) noch nicht oder anders umsetzt.
-    const reason = rec.id === 'birdnet-server' ? 'unreachable' : 'model-error';
-    rec = new MockRecognizer(reason); rec.fallbackReason = reason;
-    await rec.load();
-  }
-  updateServerStatusChip();
-  updateDemoHint();
+  await initRecognizer();
+  // Einstellungen → Offline-Erkennung: nach Download/Entfernen den Erkenner ohne Neustart tauschen.
+  initOfflineModelSettings(initRecognizer);
 
   audio.onWindow = onWindow;
   setUI('off');
@@ -221,9 +229,9 @@ async function boot() {
   wireSplash();
 }
 
-// WÃ¤hrend der Nutzer gerade mit dem Finger auf dem Bildschirm scrollt, NICHT die Listen/Karten
-// neu aufbauen â€” sonst wird das gerade berÃ¼hrte DOM-Element ersetzt und die Wischgeste bricht ab
-// (spÃ¼rbar v. a. auf der Statistik-Seite, die bei jeder neuen Erkennung sonst sofort neu rendert).
+// Während der Nutzer gerade mit dem Finger auf dem Bildschirm scrollt, NICHT die Listen/Karten
+// neu aufbauen — sonst wird das gerade berührte DOM-Element ersetzt und die Wischgeste bricht ab
+// (spürbar v. a. auf der Statistik-Seite, die bei jeder neuen Erkennung sonst sofort neu rendert).
 let touching = false, pendingRefresh = false;
 document.addEventListener('touchstart', () => { touching = true; }, { passive: true });
 document.addEventListener('touchend', () => { touching = false; if (pendingRefresh) { pendingRefresh = false; refresh(); } }, { passive: true });
@@ -239,7 +247,7 @@ async function refresh() {
   renderMap(qualifying);
 }
 
-// Kompass-Heading: passiv mithÃ¶ren â€” auf iOS greift das erst nach der Kompass-Freigabe im Detail-Sheet.
+// Kompass-Heading: passiv mithören — auf iOS greift das erst nach der Kompass-Freigabe im Detail-Sheet.
 let compassHeading = null;
 (function() {
   const ev = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
@@ -251,106 +259,114 @@ let compassHeading = null;
 
 function onAlarm(type) {
   if (type === 'fotowecker') {
-    showInfoToast('ðŸ“· Fotografen-Wecker', 'Zeit fÃ¼rs Sonnenaufgang-Shooting! Viel Licht!', 'ðŸ“·');
+    showInfoToast('📷 Fotografen-Wecker', 'Zeit fürs Sonnenaufgang-Shooting! Viel Licht!', '📷');
     playFotoAlarm(getFotoWecker().vibrateOnly);
     return;
   }
   if (type === 'nacht-end') {
-    showInfoToast('ðŸ¦‰ Nacht-Modus beendet', 'Geplante Endzeit erreicht â€” Lauschen gestoppt.', 'ðŸ¦‰');
+    showInfoToast('🦉 Nacht-Modus beendet', 'Geplante Endzeit erreicht — Lauschen gestoppt.', '🦉');
     if (audio.running) { stopDauerUeberwachung(); audio.stop(); detectionActive = false; setUI('off'); }
     return;
   }
   const isMC = type === 'morgenchor';
-  const icon = isMC ? 'ðŸŒ…' : 'ðŸ¦‰';
-  const title = isMC ? 'ðŸŒ… Morgenchor-Alarm' : 'ðŸ¦‰ Nacht-Modus';
-  showInfoToast(title, isMC ? 'Sonnenaufgang naht â€” Lauschen gestartet!' : 'Geplante Zeit â€” Lauschen gestartet!', icon);
+  const icon = isMC ? '🌅' : '🦉';
+  const title = isMC ? '🌅 Morgenchor-Alarm' : '🦉 Nacht-Modus';
+  showInfoToast(title, isMC ? 'Sonnenaufgang naht — Lauschen gestartet!' : 'Geplante Zeit — Lauschen gestartet!', icon);
   if (!audio.running) {
     tryFullscreen();
     audio.start(getMicDeviceId())
       .then(() => { geo.start(); detectionActive = true; setUI('mic'); startDauerUeberwachung(); })
       .catch(e => {
         console.warn('alarm mic', e);
-        showInfoToast(title, 'Mikrofon-Freigabe nÃ¶tig â€” tippe zum Starten.', icon, () => toggleDetection(), 'Lauschen starten');
+        showInfoToast(title, 'Mikrofon-Freigabe nötig — tippe zum Starten.', icon, () => toggleDetection(), 'Lauschen starten');
       });
   } else if (!detectionActive) {
-    // Mikro lief schon (z. B. fÃ¼r einen Tonclip), aber ohne Erkennung â€” jetzt mit einschalten.
+    // Mikro lief schon (z. B. für einen Tonclip), aber ohne Erkennung — jetzt mit einschalten.
     detectionActive = true; setUI('mic');
   }
 }
 
-// BirdNET-Server-Verbindungsstatus (nur relevant im Server-Modus â€” Mock/On-Device brauchen kein
-// Netzwerk und bleiben unsichtbar). Der Server-Modus hat anders als die anderen KEINEN robusten
-// Fallback zur Laufzeit (nur einmal beim Start geprÃ¼ft), darum hier bei jedem Erkennungsversuch
-// neu bewertet â€” sonst merkt der Nutzer eine wegbrechende Verbindung (WLAN, Server down) nicht,
-// auÃŸer dass plÃ¶tzlich keine Funde mehr kommen.
+// Erkennungs-Chip in der Kopfzeile: Demo (gelb/rot), Offline (grün, Handy rechnet selbst) oder
+// BirdNET-Server-Verbindungsstatus. Der Server-Modus hat ohne Offline-Modell KEINEN robusten
+// Fallback zur Laufzeit (nur einmal beim Start geprüft), darum hier bei jedem Erkennungsversuch
+// neu bewertet — sonst merkt der Nutzer eine wegbrechende Verbindung (WLAN, Server down) nicht,
+// außer dass plötzlich keine Funde mehr kommen.
 function updateServerStatusChip() {
   const chip = document.getElementById('serverStatusChip');
   if (!chip) return;
   const txt = document.getElementById('serverChipTxt');
   const setTxt = t => { if (txt) txt.textContent = t; };
   chip.classList.remove('loc-active', 'loc-searching', 'srv-err', 'srv-demo');
-  // Demo-Fallback, obwohl ein Server eingetragen ist (nicht erreichbar / Adresse ungÃ¼ltig): Chip rot
-  // zeigen statt verstecken â€” sonst sÃ¤he es aus, als gÃ¤be es gar kein Server-Problem.
+  // Demo-Fallback, obwohl ein Server eingetragen ist (nicht erreichbar / Adresse ungültig): Chip rot
+  // zeigen statt verstecken — sonst sähe es aus, als gäbe es gar kein Server-Problem.
   if (isDemoMode() && (rec.fallbackReason === 'unreachable' || rec.fallbackReason === 'invalid-url')) {
     chip.hidden = false; chip.classList.add('srv-err'); setTxt('Demo');
-    chip.title = rec.fallbackReason === 'invalid-url' ? 'BirdNET-Server-Adresse ungÃ¼ltig â€” Demo-Modus' : 'BirdNET-Server nicht erreichbar â€” Demo-Modus';
+    chip.title = rec.fallbackReason === 'invalid-url' ? 'BirdNET-Server-Adresse ungültig — Demo-Modus' : 'BirdNET-Server nicht erreichbar — Demo-Modus';
     return;
   }
-  // Reiner Demo-Modus (kein Server eingetragen): gelber "Demo"-Chip in der Kopfzeile â€” auf jedem Tab
-  // sichtbar, nicht nur im Lauschen-Hinweis. Antippen Ã¶ffnet die Einstellungen (s. unten).
+  // Reiner Demo-Modus (kein Server eingetragen): gelber "Demo"-Chip in der Kopfzeile — auf jedem Tab
+  // sichtbar, nicht nur im Lauschen-Hinweis. Antippen öffnet die Einstellungen (s. unten).
   if (isDemoMode()) {
     chip.hidden = false; chip.classList.add('srv-demo'); setTxt('Demo');
-    chip.title = 'Demo-Modus â€” fÃ¼r echte Erkennung BirdNET-Server in den Einstellungen eintragen';
+    chip.title = 'Demo-Modus — für echte Erkennung Offline-Erkennung herunterladen oder BirdNET-Server eintragen (Einstellungen)';
+    return;
+  }
+  // Offline-Erkennung (BirdNET rechnet auf dem Handy): grüner "Offline"-Chip — sowohl ohne Server
+  // als auch, wenn der Server gerade nicht erreichbar ist (Funkloch) und das Handy übernimmt.
+  if (rec && (rec.id === 'birdnet' || (rec.id === 'birdnet-server' && rec.status === 'offline'))) {
+    chip.hidden = false; chip.classList.add('loc-active'); setTxt('Offline');
+    chip.title = rec.id === 'birdnet' ? 'Offline-Erkennung: BirdNET läuft direkt auf dem Handy — kein Internet nötig'
+      : 'Kein Server erreichbar — BirdNET erkennt offline auf dem Handy weiter';
     return;
   }
   if (!rec || rec.id !== 'birdnet-server') { chip.hidden = true; return; }
   chip.hidden = false; setTxt('BirdNET');
   if (rec.status === 'ok') { chip.classList.add('loc-active'); chip.title = 'BirdNET-Server verbunden'; }
-  else if (rec.status === 'error') { chip.classList.add('srv-err'); chip.title = 'BirdNET-Server nicht erreichbar â€” Verbindung/Empfang prÃ¼fen'; }
-  else { chip.classList.add('loc-searching'); chip.title = 'Verbinde mit BirdNET-Serverâ€¦'; }
+  else if (rec.status === 'error') { chip.classList.add('srv-err'); chip.title = 'BirdNET-Server nicht erreichbar — Verbindung/Empfang prüfen'; }
+  else { chip.classList.add('loc-searching'); chip.title = 'Verbinde mit BirdNET-Server…'; }
 }
-// Server-/Demo-Chip: fÃ¼hrt direkt zu den Einstellungen (dort unter "Dienste & SchlÃ¼ssel").
+// Server-/Demo-Chip: führt direkt zu den Einstellungen (dort unter "Dienste & Schlüssel").
 document.getElementById('serverStatusChip')?.addEventListener('click', () => {
   document.getElementById('gearBtn')?.click();
   const adv = document.querySelector('#settingsModal .setgroup-adv'); if (adv) adv.open = true;
 });
 
 // ---- Demo-Modus (Mock-Erkenner) ----
-// Ohne BirdNET-Server/-Modell wÃ¼rfelt der Mock zufÃ¤llige Arten. Das muss dauerhaft sichtbar sein
-// (kein wegklickbarer Toast) und darf die echten Daten nicht verfÃ¤lschen: Demo-Treffer erscheinen
-// nur markiert in der Live-Liste â€” kein DB-Eintrag, keine Auto-Aufnahme, kein Seltenheits-Alarm.
+// Ohne BirdNET-Server/-Modell würfelt der Mock zufällige Arten. Das muss dauerhaft sichtbar sein
+// (kein wegklickbarer Toast) und darf die echten Daten nicht verfälschen: Demo-Treffer erscheinen
+// nur markiert in der Live-Liste — kein DB-Eintrag, keine Auto-Aufnahme, kein Seltenheits-Alarm.
 function isDemoMode() { return !!rec && rec.id === 'mock'; }
 const DEMO_HINTS = {
-  'unreachable': 'BirdNET-Server nicht erreichbar â€” Demo-Modus. Erkannte Arten sind zufÃ¤llig und werden nicht gespeichert.',
-  'invalid-url': 'BirdNET-Server-Adresse ungÃ¼ltig â€” Demo-Modus. Bitte in den Einstellungen korrigieren (https://â€¦).',
-  'model-error': 'BirdNET-Modell konnte nicht geladen werden â€” Demo-Modus. Erkannte Arten sind zufÃ¤llig und werden nicht gespeichert.',
+  'unreachable': 'BirdNET-Server nicht erreichbar — Demo-Modus. Erkannte Arten sind zufällig und werden nicht gespeichert. Tipp: Einstellungen → Offline-Erkennung herunterladen, dann klappt es auch ohne Empfang.',
+  'invalid-url': 'BirdNET-Server-Adresse ungültig — Demo-Modus. Bitte in den Einstellungen korrigieren (https://…).',
+  'model-error': 'Offline-Erkennung konnte nicht geladen werden — Demo-Modus. Erkannte Arten sind zufällig und werden nicht gespeichert.',
 };
-const DEMO_HINT_DEFAULT = 'Demo-Modus â€” erkannte Arten sind zufÃ¤llig. FÃ¼r echte Erkennung BirdNET-Server in den Einstellungen eintragen.';
+const DEMO_HINT_DEFAULT = 'Demo-Modus — erkannte Arten sind zufällig. Für echte Erkennung in den Einstellungen die Offline-Erkennung herunterladen oder einen BirdNET-Server eintragen.';
 function updateDemoHint() {
   let el = document.getElementById('demoHint');
   if (!isDemoMode()) { if (el) el.hidden = true; return; }
   if (!el) {
-    // Element erst hier erzeugen â€” direkt unter der Statuszeile im Lauschen-Tab, wo man beim Start
-    // des Mikros ohnehin hinschaut. Optik: eigene, gelb getÃ¶nte .demo-hint-Box mit Warn-Icon.
+    // Element erst hier erzeugen — direkt unter der Statuszeile im Lauschen-Tab, wo man beim Start
+    // des Mikros ohnehin hinschaut. Optik: eigene, gelb getönte .demo-hint-Box mit Warn-Icon.
     el = document.createElement('div');
     el.id = 'demoHint'; el.className = 'demo-hint'; el.setAttribute('role', 'status');
     el.innerHTML = icon('alert') + '<span></span>';
     const anchor = document.querySelector('#v-listen .status');
     if (anchor) anchor.after(el); else document.getElementById('v-listen')?.prepend(el);
   }
-  // Text per textContent (nicht innerHTML) â€” die Texte sind fest, aber so bleibt es auch kÃ¼nftig sicher.
+  // Text per textContent (nicht innerHTML) — die Texte sind fest, aber so bleibt es auch künftig sicher.
   el.querySelector('span').textContent = DEMO_HINTS[rec.fallbackReason] || DEMO_HINT_DEFAULT;
   el.hidden = false;
 }
 
 async function onWindow(samples, sampleRate) {
   if (!rec || !detectionActive) return;
-  if (rec.setGeo) rec.setGeo(geo.pos);   // Standort fÃ¼r bessere Treffer (Server-Modus)
+  if (rec.setGeo) rec.setGeo(geo.pos);   // Standort für den BirdNET-Range-Filter (Server und offline)
   let r = null;
   try { r = await rec.classify(samples, sampleRate); } catch (e) { console.warn('classify', e); }
   updateServerStatusChip();
   // Zwischen Start und Ende von classify() (im Server-Modus ein echter Netzwerk-Roundtrip) kann
-  // der Nutzer das Lauschen bereits gestoppt haben â€” sonst wÃ¼rde ein spÃ¤t eintreffender Treffer
+  // der Nutzer das Lauschen bereits gestoppt haben — sonst würde ein spät eintreffender Treffer
   // trotzdem noch gespeichert werden.
   if (!r || !detectionActive) return;
   // Demo-Treffer nur anzeigen (markiert), sonst nichts: weder speichern noch Auto-Aufnahme noch Refresh.
@@ -372,16 +388,16 @@ async function onWindow(samples, sampleRate) {
 }
 
 // ---- Automatische Aufnahme: ab einer einstellbaren Konfidenz (Default 85 %) wird der gerade
-// klassifizierte Ausschnitt direkt als WAV gespeichert â€” aber nur einmal pro Art und Kalendertag,
-// gegen Datenflut bei hÃ¤ufigen Arten. Tagesliste in localStorage, damit es auch Ã¼ber einen Reload
+// klassifizierte Ausschnitt direkt als WAV gespeichert — aber nur einmal pro Art und Kalendertag,
+// gegen Datenflut bei häufigen Arten. Tagesliste in localStorage, damit es auch über einen Reload
 // hinweg gilt.
 function getAutoRecordConfidence() {
   try { const v = parseFloat(localStorage.getItem('waldohr.autoRecConf')); return isNaN(v) ? 0.85 : v; }
   catch { return 0.85; }
 }
 function getAutoRecordDuration() {
-  // Muss mit den in den Einstellungen wÃ¤hlbaren Presets Ã¼bereinstimmen (index.html/ui.js kennen
-  // auch 60 Sek) â€” sonst wird eine gewÃ¤hlte 60s-Aufnahme hier still auf 3s zurÃ¼ckgestuft.
+  // Muss mit den in den Einstellungen wählbaren Presets übereinstimmen (index.html/ui.js kennen
+  // auch 60 Sek) — sonst wird eine gewählte 60s-Aufnahme hier still auf 3s zurückgestuft.
   try { const v = parseInt(localStorage.getItem('waldohr.autoRecDur'), 10); return [3, 5, 10, 60].includes(v) ? v : 3; }
   catch { return 3; }
 }
@@ -425,7 +441,7 @@ function _openAudioPlayerModal(audioEl, row) {
     <div style="text-align:center;font-size:14px;font-weight:700;color:var(--ink);margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</div>
     <canvas id="_apWave" style="width:100%;height:64px;border-radius:12px;background:rgba(163,230,53,.04);border:1px solid var(--stroke);display:block;margin-bottom:10px;cursor:pointer"></canvas>
     <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:14px;font-variant-numeric:tabular-nums">
-      <span id="_apCur">0:00</span><span id="_apDur">â€“:â€“â€“</span>
+      <span id="_apCur">0:00</span><span id="_apDur">–:––</span>
     </div>
     <div style="display:flex;justify-content:center">
       <button id="_apPlay" style="width:56px;height:56px;border-radius:50%;background:var(--lime);border:none;color:#04130d;display:flex;align-items:center;justify-content:center;cursor:pointer">
@@ -527,7 +543,7 @@ async function _saveAutoRecRow(det, blob, mime) {
   const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const prefix = det.species.toLowerCase().replace(/[^a-z0-9]+/g, '_');
   // KEINE Koordinaten mehr im Dateinamen: heruntergeladene/geteilte Dateien wandern weiter (Messenger,
-  // Foren) und verrieten sonst metergenau den Fundort â€” bei seltenen Arten Brutplatz-Schutz. Die
+  // Foren) und verrieten sonst metergenau den Fundort — bei seltenen Arten Brutplatz-Schutz. Die
   // genaue Position bleibt in der Datenbank am Fund (det.lat/lng) erhalten.
   const ext = mime.includes('wav') ? 'wav' : mime.includes('mp4') ? 'm4a' : 'webm';
   const url = URL.createObjectURL(blob);
@@ -535,7 +551,7 @@ async function _saveAutoRecRow(det, blob, mime) {
   const row = document.createElement('div'); row.className = 'rec-row';
   const a = document.createElement('audio'); a.src = url; a.preload = 'metadata'; a.hidden = true;
   wireAudioRouting(a);
-  const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' Â· auto';
+  const lb = document.createElement('span'); lb.className = 'rec-label auto'; lb.textContent = det.species + ' · auto';
   const dl = makeDownloadBtn(url, prefix + '_' + stamp + '.' + ext, det.species);
   let attId = null;
   try { attId = await addAttachment({ detId: det.id ?? null, key: det.key, label: det.species, kind: 'audio', blob, mime, ts }); }
@@ -544,7 +560,7 @@ async function _saveAutoRecRow(det, blob, mime) {
   const del = makeDeleteBtn(row, url, det.key, attId);
   row.append(_makeAudioIcon(a), lb, _spacer(), dl, _makeScissorsBtn(row), del, a);
   const list = document.getElementById('recList'); if (list) list.prepend(row);
-  // Eigene URL fÃ¼rs Sammlungs-Badge (gehÃ¶rt ab dann ui.js, s. registerRecording).
+  // Eigene URL fürs Sammlungs-Badge (gehört ab dann ui.js, s. registerRecording).
   registerRecording(det.key, URL.createObjectURL(blob));
   if (!isGalleryVisible()) galleryBadgeAdd(1);
 }
@@ -554,8 +570,8 @@ async function maybeAutoRecord(det, samples, sampleRate) {
   if (autoRecordedToday().includes(det.key)) return;
   markAutoRecorded(det.key);
   const dur = getAutoRecordDuration();
-  // WAV-Kommentar reist mit der Datei mit (Download/Teilen) -> nur auf â‰ˆ 1 km vergrÃ¶bert (2 Stellen),
-  // bei seltenen Arten/SÃ¤ugern gar nicht (Brut-/RÃ¼ckzugsplatz-Schutz, wie bei der Share-Karte).
+  // WAV-Kommentar reist mit der Datei mit (Download/Teilen) -> nur auf ≈ 1 km vergröbert (2 Stellen),
+  // bei seltenen Arten/Säugern gar nicht (Brut-/Rückzugsplatz-Schutz, wie bei der Share-Karte).
   const gpsStr = geo.pos && det.rarity === 'common' ? roundCoord(geo.pos.lat, 2).toFixed(2) + ',' + roundCoord(geo.pos.lng, 2).toFixed(2) : '';
 
   if (dur > 3 && audio.stream) {
@@ -656,19 +672,19 @@ function makeDownloadBtn(url, filename, label) {
   return btn;
 }
 
-// Aktueller Zustand einer Aufnahme/Foto-Zeile â€” EINE Quelle fÃ¼r Download, LÃ¶schen, Zuschneiden und
+// Aktueller Zustand einer Aufnahme/Foto-Zeile — EINE Quelle für Download, Löschen, Zuschneiden und
 // Badge-Abgleich. Vorher hatte jeder Button die URL/ID beim Erzeugen fest eingefangen; nach dem
-// Zuschneiden zeigten Download/LÃ¶schen dann auf eine bereits freigegebene URL bzw. die alte DB-ID.
-//   url  : blob:-URL, die NUR dieser Zeile gehÃ¶rt (Badges bekommen eigene, s. registerRecording)
+// Zuschneiden zeigten Download/Löschen dann auf eine bereits freigegebene URL bzw. die alte DB-ID.
+//   url  : blob:-URL, die NUR dieser Zeile gehört (Badges bekommen eigene, s. registerRecording)
 //   name : Download-Dateiname
 //   attId: ID des Anhangs in IndexedDB (null, falls Speichern fehlschlug)
-//   meta : { detId, key, label, kind, ts } â€” zum Neuanlegen des Anhangs nach dem Zuschneiden
+//   meta : { detId, key, label, kind, ts } — zum Neuanlegen des Anhangs nach dem Zuschneiden
 function _bindRecRow(row, { url, name, attId, meta }) {
   row._recUrl = url; row._dlName = name; row._attId = attId ?? null; row._meta = meta || {};
 }
 
-// Sammlungs-Badge einer Art nach LÃ¶schen/Zuschneiden mit der DB abgleichen: es zeigt immer die
-// neueste noch vorhandene Aufnahme der Art â€” vorher verschwand es beim LÃ¶schen IRGENDEINER
+// Sammlungs-Badge einer Art nach Löschen/Zuschneiden mit der DB abgleichen: es zeigt immer die
+// neueste noch vorhandene Aufnahme der Art — vorher verschwand es beim Löschen IRGENDEINER
 // Aufnahme, auch wenn noch andere derselben Art existierten.
 async function _resyncBadge(key) {
   if (!key) return;
@@ -679,12 +695,12 @@ async function _resyncBadge(key) {
   } catch (e) { console.warn('resync badge', e); unregisterRecording(key); }
 }
 
-// LÃ¶schen-Button fÃ¼r eine Aufnahme/Foto-Zeile: entfernt die Zeile, gibt die Object-URL frei,
-// lÃ¶scht den dauerhaft gespeicherten Anhang in der Datenbank und gleicht danach das kleine
+// Löschen-Button für eine Aufnahme/Foto-Zeile: entfernt die Zeile, gibt die Object-URL frei,
+// löscht den dauerhaft gespeicherten Anhang in der Datenbank und gleicht danach das kleine
 // Abspiel-Badge auf der Sammlungskarte ab.
 function makeDeleteBtn(row, url, key, attId) {
   const del = document.createElement('button');
-  del.className = 'rec-del'; del.type = 'button'; del.title = 'LÃ¶schen';
+  del.className = 'rec-del'; del.type = 'button'; del.title = 'Löschen';
   del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>';
   del.onclick = async ev => {
     ev.stopPropagation();
@@ -695,7 +711,7 @@ function makeDeleteBtn(row, url, key, attId) {
     row.remove();
     try { URL.revokeObjectURL(curUrl); } catch {}
     if (curId != null) { try { await deleteAttachment(curId); } catch (e) { console.warn('deleteAttachment', e); } }
-    // Erst NACH dem LÃ¶schen in der DB abgleichen, sonst fÃ¤nde die Abfrage den Anhang noch.
+    // Erst NACH dem Löschen in der DB abgleichen, sonst fände die Abfrage den Anhang noch.
     await _resyncBadge(k);
   };
   return del;
@@ -713,16 +729,16 @@ async function _toggleTrimPanel(row) {
   const existing = row.querySelector('.rec-trim-panel');
   if (existing) {
     const a = row.querySelector('audio'); if (a) a.pause();
-    // Ã–ffnen+SchlieÃŸen ohne dass die Wiedergabe je zu Ende lief wÃ¼rde den 'ended'-Listener von
-    // unten sonst fÃ¼r immer am (dauerhaften) Audio-Element hÃ¤ngen lassen â€” jedes erneute Ã–ffnen
-    // hÃ¤ngte dann einen weiteren dazu (nie entfernt, {once:true} greift ja nur NACH dem Feuern).
+    // Öffnen+Schließen ohne dass die Wiedergabe je zu Ende lief würde den 'ended'-Listener von
+    // unten sonst für immer am (dauerhaften) Audio-Element hängen lassen — jedes erneute Öffnen
+    // hängte dann einen weiteren dazu (nie entfernt, {once:true} greift ja nur NACH dem Feuern).
     if (a?._trimStopPreview) { a.removeEventListener('ended', a._trimStopPreview); a._trimStopPreview = null; }
     existing.remove(); return;
   }
   const audioEl = row.querySelector('audio');
   if (!audioEl?.src) return;
   const panel = document.createElement('div'); panel.className = 'rec-trim-panel';
-  panel.innerHTML = '<span class="tr-lbl">Ladeâ€¦</span>';
+  panel.innerHTML = '<span class="tr-lbl">Lade…</span>';
   row.appendChild(panel);
   let decoded;
   try {
@@ -778,7 +794,7 @@ async function _toggleTrimPanel(row) {
     _playRaf = requestAnimationFrame(_tickPreview);
   });
   audioEl.addEventListener('ended', _stopPreview, { once: true });
-  audioEl._trimStopPreview = _stopPreview; // Referenz fÃ¼r den manuellen SchlieÃŸen-Pfad oben
+  audioEl._trimStopPreview = _stopPreview; // Referenz für den manuellen Schließen-Pfad oben
   function makeDrag(handle, isStart) {
     handle.addEventListener('pointerdown', e => {
       e.preventDefault();
@@ -807,20 +823,20 @@ async function _toggleTrimPanel(row) {
     const newUrl = URL.createObjectURL(wav);
     const oldUrl = row._recUrl || audioEl.src;
     audioEl.src = newUrl; audioEl.load();
-    // Dauer-Anzeige am Audio-Icon auf die neue LÃ¤nge bringen (der Listener dort feuert nur einmal).
+    // Dauer-Anzeige am Audio-Icon auf die neue Länge bringen (der Listener dort feuert nur einmal).
     audioEl.addEventListener('loadedmetadata', () => {
       const ds = row.querySelector('._aDur'); const s = Math.floor(audioEl.duration);
       if (ds && isFinite(s) && s > 0) ds.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
     }, { once: true });
-    // Zeilen-Zustand umstellen: Download/LÃ¶schen lesen ab jetzt die neue URL; Endung jetzt immer .wav.
+    // Zeilen-Zustand umstellen: Download/Löschen lesen ab jetzt die neue URL; Endung jetzt immer .wav.
     row._recUrl = newUrl;
     if (row._dlName) row._dlName = row._dlName.replace(/\.[a-z0-9]+$/i, '') + '.wav';
-    // Die alte URL gehÃ¶rt nur dieser Zeile (Badges haben eigene) -> gefahrlos freigeben.
+    // Die alte URL gehört nur dieser Zeile (Badges haben eigene) -> gefahrlos freigeben.
     if (oldUrl && oldUrl !== newUrl && oldUrl.startsWith('blob:')) { try { URL.revokeObjectURL(oldUrl); } catch {} }
     panel.remove();
-    // Zuschnitt dauerhaft speichern â€” vorher lebte er nur bis zum nÃ¤chsten Reload. db.js kennt kein
+    // Zuschnitt dauerhaft speichern — vorher lebte er nur bis zum nächsten Reload. db.js kennt kein
     // Update, darum: neuen Anhang (mit Original-Zeitstempel, damit die Sortierung gleich bleibt)
-    // ZUERST anlegen, erst danach den alten lÃ¶schen â€” scheitert das Anlegen, bleibt das Original.
+    // ZUERST anlegen, erst danach den alten löschen — scheitert das Anlegen, bleibt das Original.
     const meta = row._meta || {};
     try {
       const newId = await addAttachment({ detId: meta.detId ?? null, key: meta.key ?? null, label: meta.label ?? null, kind: 'audio', blob: wav, mime: 'audio/wav', ts: meta.ts ?? Date.now() });
@@ -852,7 +868,7 @@ function openVideoLightbox(url) {
   document.body.appendChild(ov);
 }
 
-// ---- Video-Vorschaubild (56Ã—56 Thumbnail + Play-Icon) ----
+// ---- Video-Vorschaubild (56×56 Thumbnail + Play-Icon) ----
 function _makeVideoThumb(url) {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'flex:0 0 56px;width:56px;height:56px;border-radius:11px;overflow:hidden;position:relative;background:#04130d;cursor:pointer;flex-shrink:0';
@@ -870,7 +886,7 @@ function _makeVideoThumb(url) {
 // ---- Spacer: schiebt Icons nach rechts ----
 function _spacer() { const s = document.createElement('span'); s.style.flex = '1'; return s; }
 
-// ---- Foto+Audio Mixer: Photo + Tonaufnahme â†’ Video rendern (client-side, kein Server) ----
+// ---- Foto+Audio Mixer: Photo + Tonaufnahme → Video rendern (client-side, kein Server) ----
 async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
   const W = 1440, H = 1440;
   const cv = document.createElement('canvas');
@@ -900,7 +916,7 @@ async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
   ctx.textAlign = 'center';
   ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 24;
   ctx.fillStyle = 'rgba(163,230,53,.97)'; ctx.font = '700 82px system-ui,sans-serif';
-  ctx.fillText('ðŸŒ¿ WaldOhr', W / 2, H - 98);
+  ctx.fillText('🌿 WaldOhr', W / 2, H - 98);
   ctx.shadowBlur = 12;
   ctx.fillStyle = 'rgba(255,255,255,.65)'; ctx.font = '500 34px system-ui,sans-serif';
   ctx.fillText(new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }), W / 2, H - 44);
@@ -917,7 +933,7 @@ async function _renderPhotoAudioVideo(photoBlob, audioBlob, onProgress) {
   src.buffer = audioBuffer;
   src.connect(dest);
 
-  // Canvas-Stream + Audio-Track zusammenfÃ¼hren
+  // Canvas-Stream + Audio-Track zusammenführen
   const videoStream = cv.captureStream(2);
   const combined = new MediaStream([...videoStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
 
@@ -964,7 +980,7 @@ async function openShareMixer(photoUrl, key, label) {
   const progFill = document.getElementById('mixerProgFill');
   const progLabel = document.getElementById('mixerProgLabel');
 
-  // Zustand zurÃ¼cksetzen
+  // Zustand zurücksetzen
   if (renderBtn) { renderBtn.disabled = true; renderBtn.textContent = 'Video erstellen & teilen'; }
   if (prog) prog.hidden = true;
   if (directBtn) directBtn.disabled = false;
@@ -980,12 +996,12 @@ async function openShareMixer(photoUrl, key, label) {
   // Audio-Liste laden
   const audioList = document.getElementById('mixerAudioList');
   if (audioList) {
-    audioList.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:10px 0">Lade Aufnahmenâ€¦</div>';
+    audioList.innerHTML = '<div style="color:var(--faint);font-size:12px;padding:10px 0">Lade Aufnahmen…</div>';
     try {
       const all = await allAttachments();
       const audios = all.filter(a => a.kind === 'audio');
       if (!audios.length) {
-        audioList.innerHTML = '<div style="color:var(--faint);font-size:13px;padding:10px 0">Keine Tonaufnahmen vorhanden â€” zuerst einen Ruf aufnehmen (Live-Liste oder Galerie â†’ Tonclip).</div>';
+        audioList.innerHTML = '<div style="color:var(--faint);font-size:13px;padding:10px 0">Keine Tonaufnahmen vorhanden — zuerst einen Ruf aufnehmen (Live-Liste oder Galerie → Tonclip).</div>';
       } else {
         audioList.innerHTML = '';
         for (const att of audios) {
@@ -1015,15 +1031,15 @@ async function openShareMixer(photoUrl, key, label) {
       if (!modal._selAudioBlob) return;
       if (prog) prog.hidden = false;
       if (progFill) progFill.style.width = '0%';
-      if (progLabel) progLabel.textContent = 'Foto wird geladenâ€¦';
+      if (progLabel) progLabel.textContent = 'Foto wird geladen…';
       renderBtn.disabled = true;
       if (directBtn) directBtn.disabled = true;
       try {
         const photoBlob = await fetch(modal._photoUrl).then(r => r.blob());
-        if (progLabel) progLabel.textContent = 'Audio wird dekodiertâ€¦';
+        if (progLabel) progLabel.textContent = 'Audio wird dekodiert…';
         const { blob: vidBlob, mime } = await _renderPhotoAudioVideo(photoBlob, modal._selAudioBlob, pct => {
           if (progFill) progFill.style.width = pct + '%';
-          if (progLabel) progLabel.textContent = 'Renderingâ€¦ ' + pct + '%';
+          if (progLabel) progLabel.textContent = 'Rendering… ' + pct + '%';
         });
         if (progFill) progFill.style.width = '100%';
         if (progLabel) progLabel.textContent = 'Fertig!';
@@ -1034,7 +1050,7 @@ async function openShareMixer(photoUrl, key, label) {
         const fname = 'waldohr-' + stamp + '.' + ext;
         const file = new File([vidBlob], fname, { type: mime });
         if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ title: 'WaldOhr â€“ ' + (modal._label || 'Video'), files: [file] });
+          await navigator.share({ title: 'WaldOhr – ' + (modal._label || 'Video'), files: [file] });
         } else {
           const a = document.createElement('a'); a.href = URL.createObjectURL(vidBlob);
           a.download = fname; a.click();
@@ -1049,7 +1065,7 @@ async function openShareMixer(photoUrl, key, label) {
     };
   }
 
-  // Scrim schlieÃŸt Modal
+  // Scrim schließt Modal
   const scrim = document.getElementById('mixerScrim');
   if (scrim) scrim.onclick = () => { modal.hidden = true; };
 
@@ -1072,12 +1088,12 @@ function _openVideoReelModal(url, mime) {
   const fmtT = s => Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
   const playIco = '<svg viewBox="0 0 24 24" fill="#04130d" width="22" height="22"><path d="M8 5v14l11-7z"/></svg>';
   const pauseIco = '<svg viewBox="0 0 24 24" fill="#04130d" width="22" height="22"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
-  // iOS Safari (und manche WebViews) implementieren HTMLVideoElement.captureStream() nicht â€”
-  // dort ist clientseitiges Neu-Encodieren (Trimmen/Mischen) technisch unmÃ¶glich. Statt eines
+  // iOS Safari (und manche WebViews) implementieren HTMLVideoElement.captureStream() nicht —
+  // dort ist clientseitiges Neu-Encodieren (Trimmen/Mischen) technisch unmöglich. Statt eines
   // Fehlers beim Export erkennen wir das vorher und bieten Original-Teilen als Fallback an.
   const probeVid = document.createElement('video');
   const supportsCapture = typeof probeVid.captureStream === 'function' || typeof probeVid.mozCaptureStream === 'function';
-  const unsupportedNote = supportsCapture ? '' : `<div style="background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:12px;padding:10px 12px;font-size:12px;color:#fbbf24;margin-bottom:12px">Dein Browser unterstÃ¼tzt kein Zuschneiden/Mischen von Videos. Du kannst das Original trotzdem teilen.</div>`;
+  const unsupportedNote = supportsCapture ? '' : `<div style="background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:12px;padding:10px 12px;font-size:12px;color:#fbbf24;margin-bottom:12px">Dein Browser unterstützt kein Zuschneiden/Mischen von Videos. Du kannst das Original trotzdem teilen.</div>`;
   sheet.innerHTML = `
     <div style="width:36px;height:4px;border-radius:4px;background:var(--stroke-strong);margin:0 auto 12px"></div>
     <h3 style="font-family:'Outfit',sans-serif;font-size:18px;font-weight:600;margin:0 0 10px;text-align:center;color:var(--ink)">Reel erstellen</h3>
@@ -1085,7 +1101,7 @@ function _openVideoReelModal(url, mime) {
       <video id="_rvVid" src="${esc(url)}" playsinline style="width:100%;border-radius:12px;max-height:200px;object-fit:contain;background:#000;display:block"></video>
       <button id="_rvPlay" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:54px;height:54px;border-radius:50%;background:rgba(163,230,53,.92);border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.45)">${playIco}</button>
     </div>
-    <div id="_rvDurInfo" style="text-align:center;font-size:11px;color:var(--muted);margin-bottom:8px">Lade Videoâ€¦</div>
+    <div id="_rvDurInfo" style="text-align:center;font-size:11px;color:var(--muted);margin-bottom:8px">Lade Video…</div>
     <div id="_rvTrimWrap" style="position:relative;height:36px;background:rgba(163,230,53,.08);border-radius:10px;border:1px solid rgba(163,230,53,.2);margin-bottom:8px;touch-action:none">
       <div id="_rvKept" style="position:absolute;top:0;bottom:0;left:0;width:100%;background:rgba(163,230,53,.18);border-radius:10px"></div>
       <div id="_rvPos" style="position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,.85);display:none;z-index:3"></div>
@@ -1100,15 +1116,15 @@ function _openVideoReelModal(url, mime) {
       <input type="range" id="_rvVol" min="0" max="100" value="100" style="flex:1;accent-color:var(--lime)">
       <span id="_rvVolLbl" style="font-size:12px;color:var(--muted);width:38px;text-align:right;font-variant-numeric:tabular-nums">100%</span>
     </div>
-    <div style="font-size:13px;color:var(--ink);margin-bottom:6px">Tonaufnahme hinzufÃ¼gen</div>
+    <div style="font-size:13px;color:var(--ink);margin-bottom:6px">Tonaufnahme hinzufügen</div>
     <div id="_rvAudioList" style="max-height:150px;overflow-y:auto;margin-bottom:12px;scrollbar-width:none;display:flex;flex-direction:column;gap:6px">
-      <div style="color:var(--faint);font-size:12px;padding:8px 0">Lade Aufnahmenâ€¦</div>
+      <div style="color:var(--faint);font-size:12px;padding:8px 0">Lade Aufnahmen…</div>
     </div>
     ${unsupportedNote}
     <button id="_rvExport" style="width:100%;padding:14px;border-radius:16px;background:var(--lime);color:#04130d;font-weight:700;font-size:15px;cursor:pointer;border:none;font-family:inherit;margin-bottom:6px">${supportsCapture ? 'Reel exportieren' : 'Original teilen'}</button>
     <div id="_rvProgress" style="display:none;margin-bottom:8px">
       <div class="mixer-prog-track"><div id="_rvProgFill" class="mixer-prog-fill" style="width:0%"></div></div>
-      <div id="_rvProgLabel" class="mixer-prog-label" style="margin-top:5px;text-align:center;font-size:12px;color:var(--muted)">Exportiereâ€¦</div>
+      <div id="_rvProgLabel" class="mixer-prog-label" style="margin-top:5px;text-align:center;font-size:12px;color:var(--muted)">Exportiere…</div>
     </div>
     <button id="_rvClose" style="width:100%;padding:11px;background:transparent;color:var(--muted);border:none;font-size:13px;cursor:pointer;font-family:inherit">Abbrechen</button>`;
   ov.appendChild(sheet);
@@ -1164,7 +1180,7 @@ function _openVideoReelModal(url, mime) {
       if (!_vidRaf) _vidRaf = requestAnimationFrame(tickVid);
     } else { vid.pause(); setPlayIcon(false); }
   }
-  // Sicherheitsnetz: stoppt zuverlÃ¤ssig am Trim-Ende, auch wenn der rAF gedrosselt wird
+  // Sicherheitsnetz: stoppt zuverlässig am Trim-Ende, auch wenn der rAF gedrosselt wird
   vid.addEventListener('timeupdate', () => {
     const dur = curDur(); if (!dur || vid.paused) return;
     if (vid.currentTime >= endFrac * dur - 0.01) { vid.pause(); vid.currentTime = startFrac * dur; setPlayIcon(false); }
@@ -1206,7 +1222,7 @@ function _openVideoReelModal(url, mime) {
       audioListEl.innerHTML = '';
       const noneRow = document.createElement('div');
       noneRow.className = 'mixer-audio-row on';
-      noneRow.innerHTML = '<span class="mr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 3l18 18M9 9v3a3 3 0 0 0 4.5 2.6M12 4v2M15 6v.5"/></svg></span><span class="mr-label">Kein zusÃ¤tzlicher Ton</span>';
+      noneRow.innerHTML = '<span class="mr-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 3l18 18M9 9v3a3 3 0 0 0 4.5 2.6M12 4v2M15 6v.5"/></svg></span><span class="mr-label">Kein zusätzlicher Ton</span>';
       noneRow.onclick = () => {
         audioListEl.querySelectorAll('.mixer-audio-row').forEach(r => r.classList.remove('on'));
         noneRow.classList.add('on'); selAudioBlob = null; selAudioBuffer = null;
@@ -1215,7 +1231,7 @@ function _openVideoReelModal(url, mime) {
       if (!audios.length) {
         const hint = document.createElement('div');
         hint.style.cssText = 'color:var(--faint);font-size:12px;padding:6px 0';
-        hint.textContent = 'Keine Tonaufnahmen vorhanden â€” zuerst Ã¼ber REC aufnehmen.';
+        hint.textContent = 'Keine Tonaufnahmen vorhanden — zuerst über REC aufnehmen.';
         audioListEl.appendChild(hint);
       }
       for (const att of audios) {
@@ -1242,12 +1258,12 @@ function _openVideoReelModal(url, mime) {
     vid.pause(); setPlayIcon(false);
     exportBtn.disabled = true; progress.style.display = 'block';
     if (progFill) progFill.style.width = '0%';
-    if (progLabel) progLabel.textContent = 'Wird vorbereitetâ€¦';
+    if (progLabel) progLabel.textContent = 'Wird vorbereitet…';
 
     if (!supportsCapture) {
-      // Kein Trimmen/Mischen mÃ¶glich -> Original-Datei unverÃ¤ndert teilen/herunterladen.
+      // Kein Trimmen/Mischen möglich -> Original-Datei unverändert teilen/herunterladen.
       try {
-        if (progLabel) progLabel.textContent = 'Bereite Original zum Teilen vorâ€¦';
+        if (progLabel) progLabel.textContent = 'Bereite Original zum Teilen vor…';
         const origBlob = await fetch(url).then(r => r.blob());
         const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
         const ext = (mime || '').includes('mp4') ? 'mp4' : 'webm';
@@ -1275,14 +1291,14 @@ function _openVideoReelModal(url, mime) {
     let audioCtx = null, srcVid = null;
     try {
       // Quell-Video NICHT stummschalten: captureStream() liefert dann Video + Originalton in einem
-      // Stream (bewÃ¤hrter Weg). LautstÃ¤rke/Clip werden Ã¼ber WebAudio auf den erfassten Tonspur-Track
-      // gelegt â€” decodeAudioData scheitert an Video-Containern, createMediaStreamSource nicht.
+      // Stream (bewährter Weg). Lautstärke/Clip werden über WebAudio auf den erfassten Tonspur-Track
+      // gelegt — decodeAudioData scheitert an Video-Containern, createMediaStreamSource nicht.
       srcVid = document.createElement('video');
       srcVid.src = url; srcVid.preload = 'auto'; srcVid.playsInline = true; srcVid.muted = false;
       srcVid.style.cssText = 'position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
       document.body.appendChild(srcVid);
-      // play() SOFORT auslÃ¶sen â€” noch innerhalb der Klick-Nutzergeste. Vorher wurde erst nach
-      // mehreren await-Schritten (loadeddata/seeked, bis zu 5,5 s) play() aufgerufen â€” auf echten
+      // play() SOFORT auslösen — noch innerhalb der Klick-Nutzergeste. Vorher wurde erst nach
+      // mehreren await-Schritten (loadeddata/seeked, bis zu 5,5 s) play() aufgerufen — auf echten
       // Handys ist die Nutzergeste dann abgelaufen, die Autoplay-Policy blockiert die unstumme
       // Wiedergabe still, es kommen keine Frames rein und die Aufnahme bleibt leer.
       let playErr = null;
@@ -1293,16 +1309,16 @@ function _openVideoReelModal(url, mime) {
         setTimeout(res, 4000);
       });
       await playPromise;
-      if (playErr) throw new Error('Wiedergabe vom Browser blockiert â€” bitte erneut versuchen');
+      if (playErr) throw new Error('Wiedergabe vom Browser blockiert — bitte erneut versuchen');
       srcVid.pause();
       srcVid.currentTime = startTime;
       await new Promise(res => { srcVid.addEventListener('seeked', res, { once: true }); setTimeout(res, 1500); });
 
       const videoTrack = srcVid.captureStream().getVideoTracks()[0];
 
-      // Ton komplett Ã¼ber WebAudio: Originalton via MediaElementSource (lautstÃ¤rkegeregelt) +
+      // Ton komplett über WebAudio: Originalton via MediaElementSource (lautstärkegeregelt) +
       // optionaler Clip. decodeAudioData scheitert an Video-Containern und die Tonspur ist im
-      // Element-captureStream nicht enthalten â€” MediaElementSource ist der zuverlÃ¤ssige Weg.
+      // Element-captureStream nicht enthalten — MediaElementSource ist der zuverlässige Weg.
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') { try { await audioCtx.resume(); } catch {} }
       const dest = audioCtx.createMediaStreamDestination();
@@ -1333,7 +1349,7 @@ function _openVideoReelModal(url, mime) {
       const progInterval = setInterval(() => {
         const pct = Math.min(95, Math.round((Date.now() - t0) / 1000 / trimDur * 100));
         if (progFill) progFill.style.width = pct + '%';
-        if (progLabel) progLabel.textContent = 'Exportiereâ€¦ ' + pct + '%';
+        if (progLabel) progLabel.textContent = 'Exportiere… ' + pct + '%';
       }, 300);
       await new Promise((res, rej) => {
         mr.onstop = () => { clearInterval(progInterval); res(); };
@@ -1377,7 +1393,7 @@ function _openVideoReelModal(url, mime) {
   ov.addEventListener('click', e => { if (e.target === ov) dismiss(); });
 }
 
-// Teilen-Button fÃ¼r Foto-Zeilen: Ã¶ffnet Mixer (Foto-Karte teilen ODER Foto+Audioâ†’Video).
+// Teilen-Button für Foto-Zeilen: öffnet Mixer (Foto-Karte teilen ODER Foto+Audio→Video).
 function makeShareBtn(url, key, label) {
   const btn = document.createElement('button');
   btn.type = 'button'; btn.title = 'Teilen'; btn.className = 'rec-dl'; btn.style.color = 'var(--muted)';
@@ -1386,7 +1402,7 @@ function makeShareBtn(url, key, label) {
   return btn;
 }
 
-// Baut eine Aufnahme/Foto-Zeile aus einem gespeicherten Anhang (nach Reload) â€” selbe Optik wie
+// Baut eine Aufnahme/Foto-Zeile aus einem gespeicherten Anhang (nach Reload) — selbe Optik wie
 // frisch erzeugte Zeilen, aber aus dem in IndexedDB gesicherten Blob statt einer Live-Aufnahme.
 function attachmentRow(a, url) {
   if (!url) url = URL.createObjectURL(a.blob);
@@ -1411,8 +1427,8 @@ function attachmentRow(a, url) {
     row.appendChild(lb);
   }
   const mime = a.mime || '';
-  // Endung nach Art des Anhangs (kind), nicht nur nach MIME: 'video/mp4' enthÃ¤lt "mp4" und bekam
-  // frÃ¼her die Audio-Endung .m4a â€” das Video lieÃŸ sich dann nach dem Download nicht mehr Ã¶ffnen.
+  // Endung nach Art des Anhangs (kind), nicht nur nach MIME: 'video/mp4' enthält "mp4" und bekam
+  // früher die Audio-Endung .m4a — das Video ließ sich dann nach dem Download nicht mehr öffnen.
   const ext = a.kind === 'video' ? (mime.includes('mp4') ? 'mp4' : mime.includes('quicktime') ? 'mov' : 'webm')
     : a.kind === 'audio' ? (mime.includes('wav') ? 'wav' : mime.includes('mp4') || mime.includes('aac') ? 'm4a' : mime.includes('ogg') ? 'ogg' : mime.includes('webm') ? 'webm' : 'bin')
     : (mime.includes('png') ? 'png' : mime.includes('heic') ? 'heic' : mime.includes('webp') ? 'webp' : 'jpg');
@@ -1432,12 +1448,12 @@ function attachmentRow(a, url) {
 }
 
 // Baut die Liste eigener Aufnahmen/Fotos + die kleinen Abspiel-Badges auf den Sammlungskarten
-// aus der Datenbank neu auf â€” beim Boot UND nach jedem LÃ¶schen, damit beides synchron bleibt.
+// aus der Datenbank neu auf — beim Boot UND nach jedem Löschen, damit beides synchron bleibt.
 async function hydrateAttachments() {
   const list = document.getElementById('recList');
   // Blob-URLs ALLER bisher gerenderten Zeilen VOR dem Neuaufbau freigeben (Backup-Import, DB-Reset).
   // Gelesen aus dem Zeilen-Zustand statt einer separaten Liste: so sind auch live erzeugte und
-  // zugeschnittene Zeilen (neue URL) erfasst, die eine Merkliste nie gekannt hÃ¤tte.
+  // zugeschnittene Zeilen (neue URL) erfasst, die eine Merkliste nie gekannt hätte.
   if (list) for (const r of list.querySelectorAll('.rec-row')) { if (r._recUrl) { try { URL.revokeObjectURL(r._recUrl); } catch {} } }
   if (list) list.innerHTML = '';
   clearRecordings(); // revoked die Badge-URLs bereits selbst (s. ui.js)
@@ -1452,8 +1468,8 @@ async function hydrateAttachments() {
 }
 
 // ---- Mikrofon-Steuerung ----
-// 'off': alles aus  |  'mic-ready': Mikro lÃ¤uft, aber keine Erkennung (intern, z. B. nach einem
-// Tonclip oder ZÃ¤hlungsende)  |  'mic': Mikro + Erkennung. Der Orb zeigt den ECHTEN Zustand â€” frÃ¼her
+// 'off': alles aus  |  'mic-ready': Mikro läuft, aber keine Erkennung (intern, z. B. nach einem
+// Tonclip oder Zählungsende)  |  'mic': Mikro + Erkennung. Der Orb zeigt den ECHTEN Zustand — früher
 // stand dort statisch "Lauschmodus / aktiv", auch wenn gar nichts lief.
 const orbBig = document.getElementById('orbBig'), orbSub = document.getElementById('orbSub');
 let _listenT0 = 0, _listenTimer = null;
@@ -1467,7 +1483,7 @@ function _orb(big, sub, pressed, label) {
 function setUI(mode, msg) {
   body.classList.remove('listening', 'mic-ready');
   if (mode !== 'mic') { clearInterval(_listenTimer); _listenTimer = null; _listenT0 = 0; }
-  // Die Statuszeile zeigt nur noch echte Meldungen (Fehler, Laden, Restzeit) â€” der Grundzustand
+  // Die Statuszeile zeigt nur noch echte Meldungen (Fehler, Laden, Restzeit) — der Grundzustand
   // steht schon im Orb, doppelt ("Tippe zum Lauschen" + "Antippen") war nur Rauschen.
   if (mode === 'off') {
     statusTxt.textContent = msg || '';
@@ -1482,7 +1498,7 @@ function setUI(mode, msg) {
   }
   body.classList.add('listening');
   statusTxt.textContent = msg || '';
-  // Laufzeit im Orb: zÃ¤hlt ab dem ersten 'mic', bleibt bei weiteren setUI('mic', â€¦)-Aufrufen erhalten.
+  // Laufzeit im Orb: zählt ab dem ersten 'mic', bleibt bei weiteren setUI('mic', …)-Aufrufen erhalten.
   if (!_listenT0) _listenT0 = Date.now();
   const tick = () => _orb('Lauscht', _fmtRun(Date.now() - _listenT0), true, 'Lauschen stoppen');
   tick();
@@ -1490,8 +1506,8 @@ function setUI(mode, msg) {
   renderLive();
 }
 
-// Vollbildmodus: nur per Nutzergeste auslÃ¶sbar. Bisher hing das nur am Mikro-Tap â€”
-// jetzt auf jeden ersten Tap irgendwo in der App, damit Vollbild zuverlÃ¤ssig ankommt,
+// Vollbildmodus: nur per Nutzergeste auslösbar. Bisher hing das nur am Mikro-Tap —
+// jetzt auf jeden ersten Tap irgendwo in der App, damit Vollbild zuverlässig ankommt,
 // egal welchen Button der Nutzer zuerst antippt.
 function tryFullscreen() {
   const el = document.documentElement;
@@ -1511,7 +1527,7 @@ function stopSession() {
   updateRouteToggleBtn(false);
   if (s && s.pointCount >= 2) {
     const dist = s.distKm < 1 ? Math.round(s.distKm * 1000) + ' m' : s.distKm.toFixed(2) + ' km';
-    showInfoToast('Route beendet', dist + ' Â· ' + s.pointCount + ' GPS-Punkte', 'ðŸ“', () => {
+    showInfoToast('Route beendet', dist + ' · ' + s.pointCount + ' GPS-Punkte', '📍', () => {
       const gpx = routeTracker.exportGpx(); if (!gpx) return;
       const a = document.createElement('a'); a.href = 'data:application/gpx+xml;charset=utf-8,' + encodeURIComponent(gpx); a.download = 'waldohr-route-' + new Date().toISOString().slice(0, 10) + '.gpx'; a.click();
     }, 'GPX exportieren');
@@ -1519,40 +1535,40 @@ function stopSession() {
   updateRouteMap([]);
 }
 
-// Zeitplan-Chip unter dem Orb: Ã¶ffnet "Automatisch lauschen". warmAlarmCtx() nutzt die Nutzergeste,
-// um den AudioContext fÃ¼r spÃ¤tere AlarmtÃ¶ne freizuschalten (Browser blockieren Ton ohne Geste).
+// Zeitplan-Chip unter dem Orb: öffnet "Automatisch lauschen". warmAlarmCtx() nutzt die Nutzergeste,
+// um den AudioContext für spätere Alarmtöne freizuschalten (Browser blockieren Ton ohne Geste).
 const timingBtn = document.getElementById('timingBtn');
 if (timingBtn) timingBtn.onclick = () => { warmAlarmCtx(); openTimingModal(); };
-// Der Fotografen-Wecker lebt jetzt im Foto-Tab â€” gleiche Freischaltung beim Einschalten dort.
+// Der Fotografen-Wecker lebt jetzt im Foto-Tab — gleiche Freischaltung beim Einschalten dort.
 document.getElementById('fwEnabled')?.addEventListener('change', warmAlarmCtx);
 
 // Route-Toggle im Karte-Tab: Route manuell starten/stoppen ohne Mikro. Teilt sich den Tracker mit
-// der Transekt-ZÃ¤hlung (Ornithologie-Tab) â€” lÃ¤uft die gerade, hier nicht einfach mitbeenden/
-// Ã¼berschreiben, sondern klar sagen, wo man zuerst stoppen muss.
+// der Transekt-Zählung (Ornithologie-Tab) — läuft die gerade, hier nicht einfach mitbeenden/
+// überschreiben, sondern klar sagen, wo man zuerst stoppen muss.
 if (routeToggleBtn) routeToggleBtn.onclick = () => {
   if (routeTracker._timer) {
     if (routeTracker.owner !== 'route') {
-      showInfoToast('ðŸ—ºï¸ Transekt-ZÃ¤hlung lÃ¤uft', 'Erst dort beenden, dann lÃ¤sst sich die Route separat starten.', 'ðŸ—ºï¸');
+      showInfoToast('🗺️ Transekt-Zählung läuft', 'Erst dort beenden, dann lässt sich die Route separat starten.', '🗺️');
       return;
     }
     stopSession();
   } else {
     geo.start();
     if (!routeTracker.start('route')) {
-      showInfoToast('ðŸ—ºï¸ Transekt-ZÃ¤hlung lÃ¤uft', 'Erst dort beenden, dann lÃ¤sst sich die Route separat starten.', 'ðŸ—ºï¸');
+      showInfoToast('🗺️ Transekt-Zählung läuft', 'Erst dort beenden, dann lässt sich die Route separat starten.', '🗺️');
       return;
     }
     updateRouteToggleBtn(true);
-    showInfoToast('Route gestartet', 'GPS-Track wird aufgezeichnet.', 'ðŸ“');
+    showInfoToast('Route gestartet', 'GPS-Track wird aufgezeichnet.', '📍');
   }
 };
 
-// EIN Start statt Orb + REC: ein Tipp startet Mikrofon UND Erkennung, der nÃ¤chste stoppt beides
+// EIN Start statt Orb + REC: ein Tipp startet Mikrofon UND Erkennung, der nächste stoppt beides
 // (inkl. laufendem Tonclip, der dabei noch gespeichert wird). Lief das Mikro schon ohne Erkennung
-// ('mic-ready', z. B. wÃ¤hrend eines Tonclips), schaltet der Tipp nur die Erkennung dazu.
+// ('mic-ready', z. B. während eines Tonclips), schaltet der Tipp nur die Erkennung dazu.
 let _orbBusy = false;
 async function toggleDetection() {
-  if (_orbBusy) return;   // getUserMedia kann Sekunden dauern â€” Doppeltipp nicht doppelt starten
+  if (_orbBusy) return;   // getUserMedia kann Sekunden dauern — Doppeltipp nicht doppelt starten
   if (audio.running && detectionActive) {
     if (recorder.mr && recorder.mr.state === 'recording') recorder.mr.stop();
     stopDauerUeberwachung(); audio.stop(); detectionActive = false; setUI('off');
@@ -1561,9 +1577,9 @@ async function toggleDetection() {
   if (audio.running) { detectionActive = true; setUI('mic'); return; }
   tryFullscreen();
   _orbBusy = true;
-  _orb('Startet â€¦', 'Mikrofon', false, 'Lauschen startet');
+  _orb('Startet …', 'Mikrofon', false, 'Lauschen startet');
   try { await audio.start(getMicDeviceId()); geo.start(); detectionActive = true; setUI('mic'); startDauerUeberwachung(); }
-  catch (e) { console.warn('mic', e); setUI('off', 'Mikrofon nicht erlaubt â€” bitte in den Browser-Einstellungen freigeben'); }
+  catch (e) { console.warn('mic', e); setUI('off', 'Mikrofon nicht erlaubt — bitte in den Browser-Einstellungen freigeben'); }
   finally { _orbBusy = false; }
 }
 
@@ -1588,7 +1604,7 @@ function _showRecPopup(state) {
         <svg viewBox="0 0 24 24" fill="#ef4444" stroke="#ef4444" stroke-width="0.5" width="56" height="56"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="#ef4444" stroke-width="1.8"/><line x1="12" y1="19" x2="12" y2="23" stroke="#ef4444" stroke-width="1.8"/><line x1="8" y1="23" x2="16" y2="23" stroke="#ef4444" stroke-width="1.8"/></svg>
       </div>
       <div id="_recPopupTime" style="font-size:30px;font-weight:700;color:#ef4444;font-family:'Outfit',sans-serif;letter-spacing:2px">0:00</div>
-      <div id="_recPopupStatus" style="font-size:12px;color:rgba(239,68,68,.6);margin-top:6px;letter-spacing:.5px">Vorbereitungâ€¦</div>
+      <div id="_recPopupStatus" style="font-size:12px;color:rgba(239,68,68,.6);margin-top:6px;letter-spacing:.5px">Vorbereitung…</div>
       <div style="width:140px;height:6px;background:rgba(239,68,68,.12);border-radius:4px;margin:12px auto 0;overflow:hidden"><div id="_recLevelFill" style="height:100%;width:0%;border-radius:4px;background:linear-gradient(90deg,#22c55e,#a3e635);transition:width 80ms linear"></div></div>
     </div>`;
     document.body.appendChild(_recPopupEl);
@@ -1617,7 +1633,7 @@ function _showRecPopup(state) {
   }
   if (state === 'recording') {
     const s = document.getElementById('_recPopupStatus');
-    if (s) s.textContent = 'Aufnahme lÃ¤uft';
+    if (s) s.textContent = 'Aufnahme läuft';
   }
 }
 function _hideRecPopup() {
@@ -1626,8 +1642,8 @@ function _hideRecPopup() {
   if (_recLevelRaf) { cancelAnimationFrame(_recLevelRaf); _recLevelRaf = null; }
 }
 
-// Nach einem Clip, fÃ¼r den der Recorder das Mikro selbst eingeschaltet hat, es wieder freigeben â€”
-// auÃŸer jemand nutzt es inzwischen (Lauschen per Orb/REC/Punkt-ZÃ¤hlung gestartet). Vorher lief das
+// Nach einem Clip, für den der Recorder das Mikro selbst eingeschaltet hat, es wieder freigeben —
+// außer jemand nutzt es inzwischen (Lauschen per Orb/REC/Punkt-Zählung gestartet). Vorher lief das
 // Mikro nach so einem Clip unsichtbar weiter (UI zeigte "aus", Mikro-Indikator des Systems an).
 function _releaseMicIfUnused() {
   if (!audio.running || detectionActive || body.classList.contains('mic-ready') || body.classList.contains('listening')) return;
@@ -1645,15 +1661,15 @@ const recorder = {
   },
   async toggle(label, key) {
     if (this.mr && this.mr.state === 'recording') { this.mr.stop(); return; }
-    // WÃ¤hrend der (teils sekundenlangen) Mikro-Initialisierung einen zweiten Tap ignorieren â€”
+    // Während der (teils sekundenlangen) Mikro-Initialisierung einen zweiten Tap ignorieren —
     // sonst starteten zwei parallele audio.start()/MediaRecorder.
     if (this.starting) return;
     let startedMic = false;
     if (!audio.running) {
       // Popup ZUERST anzeigen, dem Browser per setTimeout sicher einen Render-Tick geben und ERST
       // DANN die (auf manchen Handys >10 s langsame) Mikrofon-Initialisierung starten. setTimeout
-      // statt requestAnimationFrame, weil rAF auf manchen GerÃ¤ten (Fullscreen-/Render-Pausen)
-      // sekundenlang aussetzen kann â€” dann erschiene das Popup gar nicht.
+      // statt requestAnimationFrame, weil rAF auf manchen Geräten (Fullscreen-/Render-Pausen)
+      // sekundenlang aussetzen kann — dann erschiene das Popup gar nicht.
       this.starting = true;
       _showRecPopup('preparing');
       await new Promise(r => setTimeout(r, 60));
@@ -1669,14 +1685,14 @@ const recorder = {
     try { this.mr = type ? new MediaRecorder(audio.stream, { mimeType: type }) : new MediaRecorder(audio.stream); }
     catch (e) {
       console.warn('rec', e);
-      if (statusTxt) statusTxt.textContent = 'Aufnahme nicht mÃ¶glich';
+      if (statusTxt) statusTxt.textContent = 'Aufnahme nicht möglich';
       _hideRecPopup();
       if (startedMic) _releaseMicIfUnused();
-      setTimeout(() => { if (statusTxt && statusTxt.textContent === 'Aufnahme nicht mÃ¶glich') statusTxt.textContent = ''; }, 3000);
+      setTimeout(() => { if (statusTxt && statusTxt.textContent === 'Aufnahme nicht möglich') statusTxt.textContent = ''; }, 3000);
       return;
     }
-    // Pro Aufnahme eigene Puffer/Beschriftung (Closure statt this.*): save() wartet auf enhanceBlob â€”
-    // ein schnell nachgestarteter zweiter Clip Ã¼berschrieb vorher this.chunks/label/key, und der
+    // Pro Aufnahme eigene Puffer/Beschriftung (Closure statt this.*): save() wartet auf enhanceBlob —
+    // ein schnell nachgestarteter zweiter Clip überschrieb vorher this.chunks/label/key, und der
     // erste wurde mit Ton/Namen des zweiten (oder gar nicht) gespeichert.
     const mr = this.mr, chunks = [], recLabel = label || null, recKey = key || null;
     this.chunks = chunks; this.label = recLabel; this.key = recKey;
@@ -1723,7 +1739,7 @@ const recorder = {
     row.appendChild(makeDeleteBtn(row, url, key, attId));
     row.appendChild(a);
     const list = document.getElementById('recList'); if (list) list.prepend(row);
-    // Eigene URL fÃ¼rs Badge â€” die Zeilen-URL darf beim LÃ¶schen/Zuschneiden freigegeben werden.
+    // Eigene URL fürs Badge — die Zeilen-URL darf beim Löschen/Zuschneiden freigegeben werden.
     if (key) registerRecording(key, URL.createObjectURL(saveBlob));
     if (!isGalleryVisible()) galleryBadgeAdd(1);
   }
@@ -1732,13 +1748,13 @@ const clipBtn = document.getElementById('clipBtn');
 if (clipBtn && !window.MediaRecorder) clipBtn.style.display = 'none';
 if (clipBtn) clipBtn.onclick = () => recorder.toggle();
 const photoFab = document.getElementById('photoFab');
-// "Kamera Ã¶ffnen" im Foto-Tab. Nach dem AuslÃ¶sen bleibt die Kamera bewusst offen (mehrere Fotos
-// hintereinander); das Galerie-Icon in der Kamera blinkt kurz als BestÃ¤tigung und fÃ¼hrt zurÃ¼ck.
+// "Kamera öffnen" im Foto-Tab. Nach dem Auslösen bleibt die Kamera bewusst offen (mehrere Fotos
+// hintereinander); das Galerie-Icon in der Kamera blinkt kurz als Bestätigung und führt zurück.
 if (photoFab) photoFab.onclick = () => _openCameraFor(null, null);
 
 // ---- Galerie = Foto-Tab, Segment "Galerie" ----
-// FrÃ¼her ein eigenes Modal; openGallery() wechselt jetzt in den Foto-Tab (auch das Galerie-Icon
-// in der Kamera, s. _openCameraFor). Das ZÃ¤hler-Badge sitzt am Foto-Tab der Navigation.
+// Früher ein eigenes Modal; openGallery() wechselt jetzt in den Foto-Tab (auch das Galerie-Icon
+// in der Kamera, s. _openCameraFor). Das Zähler-Badge sitzt am Foto-Tab der Navigation.
 function isGalleryVisible() {
   return !!document.getElementById('v-foto')?.classList.contains('active') && isFotoSegment('galerie');
 }
@@ -1771,7 +1787,7 @@ function openGallery() {
   if (!document.getElementById('v-foto')?.classList.contains('active')) document.querySelector('.nav button[data-v="foto"]')?.click();
   galleryBadgeClear();
 }
-// Badge lÃ¶schen, sobald die Galerie tatsÃ¤chlich zu sehen ist (Tab- oder Segmentwechsel).
+// Badge löschen, sobald die Galerie tatsächlich zu sehen ist (Tab- oder Segmentwechsel).
 document.addEventListener('waldohr:tab', e => {
   if (e.detail !== 'foto') return;
   if (isFotoSegment('galerie')) galleryBadgeClear();
@@ -1783,7 +1799,7 @@ document.addEventListener('waldohr:fotoseg', e => {
 });
 
 // ---- Licht & Wetter (Foto-Tab, Segment "Licht") ----
-// Linien-Icons statt Wetter-Emoji (die je Plattform anders aussehen). WMO-Code â†’ Icon-Gruppe.
+// Linien-Icons statt Wetter-Emoji (die je Plattform anders aussehen). WMO-Code → Icon-Gruppe.
 function wxIcon(wmo) {
   const n = wmo == null ? 3 : wmo;
   const name = n === 0 || n === 1 ? 'sun' : n === 2 ? 'partly' : n === 3 ? 'cloud' : n === 45 || n === 48 ? 'fog'
@@ -1791,10 +1807,10 @@ function wxIcon(wmo) {
   return icon(name);
 }
 const _pwRow = (ico, lbl, val, cls = '') => `<div class="pw-row"><span class="pw-icon${cls ? ' ' + cls : ''}">${ico}</span><span class="pw-lbl">${lbl}</span><span class="pw-val">${val}</span></div>`;
-const _slot = s => `<div class="tmw-slot"><div class="tmw-h">${s.hour}:00</div><div class="tmw-ico">${wxIcon(s.visKm < 2 ? 45 : s.wmo)}</div><div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}Â°</div><div class="tmw-cc">${s.cloudcover} % Wolken</div><div class="tmw-rain">${s.precipProb > 0 ? s.precipProb + ' % Regen' : ''}</div></div>`;
+const _slot = s => `<div class="tmw-slot"><div class="tmw-h">${s.hour}:00</div><div class="tmw-ico">${wxIcon(s.visKm < 2 ? 45 : s.wmo)}</div><div class="tmw-temp">${s.temp > 0 ? '+' : ''}${s.temp}°</div><div class="tmw-cc">${s.cloudcover} % Wolken</div><div class="tmw-rain">${s.precipProb > 0 ? s.precipProb + ' % Regen' : ''}</div></div>`;
 let _pwLoadedAt = 0, _pwBusy = false;
 async function loadPhotoWeather(force) {
-  // Nicht bei jedem Tab-Wechsel neu laden â€” Wetter Ã¤ndert sich nicht minÃ¼tlich (10 Min Puffer).
+  // Nicht bei jedem Tab-Wechsel neu laden — Wetter ändert sich nicht minütlich (10 Min Puffer).
   if (_pwBusy || (!force && Date.now() - _pwLoadedAt < 10 * 60000)) return;
   const content = document.getElementById('photoWeatherContent');
   const locEl = document.getElementById('pwLocation');
@@ -1806,7 +1822,7 @@ async function loadPhotoWeather(force) {
 const photoWeatherBtn = document.getElementById('photoWeatherBtn');
 if (photoWeatherBtn) photoWeatherBtn.onclick = () => loadPhotoWeather(true);
 async function _renderPhotoWeather(content, locEl) {
-  content.innerHTML = '<div class="pw-loading">Lade Wetterdatenâ€¦</div>';
+  content.innerHTML = '<div class="pw-loading">Lade Wetterdaten…</div>';
   if (locEl) locEl.textContent = '';
   const lat = geo.pos?.lat, lng = geo.pos?.lng;
 
@@ -1821,77 +1837,77 @@ async function _renderPhotoWeather(content, locEl) {
     lat != null ? fetchMoonTimes(lat, lng) : Promise.resolve(null),
     lat != null ? fetchTodayHours(lat, lng) : Promise.resolve(null),
   ]);
-  const fmt = d => d instanceof Date ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : 'â€“';
-  const fmtDate = d => d instanceof Date ? d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) : 'â€“';
+  const fmt = d => d instanceof Date ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '–';
+  const fmtDate = d => d instanceof Date ? d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) : '–';
   let html = '';
   if (sun) {
     const sr = sun.sunrise;
     const blueEnd = sr ? new Date(sr.getTime() - 20 * 60000) : null;
     const goldenEnd = sr ? new Date(sr.getTime() + 45 * 60000) : null;
     html += '<div class="pw-section">Morgens</div>';
-    if (sun.civilBegin) html += _pwRow(icon('moon'), 'Blaue Stunde', `${fmt(sun.civilBegin)} â€“ ${blueEnd ? fmt(blueEnd) : 'â€“'}`, 'cool');
+    if (sun.civilBegin) html += _pwRow(icon('moon'), 'Blaue Stunde', `${fmt(sun.civilBegin)} – ${blueEnd ? fmt(blueEnd) : '–'}`, 'cool');
     if (sr) html += _pwRow(icon('sunrise'), 'Sonnenaufgang', fmt(sr), 'warm');
-    if (sr) html += _pwRow(icon('sun'), 'Goldene Stunde', `${fmt(sr)} â€“ ${goldenEnd ? fmt(goldenEnd) : 'â€“'}`, 'warm');
+    if (sr) html += _pwRow(icon('sun'), 'Goldene Stunde', `${fmt(sr)} – ${goldenEnd ? fmt(goldenEnd) : '–'}`, 'warm');
     if (sun.sunset) {
       html += '<div class="pw-section">Abends</div>';
       const goldenBegin = new Date(sun.sunset.getTime() - 45 * 60000);
-      html += _pwRow(icon('sun'), 'Goldene Stunde', `${fmt(goldenBegin)} â€“ ${fmt(sun.sunset)}`, 'warm');
+      html += _pwRow(icon('sun'), 'Goldene Stunde', `${fmt(goldenBegin)} – ${fmt(sun.sunset)}`, 'warm');
       html += _pwRow(icon('sunset'), 'Sonnenuntergang', fmt(sun.sunset), 'warm');
-      if (sun.civilEnd) html += _pwRow(icon('moon'), 'Blaue Stunde', `${fmt(sun.sunset)} â€“ ${fmt(sun.civilEnd)}`, 'cool');
+      if (sun.civilEnd) html += _pwRow(icon('moon'), 'Blaue Stunde', `${fmt(sun.sunset)} – ${fmt(sun.civilEnd)}`, 'cool');
     }
   }
   if (pw) {
     const fogRisk = pw.visKm < 1 ? 'Nebel' : pw.visKm < 5 && pw.humidity > 85 ? 'Dunst' : pw.humidity > 92 ? 'Nebelgefahr' : null;
-    const tip = pw.cloudcover < 20 && pw.windKmh < 10 ? 'Optimale Bedingungen fÃ¼r Langzeitbelichtung.'
-      : pw.cloudcover > 70 ? 'Weiches Diffuslicht durch BewÃ¶lkung â€” ideal fÃ¼r PortrÃ¤tfotos.'
-      : pw.windKmh > 25 ? 'Starker Wind â€” kurze Belichtungszeit wÃ¤hlen.'
-      : 'Gute Bedingungen fÃ¼r Naturfotografie.';
+    const tip = pw.cloudcover < 20 && pw.windKmh < 10 ? 'Optimale Bedingungen für Langzeitbelichtung.'
+      : pw.cloudcover > 70 ? 'Weiches Diffuslicht durch Bewölkung — ideal für Porträtfotos.'
+      : pw.windKmh > 25 ? 'Starker Wind — kurze Belichtungszeit wählen.'
+      : 'Gute Bedingungen für Naturfotografie.';
     html += '<div class="pw-section">Jetzt</div>';
-    html += _pwRow(wxIcon(pw.wmo), esc(weatherLabel(pw.wmo) || 'Wetter'), pw.temp + ' Â°C');
+    html += _pwRow(wxIcon(pw.wmo), esc(weatherLabel(pw.wmo) || 'Wetter'), pw.temp + ' °C');
     html += _pwRow(icon('wind'), 'Wind', `${pw.windKmh} km/h ${windDirLabel(pw.windDir)}`);
     html += _pwRow(icon('drop'), 'Luftfeuchte', pw.humidity + ' %');
-    if (fogRisk) html += `<div class="pw-row"><span class="pw-icon warm">${icon('fog')}</span><span class="pw-lbl">Nebel</span><span class="pw-val warn">${fogRisk} Â· ${pw.visKm} km</span></div>`;
+    if (fogRisk) html += `<div class="pw-row"><span class="pw-icon warm">${icon('fog')}</span><span class="pw-lbl">Nebel</span><span class="pw-val warn">${fogRisk} · ${pw.visKm} km</span></div>`;
     else html += _pwRow(icon('eye'), 'Sichtweite', pw.visKm + ' km');
-    html += _pwRow(icon('cloud'), 'BewÃ¶lkung', pw.cloudcover + ' %');
-    html += _pwRow(icon('sun'), 'UV-Index', `${pw.uvIndex} Â· ${uvLabel(pw.uvIndex)}`);
+    html += _pwRow(icon('cloud'), 'Bewölkung', pw.cloudcover + ' %');
+    html += _pwRow(icon('sun'), 'UV-Index', `${pw.uvIndex} · ${uvLabel(pw.uvIndex)}`);
     html += `<div class="pw-tip">${icon('camera')}<span>${tip}</span></div>`;
-    if (todaySlots?.length) html += '<div class="pw-section">Heute stÃ¼ndlich</div><div class="tmw-slots">' + todaySlots.map(_slot).join('') + '</div>';
+    if (todaySlots?.length) html += '<div class="pw-section">Heute stündlich</div><div class="tmw-slots">' + todaySlots.map(_slot).join('') + '</div>';
   }
-  // Mond-Kalender (moonPhaseLabel liefert "Name Emoji" â€” nur der Name wird angezeigt)
+  // Mond-Kalender (moonPhaseLabel liefert "Name Emoji" — nur der Name wird angezeigt)
   const mc = moonCalendar();
-  const phaseName = moonPhaseLabel(mc.phase).replace(/\s*[\p{Extended_Pictographic}ï¸]+\s*$/u, '');
+  const phaseName = moonPhaseLabel(mc.phase).replace(/\s*[\p{Extended_Pictographic}️]+\s*$/u, '');
   html += '<div class="pw-section">Mond</div>';
-  html += _pwRow(icon('moon'), 'Phase', `${phaseName} Â· ${mc.ageInDays} Tage`);
-  const mrStr = moonTimes === null ? 'GPS nÃ¶tig' : (moonTimes.moonrise ? fmt(moonTimes.moonrise) : 'heute nicht');
-  const msStr = moonTimes === null ? 'GPS nÃ¶tig' : (moonTimes.moonset ? fmt(moonTimes.moonset) : 'heute nicht');
+  html += _pwRow(icon('moon'), 'Phase', `${phaseName} · ${mc.ageInDays} Tage`);
+  const mrStr = moonTimes === null ? 'GPS nötig' : (moonTimes.moonrise ? fmt(moonTimes.moonrise) : 'heute nicht');
+  const msStr = moonTimes === null ? 'GPS nötig' : (moonTimes.moonset ? fmt(moonTimes.moonset) : 'heute nicht');
   html += _pwRow(icon('moon'), 'Mondaufgang', mrStr);
   html += _pwRow(icon('moon'), 'Monduntergang', msStr);
-  html += _pwRow(icon('moon'), 'NÃ¤chster Vollmond', `${fmtDate(mc.nextFull)} (in ${mc.daysToFull} T.)`);
-  html += _pwRow(icon('moon'), 'NÃ¤chster Neumond', `${fmtDate(mc.nextNew)} (in ${mc.daysToNew} T.)`);
+  html += _pwRow(icon('moon'), 'Nächster Vollmond', `${fmtDate(mc.nextFull)} (in ${mc.daysToFull} T.)`);
+  html += _pwRow(icon('moon'), 'Nächster Neumond', `${fmtDate(mc.nextNew)} (in ${mc.daysToNew} T.)`);
 
-  if (!pw && !sun) html = '<div class="pw-loading">Standort benÃ¶tigt â€” GPS erlauben, dann aktualisieren.</div>';
+  if (!pw && !sun) html = '<div class="pw-loading">Standort benötigt — GPS erlauben, dann aktualisieren.</div>';
   content.innerHTML = html;
 
-  // Morgen-FrÃ¼h-Prognose nachreichen
+  // Morgen-Früh-Prognose nachreichen
   if (lat != null) {
     const tmwEl = document.createElement('div');
-    tmwEl.innerHTML = '<div class="pw-section">Morgen frÃ¼h</div><div class="pw-loading">Prognose wird geladen â€¦</div>';
+    tmwEl.innerHTML = '<div class="pw-section">Morgen früh</div><div class="pw-loading">Prognose wird geladen …</div>';
     content.appendChild(tmwEl);
     fetchTomorrowMorning(lat, lng).then(slots => {
-      if (!slots || !slots.length) { tmwEl.innerHTML = '<div class="pw-section">Morgen frÃ¼h</div><div class="pw-loading">Keine Prognose verfÃ¼gbar.</div>'; return; }
-      tmwEl.innerHTML = '<div class="pw-section">Morgen frÃ¼h</div><div class="tmw-slots">' + slots.map(_slot).join('') + '</div>';
+      if (!slots || !slots.length) { tmwEl.innerHTML = '<div class="pw-section">Morgen früh</div><div class="pw-loading">Keine Prognose verfügbar.</div>'; return; }
+      tmwEl.innerHTML = '<div class="pw-section">Morgen früh</div><div class="tmw-slots">' + slots.map(_slot).join('') + '</div>';
     }).catch(() => { tmwEl.remove(); });
   }
 }
 
 // Aufnahme-Knopf direkt an einer Live-Zeile -> beschriftet die Aufnahme mit dem Artnamen und
-// verknÃ¼pft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
+// verknüpft sie mit dem Art-Key, damit sie als kleines Icon in der Sammlung auftaucht.
 window.__waldohrRecordSpecies = (name, key) => recorder.toggle(name, key);
 // Richtungs-Scan (js/scan.js): nutzt das laufende Lausch-Mikrofon mit, sonst ein eigenes.
 window.__waldohrScanDirection = name => openScan({ species: name || '', engine: audio });
 document.getElementById('scanBtn')?.addEventListener('click', () => openScan({ engine: audio }));
 
-// API for Punkt-ZÃ¤hlung cross-tab flow (ornithologie.js)
+// API for Punkt-Zählung cross-tab flow (ornithologie.js)
 let _triggerRaf = null, _triggerMr = null;
 window.__waldohr = {
   startDetection: async () => {
@@ -1905,14 +1921,14 @@ window.__waldohr = {
       catch (e) { detectionActive = false; setUI('off'); throw e; }
     }
   },
-  // opts.releaseMic: Erkennung UND Mikrofon aus (Ende von Punkt-ZÃ¤hlung/Transekt, wenn vorher nicht
-  // gelauscht wurde) â€” wie der Orb-Stopp: laufenden Clip sauber beenden (wird gespeichert), Dauer-
-  // Ã¼berwachung stoppen, Mikro freigeben, UI auf "aus". Ohne opts unverÃ¤ndert: Mikro bleibt bereit.
+  // opts.releaseMic: Erkennung UND Mikrofon aus (Ende von Punkt-Zählung/Transekt, wenn vorher nicht
+  // gelauscht wurde) — wie der Orb-Stopp: laufenden Clip sauber beenden (wird gespeichert), Dauer-
+  // überwachung stoppen, Mikro freigeben, UI auf "aus". Ohne opts unverändert: Mikro bleibt bereit.
   stopDetection: (opts) => {
     detectionActive = false;
     if (opts && opts.releaseMic) {
       if (recorder.mr && recorder.mr.state === 'recording') recorder.mr.stop();
-      // Trigger-Aufnahme hÃ¤ngt am selben Stream â€” ohne Mikro sinnlos, also mitbeenden (speichert noch).
+      // Trigger-Aufnahme hängt am selben Stream — ohne Mikro sinnlos, also mitbeenden (speichert noch).
       if (_triggerRaf) { cancelAnimationFrame(_triggerRaf); _triggerRaf = null; }
       if (_triggerMr && _triggerMr.state === 'recording') _triggerMr.stop();
       _triggerMr = null;
@@ -1925,10 +1941,10 @@ window.__waldohr = {
   },
   isDetecting: () => audio.running && detectionActive,
   isMicRunning: () => !!audio.running,
-  // FÃ¼r den Feldbuch-Export "Heute hier": maÃŸgebliche eigene Position (manuell gesetzt vor GPS).
+  // Für den Feldbuch-Export "Heute hier": maßgebliche eigene Position (manuell gesetzt vor GPS).
   getPos: () => myPos() || null,
-  // Akzeptiert 'listen' wie 'v-listen' (ornithologie.js Ã¼bergibt die View-ID mit "v-"-PrÃ¤fix, die
-  // Nav-Buttons tragen data-v ohne) â€” vorher sprang der Start einer ZÃ¤hlung nie zu Lauschen.
+  // Akzeptiert 'listen' wie 'v-listen' (ornithologie.js übergibt die View-ID mit "v-"-Präfix, die
+  // Nav-Buttons tragen data-v ohne) — vorher sprang der Start einer Zählung nie zu Lauschen.
   switchTab: v => {
     const id = String(v || '').replace(/^v-/, '');
     if (!/^[a-z0-9-]+$/i.test(id)) return;
@@ -2004,14 +2020,14 @@ window.__waldohr = {
   },
 };
 
-// ---- Kamera-Aufnahme: Foto oder Video, Ã¼ber eigene Kamera-UI ----
-// Natives <input capture> bleibt als Fallback erhalten (camera.js greift darauf zurÃ¼ck falls getUserMedia verweigert).
+// ---- Kamera-Aufnahme: Foto oder Video, über eigene Kamera-UI ----
+// Natives <input capture> bleibt als Fallback erhalten (camera.js greift darauf zurück falls getUserMedia verweigert).
 const photoInput = document.getElementById('photoInput');
 async function _saveCapture({ blob, mime, kind, label, key }) {
   const url = URL.createObjectURL(blob);
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const prefix = label ? label.toLowerCase().replace(/[^a-z0-9]+/g, '_') : 'waldohr';
-  // Endung nach kind (wie in attachmentRow): Fotos aus dem nativen Fallback kÃ¶nnen PNG/HEIC sein.
+  // Endung nach kind (wie in attachmentRow): Fotos aus dem nativen Fallback können PNG/HEIC sein.
   const ext = kind === 'video' ? (mime.includes('mp4') ? 'mp4' : mime.includes('quicktime') ? 'mov' : 'webm')
     : (mime.includes('png') ? 'png' : mime.includes('heic') ? 'heic' : mime.includes('webp') ? 'webp' : 'jpg');
   const row = document.createElement('div'); row.className = 'rec-row';
@@ -2037,17 +2053,17 @@ async function _saveCapture({ blob, mime, kind, label, key }) {
   _bindRecRow(row, { url, name: prefix + '_' + stamp + '.' + ext, attId, meta: { detId: null, key: key || null, label: label || null, kind, ts } });
   row.appendChild(makeDeleteBtn(row, url, key || null, attId));
   const list = document.getElementById('recList'); if (list) list.prepend(row);
-  // Nach einem Foto bleibt die Kamera bewusst offen (mehrere Fotos hintereinander) â€” dann darf die
-  // Galerie NICHT aufgehen: sie liegt Ã¼ber der Kamera und verdeckt AuslÃ¶ser und Zoom-Regler, die
-  // Kamera wirkt "kaputt". BestÃ¤tigung gibt dort das blinkende Galerie-Icon. Nach Video/Zeitraffer
+  // Nach einem Foto bleibt die Kamera bewusst offen (mehrere Fotos hintereinander) — dann darf die
+  // Galerie NICHT aufgehen: sie liegt über der Kamera und verdeckt Auslöser und Zoom-Regler, die
+  // Kamera wirkt "kaputt". Bestätigung gibt dort das blinkende Galerie-Icon. Nach Video/Zeitraffer
   // ist die Kamera schon geschlossen, dann zeigt die Galerie das Ergebnis direkt.
   if (!document.getElementById('cameraModal')?.classList.contains('open')) openGallery();
   if (!isGalleryVisible()) galleryBadgeAdd(1);
 }
 // Natives Input als letzter Fallback (wenn getUserMedia blockiert wird): camera.js klickt dann nur
 // #photoInput an und kennt die Art nicht. Darum merkt sich _openCameraFor() Beschriftung/Art bei
-// JEDEM Kamera-Ã–ffnen (auch null beim freien Foto-Knopf, damit keine alte Art hÃ¤ngen bleibt) â€” vorher
-// gab es dafÃ¼r nur einen nie aufgerufenen photoInput._setFallback-Hook, Fallback-Fotos blieben unbeschriftet.
+// JEDEM Kamera-Öffnen (auch null beim freien Foto-Knopf, damit keine alte Art hängen bleibt) — vorher
+// gab es dafür nur einen nie aufgerufenen photoInput._setFallback-Hook, Fallback-Fotos blieben unbeschriftet.
 let _fallbackLabel = null, _fallbackKey = null;
 function _openCameraFor(label, key) {
   _fallbackLabel = label || null; _fallbackKey = key || null;
@@ -2062,14 +2078,14 @@ if (photoInput) {
     await _saveCapture({ blob: file, mime: file.type || 'image/jpeg', kind: 'photo', label, key });
   };
 }
-// Kamera-Knopf an Live-Zeile / Seltenheits-Toast â†’ Ã¶ffnet eigene Kamera-UI
+// Kamera-Knopf an Live-Zeile / Seltenheits-Toast → öffnet eigene Kamera-UI
 window.__waldohrCapturePhoto = (name, key) => _openCameraFor(name, key);
 
-// ---- Wiedergabe Ã¼ber Lautsprecher statt HÃ¶rer ----
-// LÃ¤uft das Mikro noch (laufende Erkennung), routen iOS/Android die Audioausgabe beim
-// gleichzeitigen Abspielen oft leise Ã¼ber den HÃ¶rer statt den Lautsprecher (geteilte
-// "Aufnahme+Wiedergabe"-Audiosession). Pausiert den AudioContext kurz fÃ¼rs Abspielen einer
-// Referenz-/eigenen Aufnahme â€” verhindert nebenbei auch, dass das eigene Mikro die gerade
+// ---- Wiedergabe über Lautsprecher statt Hörer ----
+// Läuft das Mikro noch (laufende Erkennung), routen iOS/Android die Audioausgabe beim
+// gleichzeitigen Abspielen oft leise über den Hörer statt den Lautsprecher (geteilte
+// "Aufnahme+Wiedergabe"-Audiosession). Pausiert den AudioContext kurz fürs Abspielen einer
+// Referenz-/eigenen Aufnahme — verhindert nebenbei auch, dass das eigene Mikro die gerade
 // abgespielte Aufnahme als neue Live-Erkennung missversteht.
 window.__waldohrSuspendMicForPlayback = async () => {
   try { if (audio.ctx && audio.ctx.state === 'running') { await audio.ctx.suspend(); return true; } } catch (e) { console.warn('suspend', e); }
@@ -2133,18 +2149,18 @@ function startSpectrogram() {
   frame();
 }
 
-// ---- "Heute hier" zurÃ¼cksetzen ----
+// ---- "Heute hier" zurücksetzen ----
 const hereResetBtn = document.getElementById('hereResetBtn');
 if (hereResetBtn) hereResetBtn.onclick = async () => {
   let dets = [];
   try { dets = await allDetections(); } catch (e) { console.warn('read', e); }
   const ids = todayNearbyDetections(dets, geo.pos).map(d => d.id).filter(id => id != null);
   if (!ids.length) return;
-  if (!confirm(ids.length + ' heutige Funde hier lÃ¶schen?')) return;
+  if (!confirm(ids.length + ' heutige Funde hier löschen?')) return;
   try { await deleteByIds(ids); } catch (e) { console.warn('delete', e); }
   await hydrateAttachments();
   refresh();
-  showInfoToast('Funde gelÃ¶scht', ids.length + ' heutige Fund(e) hier wurden entfernt.', 'ðŸ—‘ï¸');
+  showInfoToast('Funde gelöscht', ids.length + ' heutige Fund(e) hier wurden entfernt.', '🗑️');
 };
 
 // ---- Sicherung (Export/Import der kompletten lokalen Datenbank) ----
@@ -2154,12 +2170,12 @@ const backupImportFile = document.getElementById('backupImportFile');
 const backupStatus = document.getElementById('backupStatus');
 if (backupExportBtn) backupExportBtn.onclick = async () => {
   backupExportBtn.disabled = true;
-  if (backupStatus) { backupStatus.hidden = false; backupStatus.textContent = 'Sicherung wird erstelltâ€¦'; }
+  if (backupStatus) { backupStatus.hidden = false; backupStatus.textContent = 'Sicherung wird erstellt…'; }
   try {
     const res = await exportBackup((done, total) => {
-      if (backupStatus) backupStatus.textContent = `Sicherung wird erstelltâ€¦ ${done}/${total}`;
+      if (backupStatus) backupStatus.textContent = `Sicherung wird erstellt… ${done}/${total}`;
     });
-    if (backupStatus) backupStatus.textContent = `Fertig: ${res.detCount} Funde, ${res.attCount} AnhÃ¤nge (${res.filename})`;
+    if (backupStatus) backupStatus.textContent = `Fertig: ${res.detCount} Funde, ${res.attCount} Anhänge (${res.filename})`;
   } catch (e) {
     console.warn('backup export', e);
     if (backupStatus) backupStatus.textContent = 'Fehler beim Erstellen der Sicherung: ' + (e?.message || '');
@@ -2172,30 +2188,30 @@ if (backupImportFile) backupImportFile.onchange = async () => {
   const file = backupImportFile.files?.[0];
   backupImportFile.value = '';
   if (!file) return;
-  if (!confirm('Sicherung "' + file.name + '" wiederherstellen? Die enthaltenen Funde & AnhÃ¤nge werden zu den vorhandenen Daten HINZUGEFÃœGT (nichts wird gelÃ¶scht).')) return;
-  if (backupStatus) { backupStatus.hidden = false; backupStatus.textContent = 'Sicherung wird eingelesenâ€¦'; }
+  if (!confirm('Sicherung "' + file.name + '" wiederherstellen? Die enthaltenen Funde & Anhänge werden zu den vorhandenen Daten HINZUGEFÜGT (nichts wird gelöscht).')) return;
+  if (backupStatus) { backupStatus.hidden = false; backupStatus.textContent = 'Sicherung wird eingelesen…'; }
   try {
     const res = await importBackup(file, (done, total) => {
-      if (backupStatus) backupStatus.textContent = `AnhÃ¤nge werden wiederhergestelltâ€¦ ${done}/${total}`;
+      if (backupStatus) backupStatus.textContent = `Anhänge werden wiederhergestellt… ${done}/${total}`;
     });
     await hydrateAttachments();
     refresh();
-    if (backupStatus) backupStatus.textContent = `Wiederhergestellt: ${res.detCount} Funde, ${res.attCount} AnhÃ¤nge`;
-    showInfoToast('Sicherung wiederhergestellt', res.detCount + ' Funde, ' + res.attCount + ' AnhÃ¤nge importiert.', 'ðŸ’¾');
+    if (backupStatus) backupStatus.textContent = `Wiederhergestellt: ${res.detCount} Funde, ${res.attCount} Anhänge`;
+    showInfoToast('Sicherung wiederhergestellt', res.detCount + ' Funde, ' + res.attCount + ' Anhänge importiert.', '💾');
   } catch (e) {
     console.warn('backup import', e);
     if (backupStatus) backupStatus.textContent = 'Fehler: ' + (e?.message || 'Wiederherstellung fehlgeschlagen');
   }
 };
 
-// ---- Gesamte Datenbank zurÃ¼cksetzen ----
+// ---- Gesamte Datenbank zurücksetzen ----
 const dbResetBtn = document.getElementById('dbResetBtn');
 if (dbResetBtn) dbResetBtn.onclick = async () => {
-  if (!confirm('Wirklich ALLE Funde unwiderruflich lÃ¶schen? Das betrifft die komplette Datenbank (Karte, Sammlung, Statistik, eigene Aufnahmen & Fotos).')) return;
+  if (!confirm('Wirklich ALLE Funde unwiderruflich löschen? Das betrifft die komplette Datenbank (Karte, Sammlung, Statistik, eigene Aufnahmen & Fotos).')) return;
   try { await clearAll(); } catch (e) { console.warn('clearAll', e); }
   await hydrateAttachments();
   refresh();
-  showInfoToast('Daten gelÃ¶scht', 'Alle Funde, Aufnahmen und Fotos wurden entfernt.', 'ðŸ—‘ï¸');
+  showInfoToast('Daten gelöscht', 'Alle Funde, Aufnahmen und Fotos wurden entfernt.', '🗑️');
 };
 
 function registerSW() {

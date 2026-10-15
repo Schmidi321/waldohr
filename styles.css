@@ -615,6 +615,7 @@ summary.setgroup-h .chev{margin-left:auto;color:var(--faint);transition:transfor
 .setrow .hint{margin-top:0}
 .field-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .setrow-status-inline{font-size:var(--fs-xs);color:var(--faint)}
+.offline-prog{width:100%;height:6px;accent-color:var(--lime)}
 .about p{font-size:var(--fs-sm);color:var(--muted);line-height:1.6}
 
 /* ==== Suchliste ==== */
